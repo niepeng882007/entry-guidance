@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { AccountError, readAccount, type AccountConfig } from './account.ts';
+import { demoAccount, readMarket, readSymbols } from './market.ts';
 
 type Config = AccountConfig & {
   password: string;
@@ -20,6 +21,7 @@ export function createServer(config: Config) {
   const accountPage = readFileSync(new URL('../public/account.html', import.meta.url), 'utf8');
   const style = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   const script = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const draftScript = readFileSync(new URL('../public/draft.js', import.meta.url), 'utf8');
   const sessions = new Map<string, number>();
   // ponytail: 单人应用共用登录限流；扩展多用户时改为分用户限流。
   let attempts = 0;
@@ -85,8 +87,25 @@ export function createServer(config: Config) {
     if (req.method !== 'GET') return send(405, { error: '仅支持读取。' });
     if (path === '/') return html(200, accountPage.replace('{{source}}', config.mode === 'demo' ? '模拟数据 · 仅用于界面与流程验证' : '真实模式 · 数据由 Binance 只读接口查询'));
     if (path === '/app.js') return res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }).end(script);
+    if (path === '/draft.js') return res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }).end(draftScript);
+    if (path === '/api/symbols') {
+      try { return send(200, await readSymbols(config)); }
+      catch (error) {
+        if (!(error instanceof AccountError)) throw error;
+        return send(error.status, { error: error.message, code: error.code });
+      }
+    }
+    if (path?.startsWith('/api/market?')) {
+      const query = new URL(path, origin).searchParams;
+      if (query.size !== 1 || !query.has('symbol')) return send(400, { error: '仅接受一个币种参数。' });
+      try { return send(200, await readMarket(config, query.get('symbol')!)); }
+      catch (error) {
+        if (!(error instanceof AccountError)) throw error;
+        return send(error.status, { source: config.mode === 'demo' ? 'demo' : 'binance', code: error.code, error: error.message, attemptedAt: new Date().toISOString() });
+      }
+    }
     if (path === '/api/account') {
-      if (config.mode === 'demo') return send(200, { source: 'demo', queriedAt: new Date().toISOString(), walletBalance: '1250.00000000', unrealizedProfit: '-12.35000000', equity: '1237.65000000', availableBalance: '920.12540000' });
+      if (config.mode === 'demo') return send(200, demoAccount());
       try { return send(200, await readAccount(config)); }
       catch (error) {
         if (!(error instanceof AccountError)) throw error;

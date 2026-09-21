@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>账户状态 · 开仓前</title>
+  <title>市价开仓试算 · 开仓前</title>
   <link rel="stylesheet" href="/style.css">
-  <script src="/app.js" defer></script>
+  <script src="/app.js" type="module"></script>
 </head>
 <body>
   <main>
     <header><p class="eyebrow">开仓前 / ENTRY GUIDANCE</p><form action="/logout" method="post"><button class="text-button">退出登录</button></form></header>
-    <div class="heading"><div><p class="muted">BINANCE · USDT 合约</p><h1>账户状态</h1></div><span class="tag">只读</span></div>
+    <div class="heading"><div><p class="muted">BINANCE · USDT 永续</p><h1>市价开仓试算</h1></div><span class="tag">只读 · 草稿</span></div>
     <p id="source" class="source">{{source}}</p>
     <section class="status" aria-live="polite" aria-atomic="true">
       <h2 id="status">等待查询</h2><p id="message">查询结果仅代表查询时点的账户状态。</p>
@@ -19,9 +19,56 @@
       <section class="balance"><h2>账户权益 <span>USDT</span></h2><p class="amount" id="equity">—</p><p class="muted">钱包余额 + 未实现盈亏</p></section>
       <section class="balance"><h2>可用余额 <span>USDT</span></h2><p class="amount" id="available">—</p><p class="muted">采用交易所返回值，不重复扣除占款</p></section>
     </div>
-    <dl class="details"><div><dt>钱包余额</dt><dd id="wallet">—</dd></div><div><dt>未实现盈亏</dt><dd id="pnl">—</dd></div><div><dt>数据查询时间</dt><dd id="queried">尚无成功查询</dd></div><div><dt>最近尝试时间</dt><dd id="attempted">—</dd></div></dl>
-    <button id="refresh" type="button">刷新账户</button>
-    <p class="footnote">权益不等于可投入资金。本页仅查看账户，不生成开仓建议。</p>
+    <details class="account-details"><summary>账户快照详情</summary><dl class="details"><div><dt>钱包余额</dt><dd id="wallet">—</dd></div><div><dt>未实现盈亏</dt><dd id="pnl">—</dd></div><div><dt>账户查询时间</dt><dd id="queried">尚无成功查询</dd></div><div><dt>最近尝试时间</dt><dd id="attempted">—</dd></div></dl></details>
+    <button id="refresh" type="button">刷新账户与行情</button>
+    <form id="draft-form" novalidate>
+      <div class="section-heading"><h2>本次计划</h2><span class="muted">市价入场 · 单层止损</span></div>
+      <div class="field-grid">
+        <div><label for="symbol">USDT 永续币种</label><select id="symbol" name="symbol"><option value="">选择币种</option></select></div>
+        <div><label for="side">方向</label><select id="side" name="side"><option value="">选择方向</option><option value="long">做多</option><option value="short">做空</option></select></div>
+        <div><label for="budget-mode">亏损预算方式</label><select id="budget-mode" name="budgetMode"><option value="amount">固定 USDT 金额</option><option value="percent">账户权益百分比</option></select></div>
+        <div><label for="budget">亏损预算 <span id="budget-unit">USDT</span></label><input id="budget" name="budget" inputmode="decimal" autocomplete="off" aria-describedby="draft-error" maxlength="34"></div>
+        <div><label for="stop-mode">止损输入方式</label><select id="stop-mode" name="stopMode"><option value="percent">相对入场参考价的距离</option><option value="price">绝对止损触发价</option></select></div>
+        <div><label for="stop">止损 <span id="stop-unit">%</span></label><input id="stop" name="stop" inputmode="decimal" autocomplete="off" aria-describedby="draft-error" maxlength="34"></div>
+      </div>
+      <details id="cost-settings" class="settings" open>
+        <summary>成本假设</summary>
+        <p class="muted">开仓与止损退出均按账户 taker 费率预留；不假定额外折扣。</p>
+        <p class="fee-line">每次手续费率：<output id="fee">等待账户查询</output></p>
+        <div class="field-grid">
+          <div><label for="slippage">每次市价滑点预留 %</label><input id="slippage" name="slippage" inputmode="decimal" autocomplete="off" aria-describedby="slippage-help draft-error" maxlength="34"><p id="slippage-help" class="help">分别用于开仓与止损退出；首次必填，可明确填写 0。</p></div>
+          <div><label for="funding">资金费预留 USDT（可选）</label><input id="funding" name="funding" inputmode="decimal" autocomplete="off" aria-describedby="funding-help draft-error" maxlength="34"><p id="funding-help" class="help">整笔交易的固定预留；留空表示未预留。</p></div>
+        </div>
+        <p class="help" id="save-status">预算与成本设置仅记在当前浏览器。</p>
+      </details>
+      <p id="draft-error" class="error" role="status" aria-live="polite">选择币种并填写本次计划。</p>
+    </form>
+    <section class="draft-result" id="draft-result" aria-live="polite" hidden>
+      <div class="section-heading"><h2>试算结果</h2><span class="tag">草稿</span></div>
+      <p class="muted">市价开仓数量</p><p class="amount" id="draft-quantity">—</p>
+      <dl class="details">
+        <div><dt>本单亏损预算</dt><dd id="draft-budget">—</dd></div>
+        <div><dt>仓位名义价值</dt><dd id="draft-notional">—</dd></div>
+        <div><dt>实际止损触发价</dt><dd id="draft-stop">—</dd></div>
+        <div><dt>实际止损距离</dt><dd id="draft-distance">—</dd></div>
+        <div><dt>计划止损亏损</dt><dd id="draft-loss">—</dd></div>
+        <div><dt>入场参考价</dt><dd id="draft-reference">—</dd></div>
+        <div><dt>不利入场估值</dt><dd id="draft-entry">—</dd></div>
+        <div><dt>不利退出估值</dt><dd id="draft-exit">—</dd></div>
+        <div><dt>开仓 / 退出手续费</dt><dd id="draft-fees">—</dd></div>
+        <div><dt>每次滑点假设</dt><dd id="draft-slippage">—</dd></div>
+        <div><dt>资金费预留</dt><dd id="draft-funding">—</dd></div>
+      </dl>
+      <p id="draft-condition"></p><p id="draft-time" class="help"></p>
+    </section>
+    <p class="notice">草稿：资金与强平检查尚未完成，不能作为正式开仓建议。计划止损亏损按当前假设估算，实际亏损可能超过预算。</p>
+    <details id="market-details" hidden><summary>本次行情与交易规则</summary><dl class="details">
+      <div><dt>买一 / 卖一</dt><dd id="market-book">—</dd></div><div><dt>标记价</dt><dd id="market-mark">—</dd></div>
+      <div><dt>价格 / 数量步长</dt><dd id="market-steps">—</dd></div><div><dt>市价数量范围</dt><dd id="market-quantity">—</dd></div>
+      <div><dt>最小开仓名义价值</dt><dd id="market-minimum">—</dd></div><div><dt>报价数据时间</dt><dd id="market-book-time">—</dd></div>
+      <div><dt>标记价数据时间</dt><dd id="market-mark-time">—</dd></div><div><dt>本次读取完成</dt><dd id="market-time">—</dd></div>
+    </dl></details>
+    <p class="footnote">名义价值按入场参考价计算，不等于保证金。止损为标记价触发的止损市价、整仓退出、关闭价格保护。工具不会下单或修改账户。</p>
     <noscript>请启用 JavaScript 以读取账户状态。</noscript>
   </main>
 </body>
