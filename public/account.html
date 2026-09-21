@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>账户状态 · 开仓前</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><p class="eyebrow">开仓前 / ENTRY GUIDANCE</p><form action="/logout" method="post"><button class="text-button">退出登录</button></form></header>
+    <div class="heading"><div><p class="muted">BINANCE · USDT 合约</p><h1>账户状态</h1></div><span class="tag">只读</span></div>
+    <p id="source" class="source">{{source}}</p>
+    <section class="status" aria-live="polite" aria-atomic="true">
+      <h2 id="status">等待查询</h2><p id="message">查询结果仅代表查询时点的账户状态。</p>
+    </section>
+    <div class="balances">
+      <section class="balance"><h2>账户权益 <span>USDT</span></h2><p class="amount" id="equity">—</p><p class="muted">钱包余额 + 未实现盈亏</p></section>
+      <section class="balance"><h2>可用余额 <span>USDT</span></h2><p class="amount" id="available">—</p><p class="muted">采用交易所返回值，不重复扣除占款</p></section>
+    </div>
+    <dl class="details"><div><dt>钱包余额</dt><dd id="wallet">—</dd></div><div><dt>未实现盈亏</dt><dd id="pnl">—</dd></div><div><dt>数据查询时间</dt><dd id="queried">尚无成功查询</dd></div><div><dt>最近尝试时间</dt><dd id="attempted">—</dd></div></dl>
+    <button id="refresh" type="button">刷新账户</button>
+    <p class="footnote">权益不等于可投入资金。本页仅查看账户，不生成开仓建议。</p>
+    <noscript>请启用 JavaScript 以读取账户状态。</noscript>
+  </main>
+</body>
+</html>
