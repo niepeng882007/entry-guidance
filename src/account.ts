@@ -46,6 +46,8 @@ const endpoints = {
   exchange: 'https://fapi.binance.com/fapi/v1/exchangeInfo',
   book: 'https://fapi.binance.com/fapi/v1/ticker/bookTicker',
   mark: 'https://fapi.binance.com/fapi/v1/premiumIndex',
+  last: 'https://fapi.binance.com/fapi/v2/ticker/price',
+  brackets: 'https://fapi.binance.com/fapi/v1/leverageBracket',
   fee: 'https://fapi.binance.com/fapi/v1/commissionRate',
   positionMode: 'https://fapi.binance.com/fapi/v1/positionSide/dual',
   orders: 'https://fapi.binance.com/fapi/v1/openOrders',
@@ -54,9 +56,9 @@ const endpoints = {
 
 export async function readBinance(config: AccountConfig, operation: keyof typeof endpoints, signal: AbortSignal, symbol?: string): Promise<unknown> {
   const url = new URL(endpoints[operation]);
-  const isPublic = operation === 'exchange' || operation === 'book' || operation === 'mark';
+  const isPublic = operation === 'exchange' || operation === 'book' || operation === 'mark' || operation === 'last';
   if (symbol !== undefined) {
-    if (!/^[\p{L}\p{N}_]{1,30}USDT$/u.test(symbol) || !['book', 'mark', 'fee', 'orders', 'algoOrders'].includes(operation)) throw new AccountError('invalid_symbol', '币种参数无效。', 400);
+    if (!/^[\p{L}\p{N}_]{1,30}USDT$/u.test(symbol) || !['book', 'mark', 'last', 'brackets', 'fee', 'orders', 'algoOrders'].includes(operation)) throw new AccountError('invalid_symbol', '币种参数无效。', 400);
     url.searchParams.set('symbol', symbol);
   }
   const headers: Record<string, string> = {};
@@ -123,6 +125,7 @@ export async function readAccount(config: AccountConfig, symbol?: string, signal
     const available = decimal(asset.availableBalance);
     if (wallet + pnl !== decimal(asset.marginBalance)) throw new AccountError('invalid_response', 'USDT 权益与钱包余额、未实现盈亏不一致，请重新查询。');
     if (symbol !== undefined) {
+      if (account.canTrade !== true) throw new AccountError('trading_disabled', '账户交易状态未确认可用，请在 Binance 检查后刷新；不要为本工具开启 API 交易权限。');
       if (!Array.isArray(account.positions)) throw new AccountError('invalid_response', '持仓列表缺失，无法确认空仓。');
       const positions = account.positions.map(object).filter((position) => position.symbol === symbol);
       if (positions.length !== 1 || positions[0]!.positionSide !== 'BOTH') throw new AccountError('unsupported_position', '无法确认目标币种为单向持仓，请在 Binance 检查后刷新。');

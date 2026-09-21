@@ -33,9 +33,37 @@ function amount(value: unknown, label: string): string {
   return value as string;
 }
 
-function timestamp(value: unknown): string {
+function timestamp(value: unknown, requireFresh = false): string {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0 || value > 8.64e15) throw new AccountError('invalid_response', '行情时间缺失或无效。');
+  if (requireFresh && Math.abs(Date.now() - value) > 30_000) throw new AccountError('stale_market', '报价或标记价数据已过期或时钟不一致（超过 30 秒），请刷新后重试。');
   return new Date(value).toISOString();
+}
+
+function accountBrackets(value: unknown, symbol: string) {
+  const rows = Array.isArray(value) ? list(value) : [object(value)];
+  if (rows.length !== 1 || rows[0]!.symbol !== symbol) throw new AccountError('invalid_rules', '账户杠杆档位币种缺失或不一致。');
+  const data = rows[0]!;
+  if (data.notionalCoef !== undefined && data.notionalCoef !== 1) throw new AccountError('unsupported_brackets', '账户存在自定义档位系数，尚无法确认缩放语义，暂停新建议；不会使用通用档位替代。');
+  const brackets = list(data.brackets).map((row, index) => {
+    if (row.bracket !== index + 1 || typeof row.initialLeverage !== 'number' || !Number.isSafeInteger(row.initialLeverage) || row.initialLeverage < 1) throw new AccountError('invalid_rules', '账户杠杆档位编号或杠杆无效。');
+    const numeric = (field: string) => {
+      const value = row[field];
+      if (typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > Number.MAX_SAFE_INTEGER) throw new AccountError('invalid_rules', '账户杠杆档位数值无效。');
+      return amount(String(value), '账户杠杆档位');
+    };
+    return { maxLeverage: row.initialLeverage, floor: numeric('notionalFloor'), cap: numeric('notionalCap'), maintenanceRate: numeric('maintMarginRatio'), cum: numeric('cum') };
+  });
+  if (!brackets.length) throw new AccountError('invalid_rules', '账户杠杆档位为空。');
+  for (const [index, tier] of brackets.entries()) {
+    const previous = brackets[index - 1];
+    const floor = parseDecimal(tier.floor, ''), cap = parseDecimal(tier.cap, ''), rate = parseDecimal(tier.maintenanceRate, ''), cum = parseDecimal(tier.cum, '');
+    const previousRate = previous ? parseDecimal(previous.maintenanceRate, '') : 0n;
+    const expectedCum = previous ? parseDecimal(previous.cum, '') * 100_000_000n + floor * (rate - previousRate) : 0n;
+    const difference = cum * 100_000_000n - expectedCum;
+    if (cap <= floor || rate <= 0n || rate >= 100_000_000n || rate < previousRate || difference < -100_000_000n || difference > 100_000_000n
+      || (previous ? tier.floor !== previous.cap || tier.maxLeverage > previous.maxLeverage : floor !== 0n || cum !== 0n)) throw new AccountError('invalid_rules', '账户档位边界或维持保证金不连续，暂停新建议。');
+  }
+  return brackets;
 }
 
 export async function readMarket(config: MarketConfig, symbol: string): Promise<Snapshot> {
@@ -45,16 +73,17 @@ export async function readMarket(config: MarketConfig, symbol: string): Promise<
     const queriedAt = new Date().toISOString();
     const bitcoin = symbol === 'BTCUSDT';
     return { source: 'demo', queriedAt, symbol, baseAsset: symbol.slice(0, -4), account: demoAccount(),
-      bid: bitcoin ? '99' : '19.9', ask: bitcoin ? '100' : '20', mark: bitcoin ? '100' : '20',
-      bookTime: queriedAt, markTime: queriedAt, takerRate: '0.001',
-      rules: { minPrice: '0.1', maxPrice: '1000000', tickSize: '0.1', minQty: '0.1', maxQty: '1000', stepSize: '0.1', minNotional: '5' },
+      bid: bitcoin ? '99' : '19.9', ask: bitcoin ? '100' : '20', mark: bitcoin ? '100' : '20', last: bitcoin ? '100' : '20',
+      bookTime: queriedAt, markTime: queriedAt, lastTime: queriedAt, takerRate: '0.001',
+      brackets: [{ maxLeverage: 50, floor: '0', cap: '500', maintenanceRate: '0.01', cum: '0' }, { maxLeverage: 10, floor: '500', cap: '1000000', maintenanceRate: '0.02', cum: '5' }],
+      rules: { minPrice: '0.1', maxPrice: '1000000', tickSize: '0.1', minQty: '0.1', maxQty: '1000', stepSize: '0.1', minNotional: '5', lotSize: { minQty: '0.001', maxQty: '10000', stepSize: '0.001' }, marketTakeBound: '0.30' },
     };
   }
   const signal = AbortSignal.timeout(10_000);
   const account = await readAccount(config, symbol, signal);
   const read = (operation: Parameters<typeof readBinance>[1], target?: string) => readBinance(config, operation, signal, target);
-  const [exchangeData, bookData, markData, feeData, modeData, orders, algoOrders] = await Promise.all([
-    read('exchange'), read('book', symbol), read('mark', symbol), read('fee', symbol), read('positionMode'), read('orders', symbol), read('algoOrders', symbol),
+  const [exchangeData, bookData, markData, lastData, bracketData, feeData, modeData, orders, algoOrders] = await Promise.all([
+    read('exchange'), read('book', symbol), read('mark', symbol), read('last', symbol), read('brackets', symbol), read('fee', symbol), read('positionMode'), read('orders', symbol), read('algoOrders', symbol),
   ]);
   if (object(modeData).dualSidePosition !== false) throw new AccountError('unsupported_position', '账户未确认单向持仓，请在 Binance 检查后刷新。');
   if (list(orders).length || list(algoOrders).length) throw new AccountError('existing_orders', '目标币种有普通或条件挂单，请先在 Binance 清理后刷新。');
@@ -69,18 +98,22 @@ export async function readMarket(config: MarketConfig, symbol: string): Promise<
   };
   const price = filter('PRICE_FILTER');
   const lot = filter('MARKET_LOT_SIZE');
-  const book = object(bookData), mark = object(markData), fee = object(feeData);
-  if ([book, mark, fee].some((data) => data.symbol !== symbol)) throw new AccountError('invalid_response', '行情或费率币种不一致，请刷新。');
+  const normalLot = filter('LOT_SIZE');
+  const book = object(bookData), mark = object(markData), last = object(lastData), fee = object(feeData);
+  if ([book, mark, last, fee].some((data) => data.symbol !== symbol)) throw new AccountError('invalid_response', '行情或费率币种不一致，请刷新。');
   const bid = amount(book.bidPrice, '买一价'), ask = amount(book.askPrice, '卖一价');
   const markPrice = amount(mark.markPrice, '标记价'), takerRate = amount(fee.takerCommissionRate, '账户 taker 费率');
-  if (parseDecimal(bid, '') <= 0n || parseDecimal(ask, '') < parseDecimal(bid, '') || parseDecimal(markPrice, '') <= 0n || parseDecimal(takerRate, '') >= 100_000_000n) throw new AccountError('invalid_response', '报价、标记价或账户费率无效，请刷新。');
+  const lastPrice = amount(last.price, '最新成交价');
+  if (parseDecimal(bid, '') <= 0n || parseDecimal(ask, '') < parseDecimal(bid, '') || parseDecimal(markPrice, '') <= 0n || parseDecimal(lastPrice, '') <= 0n || parseDecimal(takerRate, '') >= 100_000_000n) throw new AccountError('invalid_response', '报价、标记价或账户费率无效，请刷新。');
   return { source: 'binance', queriedAt: new Date().toISOString(), symbol, baseAsset: contract.baseAsset as string,
-    account, bid, ask, mark: markPrice,
-    bookTime: timestamp(book.time), markTime: timestamp(mark.time), takerRate,
+    account, bid, ask, mark: markPrice, last: lastPrice, brackets: accountBrackets(bracketData, symbol),
+    bookTime: timestamp(book.time, true), markTime: timestamp(mark.time, true), lastTime: timestamp(last.time), takerRate,
     rules: {
       minPrice: amount(price.minPrice, '最小价格'), maxPrice: amount(price.maxPrice, '最大价格'), tickSize: amount(price.tickSize, '价格步长'),
       minQty: amount(lot.minQty, '市价最小数量'), maxQty: amount(lot.maxQty, '市价最大数量'), stepSize: amount(lot.stepSize, '市价数量步长'),
       minNotional: amount(filter('MIN_NOTIONAL').notional, '最小开仓名义价值'),
+      lotSize: { minQty: amount(normalLot.minQty, '普通最小数量'), maxQty: amount(normalLot.maxQty, '普通最大数量'), stepSize: amount(normalLot.stepSize, '普通数量步长') },
+      marketTakeBound: amount(contract.marketTakeBound, '市价成交边界'),
     },
   };
 }

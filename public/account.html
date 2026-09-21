@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>市价开仓试算 · 开仓前</title>
+  <title>市价开仓卡 · 开仓前</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" type="module"></script>
 </head>
 <body>
   <main>
     <header><p class="eyebrow">开仓前 / ENTRY GUIDANCE</p><form action="/logout" method="post"><button class="text-button">退出登录</button></form></header>
-    <div class="heading"><div><p class="muted">BINANCE · USDT 永续</p><h1>市价开仓试算</h1></div><span class="tag">只读 · 草稿</span></div>
+    <div class="heading"><div><p class="muted">BINANCE · USDT 永续</p><h1>市价开仓卡</h1></div><span class="tag">只读 · 手动执行</span></div>
     <p id="source" class="source">{{source}}</p>
     <section class="status" aria-live="polite" aria-atomic="true">
       <h2 id="status">等待查询</h2><p id="message">查询结果仅代表查询时点的账户状态。</p>
@@ -30,16 +30,19 @@
         <div><label for="budget">亏损预算 <span id="budget-unit">USDT</span></label><input id="budget" name="budget" inputmode="decimal" autocomplete="off" aria-describedby="draft-error" maxlength="34"></div>
         <div><label for="stop-mode">止损输入方式</label><select id="stop-mode" name="stopMode"><option value="percent">相对入场参考价的距离</option><option value="price">绝对止损触发价</option></select></div>
         <div><label for="stop">止损 <span id="stop-unit">%</span></label><input id="stop" name="stop" inputmode="decimal" autocomplete="off" aria-describedby="draft-error" maxlength="34"></div>
+        <div><label for="leverage">所选杠杆 · 倍</label><input id="leverage" name="leverage" inputmode="numeric" autocomplete="off" aria-describedby="leverage-help entry-error" maxlength="3"><p class="help" id="leverage-help">读取账户适用杠杆档位后校验。</p></div>
+        <div><label for="funding-cap">本单资金上限 USDT（可选）</label><input id="funding-cap" name="fundingCap" inputmode="decimal" autocomplete="off" aria-describedby="cap-help entry-error" maxlength="34"><p class="help" id="cap-help">包含保证金、开仓浮亏和手续费；留空使用可用余额。</p></div>
       </div>
       <details id="cost-settings" class="settings" open>
-        <summary>成本假设</summary>
+        <summary>成本与强平偏好</summary>
         <p class="muted">开仓与止损退出均按账户 taker 费率预留；不假定额外折扣。</p>
         <p class="fee-line">每次手续费率：<output id="fee">等待账户查询</output></p>
         <div class="field-grid">
           <div><label for="slippage">每次市价滑点预留 %</label><input id="slippage" name="slippage" inputmode="decimal" autocomplete="off" aria-describedby="slippage-help draft-error" maxlength="34"><p id="slippage-help" class="help">分别用于开仓与止损退出；首次必填，可明确填写 0。</p></div>
           <div><label for="funding">资金费预留 USDT（可选）</label><input id="funding" name="funding" inputmode="decimal" autocomplete="off" aria-describedby="funding-help draft-error" maxlength="34"><p id="funding-help" class="help">整笔交易的固定预留；留空表示未预留。</p></div>
+          <div><label for="minimum-buffer">最低强平缓冲 · 入场价 %</label><input id="minimum-buffer" name="minimumBuffer" inputmode="decimal" autocomplete="off" aria-describedby="buffer-help entry-error" maxlength="34"><p id="buffer-help" class="help">最终止损到预估强平价的有方向间距；首次必填正数，不预设通用阈值。</p></div>
         </div>
-        <p class="help" id="save-status">预算与成本设置仅记在当前浏览器。</p>
+        <p class="help" id="save-status">预算、成本、常用杠杆与最低缓冲仅记在当前浏览器。</p>
       </details>
       <p id="draft-error" class="error" role="status" aria-live="polite">选择币种并填写本次计划。</p>
     </form>
@@ -61,12 +64,51 @@
       </dl>
       <p id="draft-condition"></p><p id="draft-time" class="help"></p>
     </section>
-    <p class="notice">草稿：资金与强平检查尚未完成，不能作为正式开仓建议。计划止损亏损按当前假设估算，实际亏损可能超过预算。</p>
+    <section id="entry-checks" hidden aria-live="polite">
+      <h2>资金与强平预检查 · 草稿</h2>
+      <dl class="details">
+        <div><dt>资金需求 / 可用上限</dt><dd id="preview-funding">—</dd></div>
+        <div><dt>保证金 / 开仓浮亏 / 费用</dt><dd id="preview-costs">—</dd></div>
+        <div><dt>预估强平价</dt><dd id="preview-liquidation">—</dd></div>
+        <div><dt>有方向缓冲 / 最低要求</dt><dd id="preview-buffer">—</dd></div>
+      </dl>
+    </section>
+    <p id="entry-error" class="error" role="status" aria-live="polite"></p>
+    <button id="generate" type="button">刷新并生成开仓卡</button>
+    <p class="help">生成时刷新账户、行情及规则，固定本单 USDT 预算与绝对止损；普通刷新不改写已生成的卡片。</p>
+    <section id="entry-card" class="entry-card" hidden aria-labelledby="card-title">
+      <div class="section-heading"><h2 id="card-title">本次开仓卡</h2><span class="tag" id="card-symbol">—</span></div>
+      <p id="card-status" role="status" aria-live="polite"></p>
+      <div class="copy-row"><div><p class="muted">市价开仓数量 <span id="card-direction"></span></p><p class="amount" id="card-quantity">—</p></div><button type="button" data-copy="quantity" aria-label="复制开仓数量">复制数量</button></div>
+      <div class="copy-row"><div><p class="muted">绝对止损触发价 · USDT</p><p class="amount" id="card-stopPrice">—</p></div><button type="button" data-copy="stopPrice" aria-label="复制绝对止损触发价">复制止损价</button></div>
+      <div class="copy-row"><p id="card-exitMode">整仓退出</p><button type="button" data-copy="exitMode" aria-label="复制整仓退出方式">复制退出方式</button></div>
+      <div class="copy-row"><p id="card-leverage">—</p><button type="button" data-copy="leverage" aria-label="复制杠杆倍数">复制杠杆</button></div>
+      <p id="copy-status" class="help" role="status" aria-live="polite">数量和价格仅复制数值，请核对上方单位。</p>
+      <dl class="details">
+        <div><dt>固定本单预算</dt><dd id="card-budget">—</dd></div><div><dt>名义价值</dt><dd id="card-notional">—</dd></div>
+        <div><dt>资金需求 / 可用上限</dt><dd id="card-funding">—</dd></div><div><dt>初始保证金</dt><dd id="card-margin">—</dd></div>
+        <div><dt>开仓浮亏 / 费用预留</dt><dd id="card-open-costs">—</dd></div><div><dt>计划止损亏损</dt><dd id="card-loss">—</dd></div>
+        <div><dt>预估强平价</dt><dd id="card-liquidation">—</dd></div><div><dt>有方向缓冲 / 最低要求</dt><dd id="card-buffer">—</dd></div>
+      </dl>
+      <details><summary>本单假设与数据时间</summary><dl class="details">
+        <div><dt>下单资金估值价格</dt><dd id="card-assuming">—</dd></div><div><dt>不利入场 / 退出估值</dt><dd id="card-estimates">—</dd></div>
+        <div><dt>开仓 / 退出计划手续费</dt><dd id="card-fees">—</dd></div><div><dt>每次滑点 / 资金费预留</dt><dd id="card-reserves">—</dd></div>
+        <div><dt>假设逐仓本金（扣费后）</dt><dd id="card-wallet">—</dd></div><div><dt>强平档位 / 维持率 / 速算额</dt><dd id="card-tier">—</dd></div>
+        <div><dt>所选杠杆名义价值上限</dt><dd id="card-limit">—</dd></div>
+        <div><dt>账户查询</dt><dd id="card-account-time">—</dd></div><div><dt>买卖报价</dt><dd id="card-book-time">—</dd></div>
+        <div><dt>标记价 / 最新成交价</dt><dd id="card-price-times">—</dd></div><div><dt>本次规则读取完成</dt><dd id="card-time">—</dd></div>
+      </dl><p class="help">下单资金估值采用最新成交价 × 1.0015；费用按下单估值与不利成交估值中的较大名义价值预留。名义价值上限同时约束标记价、下单估值和不利成交估值。</p>
+      <p class="help">强平模型：逐仓本金＝不利成交名义价值÷所选杠杆－开仓手续费；不计额外或自动追加保证金及未来资金费变化。这是成交前假设，不是交易所实际逐仓余额，也不保证是其下界。</p></details>
+      <p id="card-instructions"></p>
+      <p class="notice">卡片生成不表示已下单或挂好止损。实际亏损可能超过预算，交易所仍可能拒单；成交后须检查真实仓位与止损。</p>
+    </section>
+    <p class="notice">草稿按最近成功快照估算。正式开仓卡须另行刷新生成；工具不会下单或调整账户设置。</p>
     <details id="market-details" hidden><summary>本次行情与交易规则</summary><dl class="details">
       <div><dt>买一 / 卖一</dt><dd id="market-book">—</dd></div><div><dt>标记价</dt><dd id="market-mark">—</dd></div>
       <div><dt>价格 / 数量步长</dt><dd id="market-steps">—</dd></div><div><dt>市价数量范围</dt><dd id="market-quantity">—</dd></div>
       <div><dt>最小开仓名义价值</dt><dd id="market-minimum">—</dd></div><div><dt>报价数据时间</dt><dd id="market-book-time">—</dd></div>
       <div><dt>标记价数据时间</dt><dd id="market-mark-time">—</dd></div><div><dt>本次读取完成</dt><dd id="market-time">—</dd></div>
+      <div><dt>最新成交价 / 数据时间</dt><dd id="market-last">—</dd></div><div><dt>账户杠杆档位</dt><dd id="market-brackets">—</dd></div>
     </dl></details>
     <p class="footnote">名义价值按入场参考价计算，不等于保证金。止损为标记价触发的止损市价、整仓退出、关闭价格保护。工具不会下单或修改账户。</p>
     <noscript>请启用 JavaScript 以读取账户状态。</noscript>

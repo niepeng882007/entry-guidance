@@ -1,6 +1,9 @@
 /** @typedef {{symbol: string, side: string, budgetMode: string, budget: string, stopMode: string, stop: string, slippage: string, funding: string}} DraftInput */
-/** @typedef {{minPrice: string, maxPrice: string, tickSize: string, minQty: string, maxQty: string, stepSize: string, minNotional: string}} Rules */
-/** @typedef {{source: 'binance'|'demo', queriedAt: string, symbol: string, baseAsset: string, bid: string, ask: string, mark: string, bookTime: string, markTime: string, takerRate: string, rules: Rules, account: {equity: string, availableBalance: string, walletBalance: string, unrealizedProfit: string, queriedAt: string}}} Snapshot */
+/** @typedef {DraftInput & {leverage: string, minimumBuffer: string, fundingCap: string}} EntryInput */
+/** @typedef {{minQty: string, maxQty: string, stepSize: string}} LotSize */
+/** @typedef {LotSize & {minPrice: string, maxPrice: string, tickSize: string, minNotional: string, lotSize: LotSize, marketTakeBound: string}} Rules */
+/** @typedef {{maxLeverage: number, floor: string, cap: string, maintenanceRate: string, cum: string}} Bracket */
+/** @typedef {{source: 'binance'|'demo', queriedAt: string, symbol: string, baseAsset: string, bid: string, ask: string, mark: string, last: string, bookTime: string, markTime: string, lastTime: string, takerRate: string, brackets: Bracket[], rules: Rules, account: {equity: string, availableBalance: string, walletBalance: string, unrealizedProfit: string, queriedAt: string}}} Snapshot */
 
 const SCALE = 100_000_000n;
 const PERCENT = 100n * SCALE;
@@ -14,12 +17,37 @@ export function parseDecimal(value, label) {
 
 /** @param {bigint} value @param {number} places */
 export function formatDecimal(value, places = 8) {
-  const digits = value.toString().padStart(places + 1, '0');
-  return `${digits.slice(0, -places)}.${digits.slice(-places)}`.replace(/\.?0+$/, '') || '0';
+  const digits = (value < 0n ? -value : value).toString().padStart(places + 1, '0');
+  return `${value < 0n ? '-' : ''}${digits.slice(0, -places)}.${digits.slice(-places)}`.replace(/\.?0+$/, '') || '0';
 }
 
 /** @param {DraftInput} input @param {Snapshot} snapshot */
 export function generateDraft(input, snapshot) {
+  return calculatePlan(input, snapshot);
+}
+
+/** @param {EntryInput} input @param {Snapshot} snapshot */
+export function generateEntryPlan(input, snapshot) {
+  const plan = calculatePlan(input, snapshot, input);
+  if (!plan.checks) throw new Error('资金与强平检查未完成。');
+  return { ...plan, ...plan.checks, status: snapshot.source === 'demo' ? 'simulation' : 'ready',
+    notice: snapshot.source === 'demo' ? '模拟开仓卡 · 不可用于真实交易。' : '开仓前检查通过 · 尚未下单或核验止损。',
+    symbol: snapshot.symbol, baseAsset: snapshot.baseAsset, side: input.side,
+    leverage: input.leverage, exitMode: '整仓退出',
+    execution: { entrySide: input.side === 'long' ? 'BUY' : 'SELL', stopSide: input.side === 'long' ? 'SELL' : 'BUY', marginMode: 'ISOLATED', positionMode: 'BOTH', entryType: 'MARKET', stopType: 'STOP_MARKET', workingType: 'MARK_PRICE', priceProtect: 'FALSE', closePosition: 'true' },
+    accountTime: snapshot.account.queriedAt, bookTime: snapshot.bookTime, markTime: snapshot.markTime, lastTime: snapshot.lastTime,
+  };
+}
+
+/** @param {bigint} numerator @param {bigint} denominator */
+const ceil = (numerator, denominator) => (numerator + denominator - 1n) / denominator;
+/** @param {bigint[]} values */
+const min = (...values) => values.reduce((a, b) => a < b ? a : b);
+/** @param {bigint[]} values */
+const max = (...values) => values.reduce((a, b) => a > b ? a : b);
+
+/** @param {DraftInput} input @param {Snapshot} snapshot @param {EntryInput} [entryInput] */
+function calculatePlan(input, snapshot, entryInput) {
   if (input.symbol !== snapshot.symbol) throw new Error('币种已变化，请刷新行情。');
   if (!['long', 'short'].includes(input.side)) throw new Error('请选择做多或做空方向。');
   if (!['amount', 'percent'].includes(input.budgetMode)) throw new Error('预算方式无效。');
@@ -51,9 +79,9 @@ export function generateDraft(input, snapshot) {
   const fee = parseDecimal(snapshot.takerRate, '账户 taker 费率');
   if (slip >= PERCENT) throw new Error('每次滑点须小于 100%。');
   if (fee >= SCALE) throw new Error('账户 taker 费率无效，请刷新。');
-  const step = parseDecimal(snapshot.rules.stepSize, '数量步长');
-  const minQty = parseDecimal(snapshot.rules.minQty, '最小数量');
-  const maxQty = parseDecimal(snapshot.rules.maxQty, '最大数量');
+  let step = parseDecimal(snapshot.rules.stepSize, '数量步长');
+  let minQty = parseDecimal(snapshot.rules.minQty, '最小数量');
+  let maxQty = parseDecimal(snapshot.rules.maxQty, '最大数量');
   if (step <= 0n || maxQty <= 0n || maxQty < minQty) throw new Error('市价数量规则无效，请刷新。');
   // 8-place prices × 10-place percentage ratios = 18 places; fees add 8 more.
   // Keep exact products until quantity rounding; ceil displayed loss to 8 places.
@@ -62,13 +90,27 @@ export function generateDraft(input, snapshot) {
   const unitLoss = direction * (entryEstimate - exitEstimate) * SCALE + (entryEstimate + exitEstimate) * fee;
   if (unitLoss <= 0n) throw new Error('每单位计划损失须大于零。');
   const riskQuantity = (budget - funding) * 10n ** 26n / unitLoss;
-  const allowedQuantity = riskQuantity < maxQty ? riskQuantity : maxQty;
-  if (allowedQuantity < minQty) throw new Error('预算允许数量低于最小开仓数量；请自行调整输入。');
+  const constraints = entryInput ? entryConstraints(entryInput, snapshot, entryEstimate, mark, direction, fee) : null;
+  if (constraints) {
+    const normal = snapshot.rules.lotSize;
+    const normalStep = parseDecimal(normal.stepSize, '普通数量步长');
+    const normalMin = parseDecimal(normal.minQty, '普通最小数量');
+    const normalMax = parseDecimal(normal.maxQty, '普通最大数量');
+    if (normalStep <= 0n || normalMax <= 0n || normalMax < normalMin || minQty % step !== 0n || normalMin % normalStep !== 0n) throw new Error('数量规则缺失或步长起点不支持，暂停新建议。');
+    let a = step, b = normalStep;
+    while (b) [a, b] = [b, a % b];
+    step = step / a * normalStep;
+    minQty = ceil(max(minQty, normalMin), step) * step;
+    maxQty = min(maxQty, normalMax);
+  }
+  const allowedQuantity = constraints ? min(riskQuantity, maxQty, constraints.quantityLimit) : min(riskQuantity, maxQty);
+  if (allowedQuantity < minQty) throw new Error(`预算${constraints ? '、可用资金或账户档位' : ''}允许数量 ${formatDecimal(allowedQuantity)} ${snapshot.baseAsset} 低于最小开仓数量 ${formatDecimal(minQty)}；请自行调整输入。`);
   const quantity = minQty + (allowedQuantity - minQty) / step * step;
   if (quantity <= 0n) throw new Error('预算允许数量低于最小数量步长；请自行调整输入。');
   if (quantity * mark < parseDecimal(snapshot.rules.minNotional, '最小名义价值') * SCALE) throw new Error('数量取整后低于最小名义价值；不会自动增加仓位。');
   const loss = quantity * unitLoss + funding * 10n ** 26n;
   if (loss > budget * 10n ** 26n) throw new Error('取整后计划亏损超出预算，无法生成草稿。');
+  const checks = constraints ? checkEntry(quantity, stop, entry, entryEstimate, direction, fee, constraints) : null;
   return { status: 'draft', notice: '草稿 · 资金与强平检查尚未完成，不能作为正式开仓建议。',
     quantity: formatDecimal(quantity), notional: formatDecimal(quantity * entry, 16),
     stopPrice: formatDecimal(stop), budget: formatDecimal(budget),
@@ -80,6 +122,73 @@ export function generateDraft(input, snapshot) {
     slippagePercent: formatDecimal(slip),
     entryFee: formatDecimal(quantity * entryEstimate * fee, 34),
     exitFee: formatDecimal(quantity * exitEstimate * fee, 34),
-    source: snapshot.source, queriedAt: snapshot.queriedAt,
+    source: snapshot.source, queriedAt: snapshot.queriedAt, checks,
   };
+}
+
+/** @param {EntryInput} input @param {Snapshot} snapshot @param {bigint} entryEstimate @param {bigint} mark @param {bigint} direction @param {bigint} fee */
+function entryConstraints(input, snapshot, entryEstimate, mark, direction, fee) {
+  if (!/^[1-9]\d{0,2}$/.test(input.leverage)) throw new Error('请选择账户档位允许的正整数杠杆。');
+  const leverage = BigInt(input.leverage);
+  if (!input.minimumBuffer) throw new Error('最低强平缓冲首次必填，请填写正数个人偏好。');
+  const minimumBuffer = parseDecimal(input.minimumBuffer, '最低强平缓冲');
+  if (minimumBuffer <= 0n) throw new Error('最低强平缓冲须为正数个人偏好，首次必填。');
+  const available = parseDecimal(snapshot.account.availableBalance, '可用余额');
+  const cap = input.fundingCap ? parseDecimal(input.fundingCap, '本单资金上限') : available;
+  if (input.fundingCap && cap <= 0n) throw new Error('本单资金上限须为正数，或留空。');
+  const fundingLimit = min(available, cap);
+  if (fundingLimit <= 0n) throw new Error('可用余额不足，无法满足最小开仓条件。');
+  if (!Array.isArray(snapshot.brackets) || !snapshot.brackets.length) throw new Error('缺少账户杠杆档位，暂停新建议。');
+  const brackets = snapshot.brackets.map((tier) => ({ ...tier, floor: parseDecimal(tier.floor, '档位下限'), cap: parseDecimal(tier.cap, '档位上限'), rate: parseDecimal(tier.maintenanceRate, '维持保证金率'), cum: parseDecimal(tier.cum, '维持保证金速算额') }));
+  const eligible = brackets.filter((tier) => Number.isSafeInteger(tier.maxLeverage) && BigInt(tier.maxLeverage) >= leverage);
+  if (!eligible.length) throw new Error('所选杠杆超过账户允许值，请自行降低杠杆。');
+  const notionalLimit = max(...eligible.map((tier) => tier.cap));
+  // Binance market-order valuation (last × 1.0015) is distinct from the user's adverse fill estimate.
+  // Source and model assumptions: README.md, "正式开仓卡计算口径".
+  const last = parseDecimal(snapshot.last, '最新成交价');
+  if (last <= 0n) throw new Error('最新成交价缺失或无效。');
+  const assumingPrice = last * 10_015_000_000n;
+  const openLoss = max(0n, direction * (assumingPrice - mark * PERCENT));
+  const feeReserve = max(assumingPrice, entryEstimate) * fee;
+  const unitCost = assumingPrice * SCALE + (openLoss * SCALE + feeReserve) * leverage;
+  const quantityLimit = min(fundingLimit * 10n ** 26n * leverage / unitCost, notionalLimit * 10n ** 18n / max(mark * PERCENT, entryEstimate, assumingPrice));
+  const takeBound = parseDecimal(snapshot.rules.marketTakeBound, '市价成交边界');
+  if (takeBound <= 0n || takeBound >= SCALE || direction * (entryEstimate * SCALE - mark * PERCENT * SCALE) > mark * PERCENT * takeBound) throw new Error('不利成交估值超出市价成交边界，请刷新或调整滑点假设。');
+  return { leverage, minimumBuffer, fundingLimit, notionalLimit, assumingPrice, openLoss, feeReserve, unitCost, quantityLimit, brackets };
+}
+
+/** @param {bigint} quantity @param {bigint} stop @param {bigint} entry @param {bigint} entryEstimate @param {bigint} direction @param {bigint} fee @param {ReturnType<typeof entryConstraints>} limits */
+function checkEntry(quantity, stop, entry, entryEstimate, direction, fee, limits) {
+  const { leverage, brackets } = limits;
+  const costDenominator = 10n ** 26n * leverage;
+  const cost = quantity * limits.unitCost;
+  if (cost > limits.fundingLimit * costDenominator) throw new Error('取整后资金需求仍超出可用资金。');
+  // Model WB = q × adverse fill / leverage − opening taker fee; not actual exchange wallet balance.
+  const walletNumerator = quantity * entryEstimate * (SCALE - fee * leverage);
+  if (walletNumerator <= 0n) throw new Error('假设逐仓本金不足以覆盖开仓手续费，暂停新建议。');
+  for (const [index, tier] of brackets.entries()) {
+    const numerator = quantity * entryEstimate * SCALE * leverage - direction * (walletNumerator + tier.cum * costDenominator);
+    const denominator = quantity * (SCALE - direction * tier.rate) * PERCENT * leverage;
+    if (numerator <= 0n || denominator <= 0n) continue;
+    // Test the unrounded liquidation notional against each tier, including a crossing from entry.
+    const notionalNumerator = quantity * numerator;
+    if (notionalNumerator < tier.floor * SCALE * denominator || notionalNumerator > tier.cap * SCALE * denominator) continue;
+    const liquidationPrice = direction === 1n ? ceil(numerator, denominator) : numerator / denominator;
+    const gap = direction * (stop - liquidationPrice);
+    const buffer = gap * PERCENT / entry;
+    if (gap <= 0n) throw new Error(`先强平、后止损：预估强平价 ${formatDecimal(liquidationPrice)}，有方向缓冲 ${formatDecimal(buffer)}%；请降低杠杆后重算，不会拉近止损。`);
+    if (gap * PERCENT < limits.minimumBuffer * entry) throw new Error(`强平缓冲 ${formatDecimal(buffer)}% 低于要求 ${formatDecimal(limits.minimumBuffer)}%，差 ${formatDecimal(ceil(limits.minimumBuffer * entry - gap * PERCENT, entry))} 个百分点；请降低杠杆后重算。`);
+    return {
+      initialMargin: formatDecimal(ceil(quantity * limits.assumingPrice * SCALE, costDenominator)),
+      openLoss: formatDecimal(ceil(quantity * limits.openLoss, 10n ** 18n)),
+      openFeeReserve: formatDecimal(ceil(quantity * limits.feeReserve, 10n ** 26n)),
+      fundingRequired: formatDecimal(ceil(cost, costDenominator)), fundingLimit: formatDecimal(limits.fundingLimit),
+      notionalLimit: formatDecimal(limits.notionalLimit), assumingPrice: formatDecimal(limits.assumingPrice, 18),
+      isolatedWalletAssumption: formatDecimal(walletNumerator / costDenominator),
+      liquidationPrice: formatDecimal(liquidationPrice), liquidationBuffer: formatDecimal(buffer),
+      minimumBuffer: formatDecimal(limits.minimumBuffer), liquidationTier: index + 1,
+      maintenanceRate: formatDecimal(tier.rate * 100n), maintenanceAmount: formatDecimal(tier.cum),
+    };
+  }
+  throw new Error('账户档位无法支持有效的预估强平价（含跨档复算），暂停新建议。');
 }

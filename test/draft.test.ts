@@ -2,22 +2,28 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { test, type TestContext } from 'node:test';
 import { createServer } from '../src/server.ts';
-import { generateDraft } from '../public/draft.js';
+import { generateDraft, generateEntryPlan } from '../public/draft.js';
 
 const input = { symbol: 'BTCUSDT', side: 'long', budgetMode: 'amount', budget: '20', stopMode: 'price', stop: '98', slippage: '1', funding: '1' };
+const entryInput = { ...input, leverage: '10', minimumBuffer: '1', fundingCap: '' };
 
 function responses(): Record<string, unknown> {
   return {
     '/sapi/v1/account/apiRestrictions': { enableReading: true, enableWithdrawals: false, enableInternalTransfer: false, enableMargin: false, enableFutures: false, permitsUniversalTransfer: false, enableVanillaOptions: false, enableFixApiTrade: false, enableSpotAndMarginTrading: false, enablePortfolioMarginTrading: false },
     '/sapi/v1/portfolio/account': { code: -21001 },
-    '/fapi/v2/account': { multiAssetsMargin: false, assets: [{ asset: 'USDT', walletBalance: '1025', unrealizedProfit: '-25', marginBalance: '1000', availableBalance: '5' }], positions: [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0', isolated: true }] },
+    '/fapi/v2/account': { canTrade: true, multiAssetsMargin: false, assets: [{ asset: 'USDT', walletBalance: '1025', unrealizedProfit: '-25', marginBalance: '1000', availableBalance: '5' }], positions: [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0', isolated: true }] },
     '/fapi/v1/positionSide/dual': { dualSidePosition: false },
     '/fapi/v1/openOrders': [],
     '/fapi/v1/openAlgoOrders': [],
     '/fapi/v1/commissionRate': { symbol: 'BTCUSDT', takerCommissionRate: '0.001' },
+    '/fapi/v1/leverageBracket': { symbol: 'BTCUSDT', brackets: [
+      { bracket: 1, initialLeverage: 50, notionalFloor: 0, notionalCap: 500, maintMarginRatio: 0.01, cum: 0 },
+      { bracket: 2, initialLeverage: 10, notionalFloor: 500, notionalCap: 10000, maintMarginRatio: 0.02, cum: 5 },
+    ] },
+    '/fapi/v2/ticker/price': { symbol: 'BTCUSDT', price: '100', time: Date.now() },
     '/fapi/v1/ticker/bookTicker': { symbol: 'BTCUSDT', bidPrice: '99', askPrice: '100', time: Date.now() },
     '/fapi/v1/premiumIndex': { symbol: 'BTCUSDT', markPrice: '100', time: Date.now() },
-    '/fapi/v1/exchangeInfo': { symbols: [{ symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT', marginAsset: 'USDT', status: 'TRADING', contractType: 'PERPETUAL', orderTypes: ['MARKET', 'STOP_MARKET'], pricePrecision: 5, quantityPrecision: 7, filters: [
+    '/fapi/v1/exchangeInfo': { symbols: [{ symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT', marginAsset: 'USDT', status: 'TRADING', contractType: 'PERPETUAL', orderTypes: ['MARKET', 'STOP_MARKET'], marketTakeBound: '0.30', pricePrecision: 5, quantityPrecision: 7, filters: [
       { filterType: 'PRICE_FILTER', minPrice: '0.1', maxPrice: '1000000', tickSize: '0.1' },
       { filterType: 'LOT_SIZE', minQty: '0.001', maxQty: '10000', stepSize: '0.001' },
       { filterType: 'MARKET_LOT_SIZE', minQty: '0.1', maxQty: '1000', stepSize: '0.1' },
@@ -31,7 +37,7 @@ async function start(t: TestContext, data = responses(), mode: 'real' | 'demo' =
   const server = createServer({ password: 'test-password-only', mode, apiKey: 'test-key', apiSecret: 'test-secret', transport: async (url, headers) => {
     requests.push(url);
     assert.ok(url.pathname in data, `Unexpected endpoint: ${url.pathname}`);
-    const isPublic = ['/fapi/v1/exchangeInfo', '/fapi/v1/ticker/bookTicker', '/fapi/v1/premiumIndex'].includes(url.pathname);
+    const isPublic = ['/fapi/v1/exchangeInfo', '/fapi/v1/ticker/bookTicker', '/fapi/v1/premiumIndex', '/fapi/v2/ticker/price'].includes(url.pathname);
     assert.equal(headers['X-MBX-APIKEY'], isPublic ? undefined : 'test-key');
     assert.equal(url.searchParams.has('signature'), !isPublic);
     return { status: url.pathname.includes('/portfolio/') ? 400 : 200, body: data[url.pathname] };
@@ -47,6 +53,172 @@ async function start(t: TestContext, data = responses(), mode: 'real' | 'demo' =
   const read = (path = '/api/market?symbol=BTCUSDT') => fetch(base + path, { headers: { Cookie: cookie } });
   return { base, cookie, read, requests };
 }
+
+test('market snapshot reads the account brackets and last trade needed for entry checks', async (t) => {
+  const app = await start(t);
+  const response = await app.read();
+  assert.equal(response.status, 200);
+  const snapshot = await response.json();
+  assert.equal(snapshot.last, '100');
+  assert.equal(snapshot.brackets[1].cap, '10000');
+  assert.equal(snapshot.brackets[1].maintenanceRate, '0.02');
+  assert.equal(snapshot.brackets[1].cum, '5');
+  assert.equal(snapshot.brackets[0].maxLeverage, 50);
+  assert.equal(snapshot.rules.lotSize.stepSize, '0.001');
+  assert.equal(snapshot.rules.marketTakeBound, '0.30');
+  assert.ok(app.requests.some((url) => url.pathname === '/fapi/v1/leverageBracket' && url.searchParams.get('symbol') === 'BTCUSDT'));
+});
+
+test('entry plan sizes to available balance including open loss and fees, keeping the stop and leverage', async (t) => {
+  const app = await start(t);
+  const plan = generateEntryPlan(entryInput, await (await app.read()).json());
+  // A=100.15; each BTC needs 10.015 margin + .15 open loss + .101 fee.
+  // Balance 5 admits .4 BTC. WB=4.04-.0404; LP=36.4004/.396.
+  assert.equal(plan.quantity, '0.4');
+  assert.equal(plan.initialMargin, '4.006');
+  assert.equal(plan.openLoss, '0.06');
+  assert.equal(plan.openFeeReserve, '0.0404');
+  assert.equal(plan.fundingRequired, '4.1064');
+  assert.equal(plan.isolatedWalletAssumption, '3.9996');
+  assert.equal(plan.liquidationPrice, '91.92020203');
+  assert.equal(plan.liquidationBuffer, '6.07979797');
+  assert.equal(plan.plannedLoss, '2.671208');
+  assert.equal(plan.stopPrice, '98');
+  assert.equal(plan.leverage, '10');
+  assert.equal(plan.budget, '20');
+  assert.equal(plan.symbol, 'BTCUSDT');
+  assert.equal(plan.baseAsset, 'BTC');
+  assert.equal(plan.exitMode, '整仓退出');
+  assert.deepEqual(plan.execution, { entrySide: 'BUY', stopSide: 'SELL', marginMode: 'ISOLATED', positionMode: 'BOTH', entryType: 'MARKET', stopType: 'STOP_MARKET', workingType: 'MARK_PRICE', priceProtect: 'FALSE', closePosition: 'true' });
+  assert.equal(plan.status, 'ready');
+});
+
+test('funding cap can shrink further and an untradeable funded size gives a funding-aware refusal', async (t) => {
+  const app = await start(t);
+  const snapshot = await (await app.read()).json();
+  const plan = generateEntryPlan({ ...entryInput, fundingCap: '2.06' }, snapshot);
+  assert.equal(plan.quantity, '0.2');
+  assert.equal(plan.fundingRequired, '2.0532');
+  assert.equal(plan.stopPrice, '98');
+  assert.throws(() => generateEntryPlan({ ...entryInput, fundingCap: '1' }, snapshot), /资金.*最小/);
+});
+
+test('short liquidation uses a signed buffer and both sides reject missing or insufficient preferences', async (t) => {
+  const data = responses();
+  data['/fapi/v1/ticker/bookTicker'] = { symbol: 'BTCUSDT', bidPrice: '100', askPrice: '101', time: Date.now() };
+  const app = await start(t, data);
+  const snapshot = await (await app.read()).json();
+  const short = { ...entryInput, side: 'short', stop: '102' };
+  const plan = generateEntryPlan(short, snapshot);
+  assert.equal(plan.quantity, '0.4');
+  assert.equal(plan.openLoss, '0');
+  assert.equal(plan.openFeeReserve, '0.04006');
+  assert.equal(plan.fundingRequired, '4.04606');
+  assert.equal(plan.liquidationPrice, '107.72376237');
+  assert.equal(plan.liquidationBuffer, '5.72376237');
+  assert.equal(plan.plannedLoss, '2.688808');
+  assert.throws(() => generateEntryPlan({ ...short, leverage: '50' }, snapshot), /先强平、后止损.*缓冲 -/);
+  assert.throws(() => generateEntryPlan({ ...entryInput, leverage: '50' }, snapshot), /先强平、后止损/);
+  assert.throws(() => generateEntryPlan({ ...short, minimumBuffer: '6' }, snapshot), /低于要求.*差/);
+  for (const minimumBuffer of ['', '0', '-1']) assert.throws(() => generateEntryPlan({ ...short, minimumBuffer }, snapshot), /最低强平缓冲/);
+  for (const leverage of ['', '0', '10.5', '51']) assert.throws(() => generateEntryPlan({ ...short, leverage }, snapshot), /杠杆/);
+  assert.throws(() => generateEntryPlan({ ...short, fundingCap: '0' }, snapshot), /资金上限/);
+  assert.throws(() => generateEntryPlan(short, { ...snapshot, brackets: [] }), /档位/);
+});
+
+test('liquidation recalculates across tiers and changing leverage alone preserves price risk', async (t) => {
+  const data = responses();
+  data['/fapi/v1/commissionRate'] = { symbol: 'BTCUSDT', takerCommissionRate: '0' };
+  data['/fapi/v1/ticker/bookTicker'] = { symbol: 'BTCUSDT', bidPrice: '100', askPrice: '100', time: Date.now() };
+  data['/fapi/v2/ticker/price'] = { symbol: 'BTCUSDT', price: '99', time: Date.now() };
+  const app = await start(t, data);
+  const snapshot = await (await app.read()).json();
+  snapshot.account.availableBalance = '1000';
+  const parameters = { ...entryInput, budget: '10.2', slippage: '0', funding: '' };
+  const long = generateEntryPlan(parameters, snapshot);
+  assert.equal(long.quantity, '5.1'); // Entry notional 510, liquidation notional below 500.
+  assert.equal(long.liquidationTier, 1);
+  assert.equal(long.liquidationPrice, '90.90909091');
+  const short = generateEntryPlan({ ...parameters, side: 'short', stop: '102', budget: '9.8' }, snapshot);
+  assert.equal(short.quantity, '4.9'); // (490 + 49 + 5) / (4.9 × 1.02).
+  assert.equal(short.liquidationTier, 2);
+  assert.equal(short.liquidationPrice, '108.84353741');
+  const capped = generateEntryPlan({ ...parameters, leverage: '20' }, snapshot);
+  assert.equal(capped.quantity, '5');
+  assert.equal(capped.notionalLimit, '500');
+  const lower = generateEntryPlan({ ...parameters, budget: '10' }, snapshot);
+  assert.equal(lower.quantity, capped.quantity);
+  assert.equal(lower.plannedLoss, capped.plannedLoss);
+  assert.notEqual(lower.liquidationPrice, capped.liquidationPrice);
+  assert.notEqual(lower.initialMargin, capped.initialMargin);
+  assert.throws(() => generateEntryPlan(parameters, { ...snapshot, rules: { ...snapshot.rules, minNotional: '600' } }), /最小名义价值/);
+});
+
+test('incomplete entry rules and disabled account trading prevent a new snapshot', async (t) => {
+  const data = responses();
+  const normalBrackets = data['/fapi/v1/leverageBracket'] as { symbol: string; brackets: Record<string, number>[] };
+  const cases: [string, unknown][] = [
+    ['/fapi/v1/leverageBracket', { ...normalBrackets, notionalCoef: 1.5 }],
+    ['/fapi/v1/leverageBracket', { symbol: 'BTCUSDT', brackets: [] }],
+    ['/fapi/v1/leverageBracket', { ...normalBrackets, symbol: 'ETHUSDT' }],
+    ['/fapi/v1/leverageBracket', { ...normalBrackets, brackets: [{ ...normalBrackets.brackets[0], cum: 1 }] }],
+    ['/fapi/v1/leverageBracket', { ...normalBrackets, brackets: [normalBrackets.brackets[0], { ...normalBrackets.brackets[1], notionalFloor: 501 }] }],
+    ['/fapi/v2/ticker/price', { symbol: 'BTCUSDT', price: '0', time: Date.now() }],
+    ['/fapi/v2/account', { ...(data['/fapi/v2/account'] as object), canTrade: false }],
+  ];
+  for (const [path, body] of cases) await t.test(path + JSON.stringify(body), async (t) => {
+    const app = await start(t, { ...responses(), [path]: body });
+    const response = await app.read();
+    assert.equal(response.status, 502);
+    assert.equal((await response.json()).brackets, undefined);
+  });
+});
+
+test('entry rules intersect quantity grids and account for a short opening loss', async (t) => {
+  const data = responses();
+  data['/fapi/v1/ticker/bookTicker'] = { symbol: 'BTCUSDT', bidPrice: '100', askPrice: '101', time: Date.now() };
+  data['/fapi/v1/premiumIndex'] = { symbol: 'BTCUSDT', markPrice: '101', time: Date.now() };
+  const app = await start(t, data);
+  const snapshot = await (await app.read()).json();
+  const short = { ...entryInput, side: 'short', stop: '102' };
+  const plan = generateEntryPlan(short, snapshot);
+  assert.equal(plan.quantity, '0.4');
+  assert.equal(plan.openLoss, '0.34');
+  assert.equal(plan.fundingRequired, '4.38606');
+  const normalLot = { minQty: '0.03', maxQty: '0.38', stepSize: '0.03' };
+  const limited = generateEntryPlan(short, { ...snapshot, rules: { ...snapshot.rules, lotSize: normalLot } });
+  assert.equal(limited.quantity, '0.3'); // Both .1 and .03 grids, also below .38.
+  assert.throws(() => generateEntryPlan({ ...short, slippage: '40' }, snapshot), /市价成交边界/);
+  const demo = await start(t, {}, 'demo');
+  const simulated = generateEntryPlan(entryInput, await (await demo.read()).json());
+  assert.equal(simulated.status, 'simulation');
+  assert.match(simulated.notice, /不可用于真实交易/);
+});
+
+test('stale mark or order-book data cannot produce a fresh entry snapshot', async (t) => {
+  const data = responses();
+  data['/fapi/v1/premiumIndex'] = { symbol: 'BTCUSDT', markPrice: '100', time: Date.now() - 60_000 };
+  const app = await start(t, data);
+  const response = await app.read();
+  assert.equal(response.status, 502);
+  assert.match((await response.json()).error, /过期|不一致/);
+});
+
+test('generated plans freeze USDT budget and absolute stop across later account and quote refreshes', async (t) => {
+  const data = responses();
+  const app = await start(t, data);
+  const percentages = { ...entryInput, budgetMode: 'percent', budget: '2', stopMode: 'percent', stop: '2' };
+  const original = generateEntryPlan(percentages, await (await app.read()).json());
+  data['/fapi/v2/account'] = { ...(data['/fapi/v2/account'] as object), assets: [{ asset: 'USDT', walletBalance: '2025', unrealizedProfit: '-25', marginBalance: '2000', availableBalance: '5' }] };
+  data['/fapi/v1/ticker/bookTicker'] = { symbol: 'BTCUSDT', bidPrice: '199', askPrice: '200', time: Date.now() };
+  data['/fapi/v1/premiumIndex'] = { symbol: 'BTCUSDT', markPrice: '200', time: Date.now() };
+  data['/fapi/v2/ticker/price'] = { symbol: 'BTCUSDT', price: '200', time: Date.now() };
+  const fresh = generateEntryPlan(percentages, await (await app.read()).json());
+  assert.equal(fresh.budget, '40');
+  assert.equal(fresh.stopPrice, '196');
+  assert.equal(original.budget, '20');
+  assert.equal(original.stopPrice, '98');
+});
 
 test('long draft includes both taker fees, adverse slippage and fixed funding reserve', async (t) => {
   const app = await start(t);
