@@ -21,7 +21,7 @@ if (!(verify instanceof HTMLButtonElement)) throw new Error('核验按钮缺失'
 const statusBox = element('status').closest('section');
 const form = element('draft-form');
 const symbol = field('symbol');
-const settingIds = ['symbol', 'side', 'budget-mode', 'budget', 'stop-mode', 'slippage', 'funding', 'leverage', 'minimum-buffer'];
+const settingIds = ['symbol', 'side', 'entry-type', 'budget-mode', 'budget', 'stop-mode', 'slippage', 'funding', 'leverage', 'minimum-buffer'];
 const storageKey = 'entry-guidance.preferences.v1';
 let hasAccount = false;
 let requestId = 0;
@@ -51,7 +51,7 @@ function saveSettings() {
 }
 
 function readInput() {
-  return { symbol: symbol.value, side: field('side').value, budgetMode: field('budget-mode').value, budget: field('budget').value.trim(), stopMode: field('stop-mode').value, stop: field('stop').value.trim(), slippage: field('slippage').value.trim(), funding: field('funding').value.trim(), leverage: field('leverage').value.trim(), minimumBuffer: field('minimum-buffer').value.trim(), fundingCap: field('funding-cap').value.trim() };
+  return { symbol: symbol.value, side: field('side').value, entryType: field('entry-type').value, limitPrice: field('entry-type').value === 'LIMIT' ? field('limit-price').value.trim() : '', budgetMode: field('budget-mode').value, budget: field('budget').value.trim(), stopMode: field('stop-mode').value, stop: field('stop').value.trim(), slippage: field('slippage').value.trim(), funding: field('funding').value.trim(), leverage: field('leverage').value.trim(), minimumBuffer: field('minimum-buffer').value.trim(), fundingCap: field('funding-cap').value.trim() };
 }
 
 /** @param {string} reason */
@@ -93,8 +93,12 @@ function renderVerification(result, plan) {
   element('verification').dataset.current = result.status === 'verified' ? 'true' : 'false';
   const items = result.issues.map((issue) => { const li = document.createElement('li'); li.textContent = issue; return li; });
   element('verification-issues').replaceChildren(...items);
+  /** @type {Record<string, string>} */
+  const entryStates = { NEW: '挂单中', PARTIALLY_FILLED: '部分成交', FILLED: '全部成交', CANCELED: '已撤销余单', EXPIRED: '已失效', EXPIRED_IN_MATCH: '已失效', REJECTED: '已拒绝' };
   const outputs = {
     order: result.orderId ?? '尚未可靠关联', position: `${result.side === 'long' ? '做多' : result.side === 'short' ? '做空' : '空仓'} / ${result.quantity ?? '—'} ${plan.baseAsset}`,
+    'entry-state': `${entryStates[result.entryStatus ?? ''] ?? (result.orderId ? '已关联' : '未确认')} / ${result.filledQuantity ?? '—'} ${plan.baseAsset}`,
+    pending: result.pendingEntries ? result.pendingEntries.map((order) => `订单 ${order.orderId}：已成交 ${order.filledQuantity}，未成交 ${order.remainingQuantity} ${plan.baseAsset}`).join('；') || '本次查询未发现入场余单' : '未完整确认',
     entry: `${result.entryPrice ?? '—'} USDT`, leverage: `${result.leverage ?? '—'} / ${plan.leverage} 倍`,
     risk: `${result.plannedLoss ?? '未完整核算'} / ${plan.budget} USDT（原止损 ${plan.stopPrice}）`, excess: `${result.excess ?? '—'} USDT`,
     paid: `${result.paidCommission ?? '—'} / ${result.paidFunding ?? '—'} USDT`, reserved: `${result.remainingFunding ?? '—'} / ${result.exitFee ?? '—'} USDT`,
@@ -141,6 +145,10 @@ async function verifyCurrentPlan() {
 }
 
 function renderDraft() {
+  const limit = field('entry-type').value === 'LIMIT';
+  element('limit-field').hidden = !limit;
+  field('limit-price').disabled = !limit;
+  field('limit-price').required = limit;
   element('draft-result').hidden = true;
   element('entry-checks').hidden = true;
   show('entry-error', '');
@@ -165,7 +173,7 @@ function renderDraft() {
     const outputs = {
       quantity: `${plan.quantity} ${snapshot.baseAsset}`, budget: `${plan.budget} USDT`, notional: `${plan.notional} USDT`,
       stop: `${plan.stopPrice} USDT`, distance: `约 ${plan.stopDistance}%`, loss: `${plan.plannedLoss} USDT`,
-      reference: `${plan.referencePrice} USDT（${field('side').value === 'long' ? '卖一' : '买一'}）`, entry: `${plan.entryEstimate} USDT`, exit: `${plan.exitEstimate} USDT`,
+      reference: `${plan.referencePrice} USDT（${limit ? '用户委托价' : field('side').value === 'long' ? '卖一' : '买一'}）`, entry: `${plan.entryEstimate} USDT`, exit: `${plan.exitEstimate} USDT`,
       fees: `${plan.entryFee} / ${plan.exitFee} USDT`, slippage: `${plan.slippagePercent}%`, funding: plan.fundingReserved ? `${plan.funding} USDT` : '未预留资金费',
       condition: `标记价 ${field('side').value === 'long' ? '≤' : '≥'} ${plan.stopPrice} USDT 时触发止损市价，退出全部仓位；触发价不等于成交价。`,
       time: `${plan.source === 'demo' ? '模拟数据' : 'Binance 只读快照'} · ${time(plan.queriedAt)}；按此快照试算，行情变化后请刷新。`,
@@ -179,8 +187,10 @@ function renderDraft() {
 function renderCard() {
   if (!entryPlan) return;
   const plan = entryPlan;
+  const limit = plan.execution.entryType === 'LIMIT';
   const outputs = {
     symbol: plan.symbol, direction: plan.side === 'long' ? '· 做多' : '· 做空', quantity: `${plan.quantity} ${plan.baseAsset}`,
+    'entry-type': limit ? '普通限价入场 · GTC · 按 taker 费率预留' : '市价入场', limitPrice: plan.limitPrice,
     stopPrice: plan.stopPrice, exitMode: `${plan.exitMode} · 止损${plan.execution.stopSide === 'SELL' ? '卖出' : '买入'}，不填写固定退出数量`, leverage: `所选杠杆 ${plan.leverage} 倍`,
     budget: `${plan.budget} USDT`, notional: `${plan.notional} USDT`, loss: `${plan.plannedLoss} USDT`,
     funding: `${plan.fundingRequired} / ${plan.fundingLimit} USDT`, margin: `${plan.initialMargin} USDT`, 'open-costs': `${plan.openLoss} / ${plan.openFeeReserve} USDT`,
@@ -189,9 +199,13 @@ function renderCard() {
     reserves: `${plan.slippagePercent}% / ${plan.fundingReserved ? plan.funding + ' USDT' : '未预留资金费'}`,
     wallet: `${plan.isolatedWalletAssumption} USDT`, tier: `${plan.liquidationTier} / ${plan.maintenanceRate}% / ${plan.maintenanceAmount} USDT`, limit: `${plan.notionalLimit} USDT`,
     'account-time': time(plan.accountTime), 'book-time': time(plan.bookTime), 'price-times': `${time(plan.markTime)} / ${time(plan.lastTime)}`, time: time(plan.queriedAt),
-    instructions: `在 Binance 采用逐仓、单向持仓、${plan.leverage} 倍杠杆；市价${plan.side === 'long' ? '买入做多' : '卖出做空'} ${plan.quantity} ${plan.baseAsset}。附带止损市价：绝对触发价 ${plan.stopPrice} USDT、标记价触发、关闭价格保护、整仓退出。请确认这些设置后手动执行。`,
+    instructions: `在 Binance 采用逐仓、单向持仓、${plan.leverage} 倍杠杆；${limit ? `普通限价（GTC，委托价 ${plan.limitPrice} USDT）` : '市价'}${plan.side === 'long' ? '买入做多' : '卖出做空'} ${plan.quantity} ${plan.baseAsset}。附带止损市价：绝对触发价 ${plan.stopPrice} USDT、标记价触发、关闭价格保护、整仓退出。${limit ? '部分成交后先人工撤余单，再返回刷新核验；止损执行不代表余单已撤。' : '请确认这些设置后手动执行。'}`,
+    'funding-model': `${limit ? '限价多头保证金按委托价；空头按最新成交价 × 1.0015、标记价、委托价中的较大值。开仓浮亏按委托价与标记价的不利差计算。' : '市价下单资金估值采用最新成交价 × 1.0015。'}费用按下单估值与不利成交估值中的较大名义价值预留。名义价值上限同时约束标记价、下单估值和不利成交估值。`,
   };
   for (const [id, value] of Object.entries(outputs)) show(`card-${id}`, value);
+  element('card-limit-row').hidden = !limit;
+  for (const option of document.querySelectorAll('[data-limit-only]')) if (option instanceof HTMLOptionElement) option.disabled = option.hidden = !limit;
+  field('demo-scenario').value = limit ? 'waiting' : 'missing-stop';
   show('card-title', plan.source === 'demo' ? '模拟开仓卡 · 不可用于真实交易' : '本次开仓卡');
   show('card-status', `${plan.notice} 数据截至 ${time(plan.queriedAt)}。`);
   show('copy-status', '数量和价格仅复制数值，请核对上方单位。');
@@ -315,7 +329,8 @@ async function load() {
       show('market-mark', `${snapshot.mark} USDT`);
       show('market-steps', `${snapshot.rules.tickSize} USDT / ${snapshot.rules.stepSize} ${snapshot.baseAsset}`);
       show('market-quantity', `${snapshot.rules.minQty}–${snapshot.rules.maxQty} ${snapshot.baseAsset}`);
-      show('market-minimum', `${snapshot.rules.minNotional} USDT（按标记价）`);
+      show('market-limit-quantity', `${snapshot.rules.lotSize.minQty}–${snapshot.rules.lotSize.maxQty} / ${snapshot.rules.lotSize.stepSize} ${snapshot.baseAsset}`);
+      show('market-minimum', `${snapshot.rules.minNotional} USDT（市价按标记价，限价按委托价）`);
       show('market-book-time', time(snapshot.bookTime));
       show('market-mark-time', time(snapshot.markTime));
       show('market-time', time(snapshot.queriedAt));
@@ -350,6 +365,7 @@ form.addEventListener('submit', (event) => { event.preventDefault(); renderDraft
 form.addEventListener('input', () => { inputVersion++; invalidateCard('输入已修改'); saveSettings(); renderDraft(); });
 symbol.addEventListener('change', () => {
   if (field('stop-mode').value === 'price') field('stop').value = '';
+  field('limit-price').value = '';
   saveSettings();
   void load();
 });
@@ -359,12 +375,12 @@ verify.addEventListener('click', () => { void verifyCurrentPlan(); });
 field('demo-scenario').addEventListener('change', () => { inputVersion++; invalidateVerification('模拟场景已变化，请刷新'); });
 for (const button of document.querySelectorAll('[data-copy]')) button.addEventListener('click', async () => {
   if (!(button instanceof HTMLButtonElement) || !entryPlan || !cardCurrent) return;
-  const values = { quantity: entryPlan.quantity, stopPrice: entryPlan.stopPrice, leverage: entryPlan.leverage, exitMode: entryPlan.exitMode };
+  const values = { quantity: entryPlan.quantity, limitPrice: entryPlan.limitPrice, stopPrice: entryPlan.stopPrice, leverage: entryPlan.leverage, exitMode: entryPlan.exitMode };
   const key = button.dataset.copy;
-  if (key !== 'quantity' && key !== 'stopPrice' && key !== 'leverage' && key !== 'exitMode') return;
+  if (key !== 'quantity' && key !== 'limitPrice' && key !== 'stopPrice' && key !== 'leverage' && key !== 'exitMode') return;
   try {
     await navigator.clipboard.writeText(values[key]);
-    show('copy-status', `已复制：${values[key]}${key === 'quantity' ? '（单位 ' + entryPlan.baseAsset + '）' : key === 'stopPrice' ? '（USDT 绝对价格）' : ''}`);
+    show('copy-status', `已复制：${values[key]}${key === 'quantity' ? '（单位 ' + entryPlan.baseAsset + '）' : key === 'stopPrice' || key === 'limitPrice' ? '（USDT 绝对价格）' : ''}`);
   } catch { show('copy-status', '浏览器无法复制，请长按卡片中的参数手动复制。'); }
 });
 void load();

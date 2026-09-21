@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>市价开仓卡 · 开仓前</title>
+  <title>开仓卡 · 开仓前</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" type="module"></script>
 </head>
 <body>
   <main>
     <header><p class="eyebrow">开仓前 / ENTRY GUIDANCE</p><form action="/logout" method="post"><button class="text-button">退出登录</button></form></header>
-    <div class="heading"><div><p class="muted">BINANCE · USDT 永续</p><h1>市价开仓卡</h1></div><span class="tag">只读 · 手动执行</span></div>
+    <div class="heading"><div><p class="muted">BINANCE · USDT 永续</p><h1>开仓卡</h1></div><span class="tag">只读 · 手动执行</span></div>
     <p id="source" class="source">{{source}}</p>
     <section class="status" aria-live="polite" aria-atomic="true">
       <h2 id="status">等待查询</h2><p id="message">查询结果仅代表查询时点的账户状态。</p>
@@ -22,10 +22,12 @@
     <details class="account-details"><summary>账户快照详情</summary><dl class="details"><div><dt>钱包余额</dt><dd id="wallet">—</dd></div><div><dt>未实现盈亏</dt><dd id="pnl">—</dd></div><div><dt>账户查询时间</dt><dd id="queried">尚无成功查询</dd></div><div><dt>最近尝试时间</dt><dd id="attempted">—</dd></div></dl></details>
     <button id="refresh" type="button">刷新账户与行情</button>
     <form id="draft-form" novalidate>
-      <div class="section-heading"><h2>本次计划</h2><span class="muted">市价入场 · 单层止损</span></div>
+      <div class="section-heading"><h2>本次计划</h2><span class="muted">市价 / 限价入场 · 单层止损</span></div>
       <div class="field-grid">
         <div><label for="symbol">USDT 永续币种</label><select id="symbol" name="symbol"><option value="">选择币种</option></select></div>
         <div><label for="side">方向</label><select id="side" name="side"><option value="">选择方向</option><option value="long">做多</option><option value="short">做空</option></select></div>
+        <div><label for="entry-type">入场方式</label><select id="entry-type" name="entryType"><option value="MARKET">市价</option><option value="LIMIT">普通限价 · GTC</option></select></div>
+        <div id="limit-field" hidden><label for="limit-price">限价委托价 · USDT</label><input id="limit-price" name="limitPrice" inputmode="decimal" autocomplete="off" aria-describedby="limit-help draft-error" maxlength="34"><p id="limit-help" class="help">仅用于本单；须符合价格步长，不自动改价。GTC 保持挂单直至成交、撤销或交易所失效。</p></div>
         <div><label for="budget-mode">亏损预算方式</label><select id="budget-mode" name="budgetMode"><option value="amount">固定 USDT 金额</option><option value="percent">账户权益百分比</option></select></div>
         <div><label for="budget">亏损预算 <span id="budget-unit">USDT</span></label><input id="budget" name="budget" inputmode="decimal" autocomplete="off" aria-describedby="draft-error" maxlength="34"></div>
         <div><label for="stop-mode">止损输入方式</label><select id="stop-mode" name="stopMode"><option value="percent">相对入场参考价的距离</option><option value="price">绝对止损触发价</option></select></div>
@@ -38,7 +40,7 @@
         <p class="muted">开仓与止损退出均按账户 taker 费率预留；不假定额外折扣。</p>
         <p class="fee-line">每次手续费率：<output id="fee">等待账户查询</output></p>
         <div class="field-grid">
-          <div><label for="slippage">每次市价滑点预留 %</label><input id="slippage" name="slippage" inputmode="decimal" autocomplete="off" aria-describedby="slippage-help draft-error" maxlength="34"><p id="slippage-help" class="help">分别用于开仓与止损退出；首次必填，可明确填写 0。</p></div>
+          <div><label for="slippage">每次市价滑点预留 %</label><input id="slippage" name="slippage" inputmode="decimal" autocomplete="off" aria-describedby="slippage-help draft-error" maxlength="34"><p id="slippage-help" class="help">用于市价入场和止损退出；限价入场不额外加滑点。首次必填，可明确填写 0。</p></div>
           <div><label for="funding">资金费预留 USDT（可选）</label><input id="funding" name="funding" inputmode="decimal" autocomplete="off" aria-describedby="funding-help draft-error" maxlength="34"><p id="funding-help" class="help">整笔交易的固定预留；留空表示未预留。</p></div>
           <div><label for="minimum-buffer">最低强平缓冲 · 入场价 %</label><input id="minimum-buffer" name="minimumBuffer" inputmode="decimal" autocomplete="off" aria-describedby="buffer-help entry-error" maxlength="34"><p id="buffer-help" class="help">最终止损到预估强平价的有方向间距；首次必填正数，不预设通用阈值。</p></div>
         </div>
@@ -48,7 +50,7 @@
     </form>
     <section class="draft-result" id="draft-result" aria-live="polite" hidden>
       <div class="section-heading"><h2>试算结果</h2><span class="tag">草稿</span></div>
-      <p class="muted">市价开仓数量</p><p class="amount" id="draft-quantity">—</p>
+      <p class="muted">开仓数量</p><p class="amount" id="draft-quantity">—</p>
       <dl class="details">
         <div><dt>本单亏损预算</dt><dd id="draft-budget">—</dd></div>
         <div><dt>仓位名义价值</dt><dd id="draft-notional">—</dd></div>
@@ -79,7 +81,9 @@
     <section id="entry-card" class="entry-card" hidden aria-labelledby="card-title">
       <div class="section-heading"><h2 id="card-title">本次开仓卡</h2><span class="tag" id="card-symbol">—</span></div>
       <p id="card-status" role="status" aria-live="polite"></p>
-      <div class="copy-row"><div><p class="muted">市价开仓数量 <span id="card-direction"></span></p><p class="amount" id="card-quantity">—</p></div><button type="button" data-copy="quantity" aria-label="复制开仓数量">复制数量</button></div>
+      <p id="card-entry-type" class="muted"></p>
+      <div class="copy-row"><div><p class="muted">开仓数量 <span id="card-direction"></span></p><p class="amount" id="card-quantity">—</p></div><button type="button" data-copy="quantity" aria-label="复制开仓数量">复制数量</button></div>
+      <div id="card-limit-row" class="copy-row" hidden><div><p class="muted">限价委托价 · USDT</p><p class="amount" id="card-limitPrice">—</p></div><button type="button" data-copy="limitPrice" aria-label="复制限价委托价">复制委托价</button></div>
       <div class="copy-row"><div><p class="muted">绝对止损触发价 · USDT</p><p class="amount" id="card-stopPrice">—</p></div><button type="button" data-copy="stopPrice" aria-label="复制绝对止损触发价">复制止损价</button></div>
       <div class="copy-row"><p id="card-exitMode">整仓退出</p><button type="button" data-copy="exitMode" aria-label="复制整仓退出方式">复制退出方式</button></div>
       <div class="copy-row"><p id="card-leverage">—</p><button type="button" data-copy="leverage" aria-label="复制杠杆倍数">复制杠杆</button></div>
@@ -97,7 +101,7 @@
         <div><dt>所选杠杆名义价值上限</dt><dd id="card-limit">—</dd></div>
         <div><dt>账户查询</dt><dd id="card-account-time">—</dd></div><div><dt>买卖报价</dt><dd id="card-book-time">—</dd></div>
         <div><dt>标记价 / 最新成交价</dt><dd id="card-price-times">—</dd></div><div><dt>本次规则读取完成</dt><dd id="card-time">—</dd></div>
-      </dl><p class="help">下单资金估值采用最新成交价 × 1.0015；费用按下单估值与不利成交估值中的较大名义价值预留。名义价值上限同时约束标记价、下单估值和不利成交估值。</p>
+      </dl><p id="card-funding-model" class="help"></p>
       <p class="help">强平模型：逐仓本金＝不利成交名义价值÷所选杠杆－开仓手续费；不计额外或自动追加保证金及未来资金费变化。这是成交前假设，不是交易所实际逐仓余额，也不保证是其下界。</p></details>
       <p id="card-instructions"></p>
       <p class="notice">卡片生成不表示已下单或挂好止损。实际亏损可能超过预算，交易所仍可能拒单；成交后须检查真实仓位与止损。</p>
@@ -107,7 +111,7 @@
       <p class="help" id="verification-start"></p>
       <div id="demo-verification" hidden>
         <label for="demo-scenario">模拟账户场景 · 不会执行交易</label>
-        <select id="demo-scenario"><option value="missing-stop">已成交，缺少止损</option><option value="protected">已在模拟账户补齐止损</option><option value="waiting">尚未成交</option><option value="failure">模拟查询失败</option></select>
+        <select id="demo-scenario"><option value="missing-stop">已成交，缺少止损</option><option value="protected">全部成交，已补齐止损</option><option value="waiting">尚未成交 / 限价挂单中</option><option value="partial" data-limit-only>限价：首次部分成交，余单仍在</option><option value="partial-more" data-limit-only>限价：再次部分成交，余单仍在</option><option value="canceled-remainder" data-limit-only>限价：已人工撤余单，保留实际仓位</option><option value="stop-first" data-limit-only>限价：止损先执行，入场余单仍在</option><option value="failure">模拟查询失败</option></select>
       </div>
       <button id="verify" type="button">返回后刷新核验</button>
       <p id="verification-status" role="status" aria-live="polite">待核验</p>
@@ -115,6 +119,8 @@
       <ul id="verification-issues"></ul>
       <dl id="verification-details" class="details" hidden>
         <div><dt>关联开仓订单</dt><dd id="verification-order">—</dd></div>
+        <div><dt>入场订单状态 / 累计成交</dt><dd id="verification-entry-state">—</dd></div>
+        <div><dt>未成交入场委托</dt><dd id="verification-pending">—</dd></div>
         <div><dt>实际方向 / 数量</dt><dd id="verification-position">—</dd></div>
         <div><dt>实际成交均价</dt><dd id="verification-entry">—</dd></div>
         <div><dt>实际 / 原方案杠杆</dt><dd id="verification-leverage">—</dd></div>
@@ -133,6 +139,7 @@
     <details id="market-details" hidden><summary>本次行情与交易规则</summary><dl class="details">
       <div><dt>买一 / 卖一</dt><dd id="market-book">—</dd></div><div><dt>标记价</dt><dd id="market-mark">—</dd></div>
       <div><dt>价格 / 数量步长</dt><dd id="market-steps">—</dd></div><div><dt>市价数量范围</dt><dd id="market-quantity">—</dd></div>
+      <div><dt>普通限价数量范围 / 步长</dt><dd id="market-limit-quantity">—</dd></div>
       <div><dt>最小开仓名义价值</dt><dd id="market-minimum">—</dd></div><div><dt>报价数据时间</dt><dd id="market-book-time">—</dd></div>
       <div><dt>标记价数据时间</dt><dd id="market-mark-time">—</dd></div><div><dt>本次读取完成</dt><dd id="market-time">—</dd></div>
       <div><dt>最新成交价 / 数据时间</dt><dd id="market-last">—</dd></div><div><dt>账户杠杆档位</dt><dd id="market-brackets">—</dd></div>

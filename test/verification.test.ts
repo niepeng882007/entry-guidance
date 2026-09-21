@@ -4,6 +4,7 @@ import { test, type TestContext } from 'node:test';
 import { createServer } from '../src/server.ts';
 
 const input = { symbol: 'BTCUSDT', side: 'long', budgetMode: 'amount', budget: '20', stopMode: 'price', stop: '98', slippage: '1', funding: '1', leverage: '10', minimumBuffer: '1', fundingCap: '5' };
+const limitInput = { ...input, entryType: 'LIMIT', limitPrice: '100' };
 
 function fixture() {
   const now = Date.now() - 1000;
@@ -22,11 +23,12 @@ function fixture() {
     '/fapi/v2/ticker/price': { symbol: 'BTCUSDT', price: '100', time: now },
     '/fapi/v1/ticker/bookTicker': { symbol: 'BTCUSDT', bidPrice: '99', askPrice: '100', time: now },
     '/fapi/v1/premiumIndex': { symbol: 'BTCUSDT', markPrice: '100', time: now },
-    '/fapi/v1/exchangeInfo': { symbols: [{ symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT', marginAsset: 'USDT', status: 'TRADING', contractType: 'PERPETUAL', orderTypes: ['MARKET', 'STOP_MARKET'], marketTakeBound: '0.30', filters: [
+    '/fapi/v1/exchangeInfo': { symbols: [{ symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT', marginAsset: 'USDT', status: 'TRADING', contractType: 'PERPETUAL', orderTypes: ['MARKET', 'LIMIT', 'STOP_MARKET'], timeInForce: ['GTC'], marketTakeBound: '0.30', filters: [
       { filterType: 'PRICE_FILTER', minPrice: '0.1', maxPrice: '1000000', tickSize: '0.1' },
       { filterType: 'LOT_SIZE', minQty: '0.001', maxQty: '10000', stepSize: '0.001' },
       { filterType: 'MARKET_LOT_SIZE', minQty: '0.1', maxQty: '1000', stepSize: '0.1' },
       { filterType: 'MIN_NOTIONAL', notional: '5' },
+      { filterType: 'PERCENT_PRICE', multiplierUp: '1.2', multiplierDown: '0.8' },
     ] }] },
   };
   return { data, position, now };
@@ -69,6 +71,203 @@ function fill(f: ReturnType<typeof fixture>) {
   f.data['/fapi/v1/income'] = [{ symbol: 'BTCUSDT', incomeType: 'FUNDING_FEE', income: '-0.3', asset: 'USDT', time: time + 1, tranId: 123 }];
   return { symbol: 'BTCUSDT', algoId: 20, algoType: 'CONDITIONAL', algoStatus: 'NEW', orderType: 'STOP_MARKET', side: 'SELL', positionSide: 'BOTH', quantity: '0', triggerPrice: '98', workingType: 'MARK_PRICE', priceProtect: false, closePosition: true, reduceOnly: false, actualOrderId: '', triggerTime: 0, createTime: time, updateTime: time, timeInForce: 'GTC', goodTillDate: 0 };
 }
+
+function limitOrder(f: ReturnType<typeof fixture>) {
+  return { symbol: 'BTCUSDT', orderId: 10, side: 'BUY', positionSide: 'BOTH', type: 'LIMIT', origType: 'LIMIT', status: 'NEW', time: f.now + 100, updateTime: f.now + 100, price: '100', origQty: '0.495', executedQty: '0', avgPrice: '0', reduceOnly: false, closePosition: false, stopPrice: '0', workingType: 'CONTRACT_PRICE', priceProtect: false, timeInForce: 'GTC', goodTillDate: 0 };
+}
+
+test('an unfilled GTC limit waits with its remaining amount, and a confirmed zero-fill cancellation ends without verification', async (t) => {
+  const app = await start(t);
+  const response = await app.create(limitInput);
+  assert.equal(response.status, 200);
+  const plan = await response.json();
+  assert.equal(plan.limitPrice, '100');
+  const order = limitOrder(app);
+  app.data['/fapi/v1/time'] = { serverTime: app.now + 200 };
+  app.data['/fapi/v1/allOrders'] = [order];
+  app.data['/fapi/v1/openOrders'] = [order];
+  const path = `/api/verification?planId=${plan.id}`;
+  const waiting = await (await app.read(path)).json();
+  assert.equal(waiting.status, 'waiting');
+  assert.equal(waiting.orderId, '10');
+  assert.equal(waiting.filledQuantity, '0');
+  assert.deepEqual(waiting.pendingEntries, [{ orderId: '10', filledQuantity: '0', remainingQuantity: '0.495' }]);
+  order.status = 'CANCELED';
+  app.data['/fapi/v1/openOrders'] = [];
+  const canceled = await (await app.read(path)).json();
+  assert.equal(canceled.status, 'ended');
+  assert.match(canceled.issues.join(' '), /未成交已撤销/);
+  assert.deepEqual(canceled.pendingEntries, []);
+  app.data['/fapi/v1/income'] = [{ symbol: 'BTCUSDT', incomeType: 'UNKNOWN_COST', income: '-1', asset: 'USDT', time: app.now + 150 }];
+  const unexplained = await (await app.read(path)).json();
+  assert.equal(unexplained.status, 'incomplete');
+  assert.match(unexplained.issues.join(' '), /收支.*无法完整核验/);
+});
+
+test('successive partial fills require manual remainder cancellation and recheck actual costs and stop size', async (t) => {
+  const app = await start(t);
+  const plan = await (await app.create(limitInput)).json();
+  const stop = { ...fill(app), closePosition: false, reduceOnly: true, quantity: '0.495' };
+  const trades = app.data['/fapi/v1/userTrades'] as Record<string, unknown>[];
+  const second = trades.pop()!;
+  const order = { ...limitOrder(app), status: 'PARTIALLY_FILLED', executedQty: '0.1' };
+  app.data['/fapi/v1/allOrders'] = [order];
+  app.data['/fapi/v1/openOrders'] = [order];
+  app.data['/fapi/v1/openAlgoOrders'] = [stop];
+  app.position.positionAmt = '0.1';
+  const path = `/api/verification?planId=${plan.id}`;
+  const first = await (await app.read(path)).json();
+  assert.equal(first.status, 'needs-action');
+  assert.equal(first.filledQuantity, '0.1');
+  assert.equal(first.pendingEntries[0].remainingQuantity, '0.395');
+  assert.equal(first.plannedLoss, '1.317702');
+  assert.match(first.issues.join(' '), /Binance 撤销/);
+  trades.push({ ...second, price: '99.9', quoteQty: '29.97', commission: '0.02997' });
+  order.executedQty = '0.4';
+  Object.assign(app.position, { positionAmt: '0.4', entryPrice: '99.925' });
+  const partial = await (await app.read(path)).json();
+  assert.equal(partial.status, 'needs-action');
+  assert.equal(partial.filledQuantity, '0.4');
+  assert.equal(partial.pendingEntries[0].remainingQuantity, '0.095');
+  assert.equal(partial.paidCommission, '0.03997');
+  assert.equal(partial.plannedLoss, '2.240778');
+  order.status = 'CANCELED';
+  app.data['/fapi/v1/openOrders'] = [];
+  const oversized = await (await app.read(path)).json();
+  assert.equal(oversized.status, 'needs-action');
+  assert.match(oversized.issues.join(' '), /0.495.*实际 0.4.*不得超量/);
+  stop.quantity = '0.4';
+  const verified = await (await app.read(path)).json();
+  assert.equal(verified.status, 'verified');
+  assert.equal(verified.quantity, '0.4');
+  assert.equal(verified.entryPrice, '99.925');
+  assert.equal(verified.paidFunding, '0.3');
+  assert.equal(verified.remainingFunding, '0.7');
+  assert.equal(verified.plannedLoss, '2.240778');
+  assert.equal(verified.liquidationBuffer, '8.0060045');
+  assert.equal(plan.budget, '20');
+  assert.equal(plan.stopPrice, '98');
+});
+
+test('a stop can close partial fills while the entry remainder survives; ambiguous costs or reopening never complete', async (t) => {
+  const app = await start(t);
+  const plan = await (await app.create(limitInput)).json();
+  fill(app);
+  const order = { ...limitOrder(app), status: 'PARTIALLY_FILLED', executedQty: '0.4' };
+  const close = { ...order, orderId: 11, side: 'SELL', type: 'MARKET', origType: 'STOP_MARKET', status: 'FILLED', origQty: '0.4', reduceOnly: true };
+  app.data['/fapi/v1/allOrders'] = [order, close];
+  app.data['/fapi/v1/openOrders'] = [order];
+  const trades = app.data['/fapi/v1/userTrades'] as Record<string, unknown>[];
+  trades.push({ ...trades[0], id: 3, orderId: 11, side: 'SELL', qty: '0.4', price: '98', realizedPnl: '-0.8', commission: '0.0392', time: app.now + 150 });
+  Object.assign(app.position, { positionAmt: '0', entryPrice: '0', liquidationPrice: '0' });
+  const path = `/api/verification?planId=${plan.id}`;
+  const stopped = await (await app.read(path)).json();
+  assert.equal(stopped.status, 'needs-action');
+  assert.equal(stopped.pendingEntries[0].remainingQuantity, '0.095');
+  assert.match(stopped.issues.join(' '), /重新形成仓位/);
+  const income = app.data['/fapi/v1/income'] as Record<string, unknown>[];
+  income.push({ symbol: 'BTCUSDT', incomeType: 'UNKNOWN_COST', income: '-1', asset: 'USDT', time: app.now + 160 });
+  assert.equal((await (await app.read(path)).json()).status, 'incomplete');
+  income.pop();
+  income.push({ symbol: 'BTCUSDT', incomeType: 'REALIZED_PNL', income: '-8', asset: 'USDT', tradeId: '3', time: app.now + 150 });
+  assert.equal((await (await app.read(path)).json()).status, 'incomplete');
+  income[1]!.income = '-0.8';
+  order.status = 'CANCELED';
+  app.data['/fapi/v1/openOrders'] = [];
+  assert.equal((await (await app.read(path)).json()).status, 'ended');
+  order.status = 'PARTIALLY_FILLED';
+  order.executedQty = '0.45';
+  app.data['/fapi/v1/openOrders'] = [order];
+  trades.push({ ...trades[0], id: 4, qty: '0.05', commission: '0.005', time: app.now + 175 });
+  Object.assign(app.position, { positionAmt: '0.05', entryPrice: '100', liquidationPrice: '90' });
+  const reopened = await (await app.read(path)).json();
+  assert.equal(reopened.status, 'incomplete');
+  assert.equal(reopened.pendingEntries[0].remainingQuantity, '0.045');
+  assert.match(reopened.issues.join(' '), /重新开仓/);
+});
+
+test('fully filled limits verify both directions and still reject excess costs and insufficient liquidation buffer', async (t) => {
+  for (const side of ['long', 'short']) await t.test(side, async (t) => {
+    const app = await start(t);
+    const plan = await (await app.create({ ...limitInput, side, stop: side === 'long' ? '98' : '102' })).json();
+    const stop = fill(app);
+    const order = { ...limitOrder(app), side: side === 'long' ? 'BUY' : 'SELL', origQty: '0.4', executedQty: '0.4', status: 'FILLED' };
+    app.data['/fapi/v1/allOrders'] = [order];
+    app.data['/fapi/v1/openAlgoOrders'] = [{ ...stop, side: side === 'long' ? 'SELL' : 'BUY', triggerPrice: plan.stopPrice }];
+    const trades = app.data['/fapi/v1/userTrades'] as Record<string, unknown>[];
+    for (const trade of trades) trade.side = order.side;
+    Object.assign(app.position, { positionAmt: side === 'long' ? '0.4' : '-0.4', liquidationPrice: side === 'long' ? '90' : '110' });
+    const path = `/api/verification?planId=${plan.id}`;
+    const verified = await (await app.read(path)).json();
+    assert.equal(verified.status, 'verified');
+    assert.equal(verified.quantity, '0.4');
+    assert.equal(verified.plannedLoss, side === 'long' ? '2.270808' : '2.289208');
+    assert.deepEqual(verified.pendingEntries, []);
+    trades[0]!.commission = '30';
+    app.position.liquidationPrice = side === 'long' ? '99' : '101';
+    const exceeded = await (await app.read(path)).json();
+    assert.equal(exceeded.status, 'needs-action');
+    assert.match(exceeded.issues.join(' '), /超过原预算.*超额/);
+    assert.match(exceeded.issues.join(' '), /强平缓冲 -1%/);
+  });
+});
+
+test('inconsistent limit history, changed prices, extra orders and missing reads cannot pass', async (t) => {
+  const cases: [string, (app: Awaited<ReturnType<typeof start>>, order: ReturnType<typeof limitOrder>) => void][] = [
+    ['unknown status', (_app, order) => { order.status = 'UNKNOWN'; }],
+    ['missing remainder', (app, order) => { order.status = 'PARTIALLY_FILLED'; order.origQty = '0.5'; app.data['/fapi/v1/openOrders'] = []; }],
+    ['mismatched remainder', (app, order) => { order.status = 'PARTIALLY_FILLED'; order.origQty = '0.5'; app.data['/fapi/v1/openOrders'] = [{ ...order, executedQty: '0.3' }]; }],
+    ['changed limit', (_app, order) => { order.price = '101'; }],
+    ['wrong TIF', (_app, order) => { order.timeInForce = 'IOC'; }],
+    ['canceled then replaced', (app, order) => { app.data['/fapi/v1/allOrders'] = [{ ...order, orderId: 9, status: 'CANCELED', executedQty: '0' }, order]; }],
+    ['partial close', (app, order) => {
+      const trades = app.data['/fapi/v1/userTrades'] as Record<string, unknown>[];
+      trades.push({ ...trades[0], id: 3, orderId: 11, side: 'SELL', qty: '0.1', time: app.now + 150 });
+      app.data['/fapi/v1/allOrders'] = [order, { ...order, orderId: 11, side: 'SELL', executedQty: '0.1' }];
+      app.position.positionAmt = '0.3';
+    }],
+    ['missing trades', (app) => { app.data['/fapi/v1/userTrades'] = []; }],
+    ['beyond limit fill', (app) => { (app.data['/fapi/v1/userTrades'] as Record<string, unknown>[])[0]!.price = '100.1'; }],
+  ];
+  for (const [name, change] of cases) await t.test(name, async (t) => {
+    const app = await start(t);
+    const plan = await (await app.create(limitInput)).json();
+    app.data['/fapi/v1/openAlgoOrders'] = [fill(app)];
+    const order = { ...limitOrder(app), origQty: '0.4', executedQty: '0.4', status: 'FILLED' };
+    app.data['/fapi/v1/allOrders'] = [order];
+    change(app, order);
+    const response = await app.read(`/api/verification?planId=${plan.id}`);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).status, 'incomplete');
+  });
+});
+
+test('demo runs the same limit waiting, repeated partial-fill, canceled-remainder and stop-first verification flow', async (t) => {
+  const app = await start(t, fixture(), 'demo');
+  const plan = await (await app.create(limitInput)).json();
+  const read = async (scenario: string) => {
+    const response = await app.read(`/api/verification?planId=${plan.id}&demo=${scenario}`);
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  assert.equal((await read('waiting')).status, 'waiting');
+  const partial = await read('partial');
+  assert.equal(partial.status, 'needs-action');
+  assert.equal(partial.quantity, '0.247');
+  assert.equal(partial.pendingEntries[0].remainingQuantity, '0.248');
+  const more = await read('partial-more');
+  assert.equal(more.quantity, '0.371');
+  assert.equal(more.status, 'needs-action');
+  assert.equal(more.pendingEntries[0].remainingQuantity, '0.124');
+  const canceled = await read('canceled-remainder');
+  assert.equal(canceled.status, 'verified');
+  assert.equal(canceled.quantity, '0.371');
+  assert.equal(canceled.plannedLoss, '2.17867442');
+  const stopped = await read('stop-first');
+  assert.equal(stopped.status, 'needs-action');
+  assert.equal(stopped.quantity, '0');
+  assert.match(stopped.issues.join(' '), /重新形成仓位/);
+});
 
 test('a frozen entry plan has a confirmed flat starting point; an empty position waits, never passes', async (t) => {
   const app = await start(t);
@@ -249,7 +448,7 @@ test('remaining entry orders prevent completion even beside a valid stop', async
   const app = await start(t);
   const plan = await (await app.create()).json();
   app.data['/fapi/v1/openAlgoOrders'] = [fill(app)];
-  app.data['/fapi/v1/openOrders'] = [{ symbol: 'BTCUSDT', orderId: 30, status: 'PARTIALLY_FILLED', type: 'LIMIT', side: 'BUY', positionSide: 'BOTH', origQty: '1', executedQty: '0.1', stopPrice: '0', workingType: 'CONTRACT_PRICE', priceProtect: false, closePosition: false, reduceOnly: false, updateTime: app.now + 100, timeInForce: 'GTC', goodTillDate: 0 }];
+  app.data['/fapi/v1/openOrders'] = [{ symbol: 'BTCUSDT', orderId: 30, status: 'PARTIALLY_FILLED', type: 'LIMIT', price: '100', side: 'BUY', positionSide: 'BOTH', origQty: '1', executedQty: '0.1', stopPrice: '0', workingType: 'CONTRACT_PRICE', priceProtect: false, closePosition: false, reduceOnly: false, updateTime: app.now + 100, timeInForce: 'GTC', goodTillDate: 0 }];
   const result = await (await app.read(`/api/verification?planId=${plan.id}`)).json();
   assert.equal(result.status, 'needs-action');
   assert.match(result.issues.join(' '), /未成交入场余单/);

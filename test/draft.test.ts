@@ -7,6 +7,66 @@ import { generateDraft, generateEntryPlan } from '../public/draft.js';
 const input = { symbol: 'BTCUSDT', side: 'long', budgetMode: 'amount', budget: '20', stopMode: 'price', stop: '98', slippage: '1', funding: '1' };
 const entryInput = { ...input, leverage: '10', minimumBuffer: '1', fundingCap: '' };
 
+test('limit entry keeps the specified price, uses ordinary lots and reserves taker costs', async (t) => {
+  const data = responses();
+  const app = await start(t, data);
+  const snapshot = await (await app.read()).json();
+  const parameters = { ...entryInput, entryType: 'LIMIT', limitPrice: '100' };
+  const draft = generateDraft(parameters, snapshot);
+  assert.equal(draft.referencePrice, '100');
+  assert.equal(draft.entryEstimate, '100');
+  assert.equal(draft.exitEstimate, '97.02');
+  const plan = generateEntryPlan(parameters, snapshot);
+  // Each BTC needs 10 margin + 0 open loss + .1 taker reserve; 5 USDT admits .495 BTC.
+  assert.equal(plan.quantity, '0.495');
+  assert.equal(plan.initialMargin, '4.95');
+  assert.equal(plan.openLoss, '0');
+  assert.equal(plan.openFeeReserve, '0.0495');
+  assert.equal(plan.fundingRequired, '4.9995');
+  assert.equal(plan.plannedLoss, '2.5726249');
+  assert.equal(plan.execution.entryType, 'LIMIT');
+  assert.equal(plan.execution.timeInForce, 'GTC');
+  assert.equal(plan.isolatedWalletAssumption, '4.9005');
+  assert.equal(plan.liquidationPrice, '91.01010102');
+});
+
+test('short limit funding uses the official maximum valuation but open loss uses the limit price', async (t) => {
+  const app = await start(t);
+  const snapshot = await (await app.read()).json();
+  const parameters = { ...entryInput, entryType: 'LIMIT', limitPrice: '99', side: 'short', stop: '102' };
+  const plan = generateEntryPlan(parameters, snapshot);
+  // A=100.15, open loss=1/BTC, fee reserve=.10015/BTC; 5/11.11515 rounds down to .449.
+  assert.equal(plan.quantity, '0.449');
+  assert.equal(plan.assumingPrice, '100.15');
+  assert.equal(plan.initialMargin, '4.496735');
+  assert.equal(plan.openLoss, '0.449');
+  assert.equal(plan.openFeeReserve, '0.04496735');
+  assert.equal(plan.fundingRequired, '4.99070235');
+  assert.equal(plan.entryEstimate, '99');
+  assert.equal(plan.plannedLoss, '2.89568698');
+  // Mark may exceed the padded last trade; it then determines initial margin, not the limit.
+  const moved = generateEntryPlan({ ...parameters, stop: '106' }, { ...snapshot, mark: '105' });
+  assert.equal(moved.assumingPrice, '105');
+  assert.equal(moved.openLoss, '1.806');
+});
+
+test('limit prices require explicit valid rules and exact ticks, with side-specific price and notional filters', async (t) => {
+  const app = await start(t);
+  const snapshot = await (await app.read()).json();
+  const parameters = { ...entryInput, entryType: 'LIMIT', limitPrice: '100' };
+  for (const limitPrice of ['', '0', '100.01']) assert.throws(() => generateDraft({ ...parameters, limitPrice }, snapshot), /限价|价格/);
+  assert.throws(() => generateDraft({ ...parameters, entryType: 'STOP' }, snapshot), /入场/);
+  assert.throws(() => generateEntryPlan(parameters, { ...snapshot, rules: { ...snapshot.rules, limitSupported: false } }), /GTC/);
+  assert.throws(() => generateDraft(parameters, { ...snapshot, rules: { ...snapshot.rules, percentPrice: undefined } }), /价格范围/);
+  assert.throws(() => generateDraft({ ...parameters, limitPrice: '120.1' }, snapshot), /价格范围/);
+  assert.throws(() => generateDraft({ ...parameters, side: 'short', limitPrice: '79.9', stop: '102' }, snapshot), /价格范围/);
+  assert.equal(generateDraft({ ...parameters, limitPrice: '70', stop: '68' }, snapshot).referencePrice, '70');
+  assert.equal(generateDraft({ ...parameters, side: 'short', limitPrice: '130', stop: '132' }, snapshot).referencePrice, '130');
+  const small = { ...snapshot, rules: { ...snapshot.rules, lotSize: { minQty: '0.05', maxQty: '0.05', stepSize: '0.001' } } };
+  assert.throws(() => generateDraft({ ...parameters, limitPrice: '99' }, small), /最小名义价值/);
+  assert.equal(generateDraft(parameters, small).quantity, '0.05');
+});
+
 function responses(): Record<string, unknown> {
   return {
     '/sapi/v1/account/apiRestrictions': { enableReading: true, enableWithdrawals: false, enableInternalTransfer: false, enableMargin: false, enableFutures: false, permitsUniversalTransfer: false, enableVanillaOptions: false, enableFixApiTrade: false, enableSpotAndMarginTrading: false, enablePortfolioMarginTrading: false },
@@ -23,11 +83,12 @@ function responses(): Record<string, unknown> {
     '/fapi/v2/ticker/price': { symbol: 'BTCUSDT', price: '100', time: Date.now() },
     '/fapi/v1/ticker/bookTicker': { symbol: 'BTCUSDT', bidPrice: '99', askPrice: '100', time: Date.now() },
     '/fapi/v1/premiumIndex': { symbol: 'BTCUSDT', markPrice: '100', time: Date.now() },
-    '/fapi/v1/exchangeInfo': { symbols: [{ symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT', marginAsset: 'USDT', status: 'TRADING', contractType: 'PERPETUAL', orderTypes: ['MARKET', 'STOP_MARKET'], marketTakeBound: '0.30', pricePrecision: 5, quantityPrecision: 7, filters: [
+    '/fapi/v1/exchangeInfo': { symbols: [{ symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT', marginAsset: 'USDT', status: 'TRADING', contractType: 'PERPETUAL', orderTypes: ['MARKET', 'LIMIT', 'STOP_MARKET'], timeInForce: ['GTC'], marketTakeBound: '0.30', pricePrecision: 5, quantityPrecision: 7, filters: [
       { filterType: 'PRICE_FILTER', minPrice: '0.1', maxPrice: '1000000', tickSize: '0.1' },
       { filterType: 'LOT_SIZE', minQty: '0.001', maxQty: '10000', stepSize: '0.001' },
       { filterType: 'MARKET_LOT_SIZE', minQty: '0.1', maxQty: '1000', stepSize: '0.1' },
       { filterType: 'MIN_NOTIONAL', notional: '5' },
+      { filterType: 'PERCENT_PRICE', multiplierUp: '1.2', multiplierDown: '0.8' },
     ] }] },
   };
 }

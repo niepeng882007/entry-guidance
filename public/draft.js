@@ -1,7 +1,7 @@
-/** @typedef {{symbol: string, side: string, budgetMode: string, budget: string, stopMode: string, stop: string, slippage: string, funding: string}} DraftInput */
+/** @typedef {{symbol: string, side: string, budgetMode: string, budget: string, stopMode: string, stop: string, slippage: string, funding: string, entryType?: string, limitPrice?: string}} DraftInput */
 /** @typedef {DraftInput & {leverage: string, minimumBuffer: string, fundingCap: string}} EntryInput */
 /** @typedef {{minQty: string, maxQty: string, stepSize: string}} LotSize */
-/** @typedef {LotSize & {minPrice: string, maxPrice: string, tickSize: string, minNotional: string, lotSize: LotSize, marketTakeBound: string}} Rules */
+/** @typedef {LotSize & {minPrice: string, maxPrice: string, tickSize: string, minNotional: string, lotSize: LotSize, marketTakeBound: string, limitSupported?: boolean, percentPrice?: {up: string, down: string}}} Rules */
 /** @typedef {{maxLeverage: number, floor: string, cap: string, maintenanceRate: string, cum: string}} Bracket */
 /** @typedef {{source: 'binance'|'demo', queriedAt: string, symbol: string, baseAsset: string, bid: string, ask: string, mark: string, last: string, bookTime: string, markTime: string, lastTime: string, takerRate: string, brackets: Bracket[], rules: Rules, account: {equity: string, availableBalance: string, walletBalance: string, unrealizedProfit: string, queriedAt: string}}} Snapshot */
 
@@ -34,7 +34,7 @@ export function generateEntryPlan(input, snapshot) {
     notice: snapshot.source === 'demo' ? '模拟开仓卡 · 不可用于真实交易。' : '开仓前检查通过 · 尚未下单或核验止损。',
     symbol: snapshot.symbol, baseAsset: snapshot.baseAsset, side: input.side,
     leverage: input.leverage, exitMode: '整仓退出',
-    execution: { entrySide: input.side === 'long' ? 'BUY' : 'SELL', stopSide: input.side === 'long' ? 'SELL' : 'BUY', marginMode: 'ISOLATED', positionMode: 'BOTH', entryType: 'MARKET', stopType: 'STOP_MARKET', workingType: 'MARK_PRICE', priceProtect: 'FALSE', closePosition: 'true' },
+    execution: { entrySide: input.side === 'long' ? 'BUY' : 'SELL', stopSide: input.side === 'long' ? 'SELL' : 'BUY', marginMode: 'ISOLATED', positionMode: 'BOTH', entryType: input.entryType ?? 'MARKET', ...(input.entryType === 'LIMIT' ? { timeInForce: 'GTC' } : {}), stopType: 'STOP_MARKET', workingType: 'MARK_PRICE', priceProtect: 'FALSE', closePosition: 'true' },
     accountTime: snapshot.account.queriedAt, bookTime: snapshot.bookTime, markTime: snapshot.markTime, lastTime: snapshot.lastTime,
   };
 }
@@ -52,8 +52,11 @@ function calculatePlan(input, snapshot, entryInput) {
   if (!['long', 'short'].includes(input.side)) throw new Error('请选择做多或做空方向。');
   if (!['amount', 'percent'].includes(input.budgetMode)) throw new Error('预算方式无效。');
   if (!['price', 'percent'].includes(input.stopMode)) throw new Error('止损方式无效。');
+  if (!['MARKET', 'LIMIT'].includes(input.entryType ?? 'MARKET')) throw new Error('请选择市价或限价入场。');
+  const limit = input.entryType === 'LIMIT';
   const direction = input.side === 'long' ? 1n : -1n;
-  const entry = parseDecimal(input.side === 'long' ? snapshot.ask : snapshot.bid, '入场参考价');
+  const marketEntry = input.side === 'long' ? snapshot.ask : snapshot.bid;
+  const entry = parseDecimal(limit ? input.limitPrice : marketEntry, limit ? '限价委托价' : '入场参考价');
   const mark = parseDecimal(snapshot.mark, '标记价');
   if (entry <= 0n || mark <= 0n) throw new Error('行情价格须为正数，请刷新。');
   const stopInput = parseDecimal(input.stop, '止损');
@@ -65,6 +68,15 @@ function calculatePlan(input, snapshot, entryInput) {
   const minPrice = parseDecimal(snapshot.rules.minPrice, '最小价格');
   const maxPrice = parseDecimal(snapshot.rules.maxPrice, '最大价格');
   if (tick <= 0n || desiredStop < minPrice * PERCENT) throw new Error('止损价格低于合约下限或价格步长不支持。');
+  if (limit) {
+    if (snapshot.rules.limitSupported !== true) throw new Error('当前合约未确认支持普通 GTC 限价入场。');
+    if (entry < minPrice || (maxPrice > 0n && entry > maxPrice) || (entry - minPrice) % tick !== 0n) throw new Error(`限价委托价不符合价格范围或步长 ${snapshot.rules.tickSize}，请修正；不会自动改价。`);
+    const range = snapshot.rules.percentPrice;
+    if (!range) throw new Error('限价价格范围规则缺失或重复，请刷新。');
+    const up = parseDecimal(range.up, '限价价格范围'), down = parseDecimal(range.down, '限价价格范围');
+    if (down <= 0n || up < down) throw new Error('限价价格范围规则无效。');
+    if (direction === 1n ? entry * SCALE > mark * up : entry * SCALE < mark * down) throw new Error('限价超出当前标记价允许的价格范围，请自行修正后重算。');
+  }
   const tickDenominator = PERCENT * tick;
   const stop = minPrice + (desiredStop - minPrice * PERCENT + (direction === -1n ? tickDenominator - 1n : 0n)) / tickDenominator * tick;
   if (stop <= 0n || (maxPrice > 0n && stop > maxPrice)) throw new Error('取整后止损价格超出合约范围。');
@@ -79,19 +91,20 @@ function calculatePlan(input, snapshot, entryInput) {
   const fee = parseDecimal(snapshot.takerRate, '账户 taker 费率');
   if (slip >= PERCENT) throw new Error('每次滑点须小于 100%。');
   if (fee >= SCALE) throw new Error('账户 taker 费率无效，请刷新。');
-  let step = parseDecimal(snapshot.rules.stepSize, '数量步长');
-  let minQty = parseDecimal(snapshot.rules.minQty, '最小数量');
-  let maxQty = parseDecimal(snapshot.rules.maxQty, '最大数量');
-  if (step <= 0n || maxQty <= 0n || maxQty < minQty) throw new Error('市价数量规则无效，请刷新。');
+  const lot = limit ? snapshot.rules.lotSize : snapshot.rules;
+  let step = parseDecimal(lot.stepSize, '数量步长');
+  let minQty = parseDecimal(lot.minQty, '最小数量');
+  let maxQty = parseDecimal(lot.maxQty, '最大数量');
+  if (step <= 0n || maxQty <= 0n || maxQty < minQty) throw new Error('开仓数量规则无效，请刷新。');
   // 8-place prices × 10-place percentage ratios = 18 places; fees add 8 more.
   // Keep exact products until quantity rounding; ceil displayed loss to 8 places.
-  const entryEstimate = entry * (PERCENT + direction * slip);
+  const entryEstimate = entry * (limit ? PERCENT : PERCENT + direction * slip);
   const exitEstimate = stop * (PERCENT - direction * slip);
   const unitLoss = direction * (entryEstimate - exitEstimate) * SCALE + (entryEstimate + exitEstimate) * fee;
   if (unitLoss <= 0n) throw new Error('每单位计划损失须大于零。');
   const riskQuantity = (budget - funding) * 10n ** 26n / unitLoss;
   const constraints = entryInput ? entryConstraints(entryInput, snapshot, entryEstimate, mark, direction, fee) : null;
-  if (constraints) {
+  if (constraints && !limit) {
     const normal = snapshot.rules.lotSize;
     const normalStep = parseDecimal(normal.stepSize, '普通数量步长');
     const normalMin = parseDecimal(normal.minQty, '普通最小数量');
@@ -107,7 +120,7 @@ function calculatePlan(input, snapshot, entryInput) {
   if (allowedQuantity < minQty) throw new Error(`预算${constraints ? '、可用资金或账户档位' : ''}允许数量 ${formatDecimal(allowedQuantity)} ${snapshot.baseAsset} 低于最小开仓数量 ${formatDecimal(minQty)}；请自行调整输入。`);
   const quantity = minQty + (allowedQuantity - minQty) / step * step;
   if (quantity <= 0n) throw new Error('预算允许数量低于最小数量步长；请自行调整输入。');
-  if (quantity * mark < parseDecimal(snapshot.rules.minNotional, '最小名义价值') * SCALE) throw new Error('数量取整后低于最小名义价值；不会自动增加仓位。');
+  if (quantity * (limit ? entry : mark) < parseDecimal(snapshot.rules.minNotional, '最小名义价值') * SCALE) throw new Error('数量取整后低于最小名义价值；不会自动增加仓位。');
   const loss = quantity * unitLoss + funding * 10n ** 26n;
   if (loss > budget * 10n ** 26n) throw new Error('取整后计划亏损超出预算，无法生成草稿。');
   const checks = constraints ? checkEntry(quantity, stop, entry, entryEstimate, direction, fee, constraints) : null;
@@ -118,7 +131,7 @@ function calculatePlan(input, snapshot, entryInput) {
     plannedLoss: formatDecimal((loss + 10n ** 26n - 1n) / 10n ** 26n),
     stopDistance: formatDecimal(direction * (entry - stop) * PERCENT / entry),
     fundingReserved: funding > 0n,
-    referencePrice: formatDecimal(entry), funding: formatDecimal(funding),
+    referencePrice: formatDecimal(entry), limitPrice: limit ? formatDecimal(entry) : '', funding: formatDecimal(funding),
     slippagePercent: formatDecimal(slip),
     entryFee: formatDecimal(quantity * entryEstimate * fee, 34),
     exitFee: formatDecimal(quantity * exitEstimate * fee, 34),
@@ -143,17 +156,19 @@ function entryConstraints(input, snapshot, entryEstimate, mark, direction, fee) 
   const eligible = brackets.filter((tier) => Number.isSafeInteger(tier.maxLeverage) && BigInt(tier.maxLeverage) >= leverage);
   if (!eligible.length) throw new Error('所选杠杆超过账户允许值，请自行降低杠杆。');
   const notionalLimit = max(...eligible.map((tier) => tier.cap));
-  // Binance market-order valuation (last × 1.0015) is distinct from the user's adverse fill estimate.
+  // Binance's funding valuation differs by order type/direction from the adverse fill estimate.
   // Source and model assumptions: README.md, "正式开仓卡计算口径".
   const last = parseDecimal(snapshot.last, '最新成交价');
   if (last <= 0n) throw new Error('最新成交价缺失或无效。');
-  const assumingPrice = last * 10_015_000_000n;
-  const openLoss = max(0n, direction * (assumingPrice - mark * PERCENT));
+  const limit = input.entryType === 'LIMIT';
+  let assumingPrice = last * 10_015_000_000n;
+  if (limit) assumingPrice = direction === 1n ? entryEstimate : max(assumingPrice, mark * PERCENT, entryEstimate);
+  const openLoss = max(0n, direction * ((limit ? entryEstimate : assumingPrice) - mark * PERCENT));
   const feeReserve = max(assumingPrice, entryEstimate) * fee;
   const unitCost = assumingPrice * SCALE + (openLoss * SCALE + feeReserve) * leverage;
   const quantityLimit = min(fundingLimit * 10n ** 26n * leverage / unitCost, notionalLimit * 10n ** 18n / max(mark * PERCENT, entryEstimate, assumingPrice));
   const takeBound = parseDecimal(snapshot.rules.marketTakeBound, '市价成交边界');
-  if (takeBound <= 0n || takeBound >= SCALE || direction * (entryEstimate * SCALE - mark * PERCENT * SCALE) > mark * PERCENT * takeBound) throw new Error('不利成交估值超出市价成交边界，请刷新或调整滑点假设。');
+  if (input.entryType !== 'LIMIT' && (takeBound <= 0n || takeBound >= SCALE || direction * (entryEstimate * SCALE - mark * PERCENT * SCALE) > mark * PERCENT * takeBound)) throw new Error('不利成交估值超出市价成交边界，请刷新或调整滑点假设。');
   return { leverage, minimumBuffer, fundingLimit, notionalLimit, assumingPrice, openLoss, feeReserve, unitCost, quantityLimit, brackets };
 }
 

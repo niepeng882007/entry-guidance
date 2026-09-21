@@ -76,7 +76,7 @@ export async function readMarket(config: MarketConfig, symbol: string, signal = 
       bid: bitcoin ? '99' : '19.9', ask: bitcoin ? '100' : '20', mark: bitcoin ? '100' : '20', last: bitcoin ? '100' : '20',
       bookTime: queriedAt, markTime: queriedAt, lastTime: queriedAt, takerRate: '0.001',
       brackets: [{ maxLeverage: 50, floor: '0', cap: '500', maintenanceRate: '0.01', cum: '0' }, { maxLeverage: 10, floor: '500', cap: '1000000', maintenanceRate: '0.02', cum: '5' }],
-      rules: { minPrice: '0.1', maxPrice: '1000000', tickSize: '0.1', minQty: '0.1', maxQty: '1000', stepSize: '0.1', minNotional: '5', lotSize: { minQty: '0.001', maxQty: '10000', stepSize: '0.001' }, marketTakeBound: '0.30' },
+      rules: { minPrice: '0.1', maxPrice: '1000000', tickSize: '0.1', minQty: '0.1', maxQty: '1000', stepSize: '0.1', minNotional: '5', lotSize: { minQty: '0.001', maxQty: '10000', stepSize: '0.001' }, marketTakeBound: '0.30', limitSupported: true, percentPrice: { up: '1.2', down: '0.8' } },
     };
   }
   const account = await readAccount(config, symbol, signal);
@@ -98,6 +98,8 @@ export async function readMarket(config: MarketConfig, symbol: string, signal = 
   const price = filter('PRICE_FILTER');
   const lot = filter('MARKET_LOT_SIZE');
   const normalLot = filter('LOT_SIZE');
+  const ranges = filters.filter((item) => item.filterType === 'PERCENT_PRICE');
+  const range = ranges.length === 1 ? ranges[0] : undefined;
   const book = object(bookData), mark = object(markData), last = object(lastData), fee = object(feeData);
   if ([book, mark, last, fee].some((data) => data.symbol !== symbol)) throw new AccountError('invalid_response', '行情或费率币种不一致，请刷新。');
   const bid = amount(book.bidPrice, '买一价'), ask = amount(book.askPrice, '卖一价');
@@ -113,6 +115,8 @@ export async function readMarket(config: MarketConfig, symbol: string, signal = 
       minNotional: amount(filter('MIN_NOTIONAL').notional, '最小开仓名义价值'),
       lotSize: { minQty: amount(normalLot.minQty, '普通最小数量'), maxQty: amount(normalLot.maxQty, '普通最大数量'), stepSize: amount(normalLot.stepSize, '普通数量步长') },
       marketTakeBound: amount(contract.marketTakeBound, '市价成交边界'),
+      limitSupported: Array.isArray(contract.orderTypes) && contract.orderTypes.includes('LIMIT') && Array.isArray(contract.timeInForce) && contract.timeInForce.includes('GTC'),
+      percentPrice: range ? { up: amount(range.multiplierUp, '限价价格上界'), down: amount(range.multiplierDown, '限价价格下界') } : undefined,
     },
   };
 }
