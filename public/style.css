@@ -66,6 +66,10 @@ label span { color: #5c6b66; }
 .copy-row button { flex-shrink: 0; padding: 10px 12px; font-size: 13px; }
 .entry-card .details div { flex-wrap: wrap; }
 .entry-card .details dd { margin-left: auto; }
+#verify { margin: 16px 0; }
+#verification-issues { padding-left: 20px; font-size: 14px; overflow-wrap: anywhere; }
+#verification-issues li { margin-bottom: 10px; }
+#verification-status { font-weight: 600; }
 .notice { border-left: 3px solid #a97020; padding: 12px 16px; background: #f3eddf; font-size: 13px; margin: 24px 0; }
 @media (max-width: 560px) {
   main { margin: 24px auto; width: calc(100% - 32px); }

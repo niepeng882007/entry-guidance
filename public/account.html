@@ -102,6 +102,33 @@
       <p id="card-instructions"></p>
       <p class="notice">卡片生成不表示已下单或挂好止损。实际亏损可能超过预算，交易所仍可能拒单；成交后须检查真实仓位与止损。</p>
     </section>
+    <section id="verification" class="entry-card" hidden aria-labelledby="verification-title">
+      <h2 id="verification-title">成交后单层止损核验</h2>
+      <p class="help" id="verification-start"></p>
+      <div id="demo-verification" hidden>
+        <label for="demo-scenario">模拟账户场景 · 不会执行交易</label>
+        <select id="demo-scenario"><option value="missing-stop">已成交，缺少止损</option><option value="protected">已在模拟账户补齐止损</option><option value="waiting">尚未成交</option><option value="failure">模拟查询失败</option></select>
+      </div>
+      <button id="verify" type="button">返回后刷新核验</button>
+      <p id="verification-status" role="status" aria-live="polite">待核验</p>
+      <p id="verification-time" class="help">尚无完整查询</p>
+      <ul id="verification-issues"></ul>
+      <dl id="verification-details" class="details" hidden>
+        <div><dt>关联开仓订单</dt><dd id="verification-order">—</dd></div>
+        <div><dt>实际方向 / 数量</dt><dd id="verification-position">—</dd></div>
+        <div><dt>实际成交均价</dt><dd id="verification-entry">—</dd></div>
+        <div><dt>实际 / 原方案杠杆</dt><dd id="verification-leverage">—</dd></div>
+        <div><dt>按原止损重算亏损 / 原预算</dt><dd id="verification-risk">—</dd></div>
+        <div><dt>预算超额</dt><dd id="verification-excess">—</dd></div>
+        <div><dt>已付手续费 / 资金费</dt><dd id="verification-paid">—</dd></div>
+        <div><dt>剩余资金费预留 / 退出手续费</dt><dd id="verification-reserved">—</dd></div>
+        <div><dt>当前强平价（实际持仓）</dt><dd id="verification-liquidation">—</dd></div>
+        <div><dt>当前强平缓冲 / 最低要求</dt><dd id="verification-buffer">—</dd></div>
+        <div><dt>止损覆盖方式</dt><dd id="verification-coverage">—</dd></div>
+      </dl>
+      <p class="help">始终沿用原预算与原绝对止损。资金费支出消耗原预留，收入不扩大风险预算。修改输入后需恢复原输入才能核验此卡；新方案需重新确认空仓起点。</p>
+      <p class="notice">核验仅对应显示的查询时点，不代表持续监测，也不保证未来成交。修正由你在 Binance 完成；部分平仓损益归属暂不支持完整核验。</p>
+    </section>
     <p class="notice">草稿按最近成功快照估算。正式开仓卡须另行刷新生成；工具不会下单或调整账户设置。</p>
     <details id="market-details" hidden><summary>本次行情与交易规则</summary><dl class="details">
       <div><dt>买一 / 卖一</dt><dd id="market-book">—</dd></div><div><dt>标记价</dt><dd id="market-mark">—</dd></div>

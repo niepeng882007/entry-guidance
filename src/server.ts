@@ -4,6 +4,7 @@ import { createServer as createHttpServer, type IncomingMessage, type ServerResp
 import { createServer as createHttpsServer } from 'node:https';
 import { AccountError, readAccount, type AccountConfig } from './account.ts';
 import { demoAccount, readMarket, readSymbols } from './market.ts';
+import { createPlan, verifyPosition, type Plan } from './verification.ts';
 
 type Config = AccountConfig & {
   password: string;
@@ -22,7 +23,7 @@ export function createServer(config: Config) {
   const style = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   const script = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const draftScript = readFileSync(new URL('../public/draft.js', import.meta.url), 'utf8');
-  const sessions = new Map<string, number>();
+  const sessions = new Map<string, { expiresAt: number; generation: number; plans: Map<string, Plan> }>();
   // ponytail: 单人应用共用登录限流；扩展多用户时改为分用户限流。
   let attempts = 0;
   let resetAt = 0;
@@ -46,7 +47,7 @@ export function createServer(config: Config) {
     const path = req.url;
     const cookie = req.headers.cookie?.split(';').map((part) => part.trim()).find((part) => part.startsWith('session='))?.slice(8);
     const now = Date.now();
-    for (const [token, expiry] of sessions) if (expiry <= now) sessions.delete(token);
+    for (const [token, session] of sessions) if (session.expiresAt <= now) sessions.delete(token);
     const loggedIn = cookie !== undefined && sessions.has(cookie);
     const cookieFlags = `Path=/; HttpOnly; SameSite=Strict${config.tls ? '; Secure' : ''}`;
 
@@ -71,7 +72,7 @@ export function createServer(config: Config) {
       if (cookie) sessions.delete(cookie);
       if (sessions.size >= 20) sessions.delete(sessions.keys().next().value!);
       const token = randomBytes(32).toString('hex');
-      sessions.set(token, now + 8 * 60 * 60_000);
+      sessions.set(token, { expiresAt: now + 8 * 60 * 60_000, generation: 0, plans: new Map() });
       res.setHeader('Set-Cookie', `session=${token}; ${cookieFlags}; Max-Age=28800`);
       return redirect('/');
     }
@@ -84,7 +85,45 @@ export function createServer(config: Config) {
       res.setHeader('Set-Cookie', `session=; ${cookieFlags}; Max-Age=0`);
       return redirect('/login');
     }
+    if (path === '/api/plan' && req.method === 'POST') {
+      if (req.headers['content-type'] !== 'application/json') return send(415, { error: '方案输入格式不支持。' });
+      let body = '';
+      for await (const chunk of req) {
+        body += chunk.toString();
+        if (Buffer.byteLength(body) > 4096) return send(413, { error: '方案输入过大。' });
+      }
+      let input: unknown;
+      try { input = JSON.parse(body); }
+      catch { return send(400, { error: '方案输入格式无效。' }); }
+      try {
+        const existing = sessions.get(cookie!);
+        if (!existing) return send(401, { error: '登录已过期，请重新登录。' });
+        // ponytail: retain up to 20 plans per session without eviction; persistent recovery belongs to task 08.
+        if (existing.plans.size >= 20) return send(409, { error: '当前会话已保存 20 个方案，暂停生成；原方案仍可核验，请完成本单后再重新登录。' });
+        const generation = ++existing.generation;
+        const plan = await createPlan(config, input);
+        const session = sessions.get(cookie!);
+        if (!session) return send(401, { error: '登录已过期，请重新登录。' });
+        if (generation !== session.generation) return send(409, { error: '已有更新的方案请求，本次结果已作废。' });
+        session.plans.set(plan.id, plan);
+        return send(200, plan);
+      } catch (error) {
+        if (!(error instanceof AccountError)) throw error;
+        return send(error.status, { error: error.message, code: error.code, attemptedAt: new Date().toISOString() });
+      }
+    }
     if (req.method !== 'GET') return send(405, { error: '仅支持读取。' });
+    if (path?.startsWith('/api/verification?')) {
+      const query = new URL(path, origin).searchParams;
+      const plan = sessions.get(cookie!)?.plans.get(query.get('planId') ?? '');
+      if (!query.has('planId') || query.getAll('planId').length !== 1 || [...query.keys()].some((key) => key !== 'planId' && !(config.mode === 'demo' && key === 'demo')) || query.getAll('demo').length > 1) return send(400, { error: '核验仅接受本次方案 ID；模拟场景仅在模拟模式可用。' });
+      if (!plan || query.get('planId') !== plan.id) return send(409, { error: '无法关联原方案，请保留原参数；需要重新确认空仓起点。' });
+      try { return send(200, await verifyPosition(config, plan, query.get('demo') ?? undefined)); }
+      catch (error) {
+        if (!(error instanceof AccountError)) throw error;
+        return send(error.status, { error: error.message, code: error.code, source: plan.source, attemptedAt: new Date().toISOString() });
+      }
+    }
     if (path === '/') return html(200, accountPage.replace('{{source}}', config.mode === 'demo' ? '模拟数据 · 仅用于界面与流程验证' : '真实模式 · 数据由 Binance 只读接口查询'));
     if (path === '/app.js') return res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }).end(script);
     if (path === '/draft.js') return res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }).end(draftScript);

@@ -66,7 +66,7 @@ function accountBrackets(value: unknown, symbol: string) {
   return brackets;
 }
 
-export async function readMarket(config: MarketConfig, symbol: string): Promise<Snapshot> {
+export async function readMarket(config: MarketConfig, symbol: string, signal = AbortSignal.timeout(10_000)): Promise<Snapshot> {
   if (!/^[\p{L}\p{N}_]{1,30}USDT$/u.test(symbol)) throw new AccountError('invalid_symbol', '请选择有效的 USDT 永续币种。', 400);
   if (config.mode === 'demo') {
     if (!demoSymbols.includes(symbol)) throw new AccountError('invalid_symbol', '请选择模拟模式提供的币种。', 400);
@@ -79,7 +79,6 @@ export async function readMarket(config: MarketConfig, symbol: string): Promise<
       rules: { minPrice: '0.1', maxPrice: '1000000', tickSize: '0.1', minQty: '0.1', maxQty: '1000', stepSize: '0.1', minNotional: '5', lotSize: { minQty: '0.001', maxQty: '10000', stepSize: '0.001' }, marketTakeBound: '0.30' },
     };
   }
-  const signal = AbortSignal.timeout(10_000);
   const account = await readAccount(config, symbol, signal);
   const read = (operation: Parameters<typeof readBinance>[1], target?: string) => readBinance(config, operation, signal, target);
   const [exchangeData, bookData, markData, lastData, bracketData, feeData, modeData, orders, algoOrders] = await Promise.all([
