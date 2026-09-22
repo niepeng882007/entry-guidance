@@ -1,11 +1,12 @@
 import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { AccountError, readAccount, type AccountConfig } from './account.ts';
 import { demoAccount, readMarket, readSymbols } from './market.ts';
 import { createPlan, verifyPosition, type Plan } from './verification.ts';
 import type { EntryInput } from '../public/draft.js';
+import type { ViteDevServer } from 'vite';
 
 export type SavedPlan = Plan & { input: EntryInput; recovery: string };
 
@@ -14,6 +15,7 @@ type Config = AccountConfig & {
   mode?: 'real' | 'demo';
   origin?: string;
   tls?: { cert: Buffer; key: Buffer };
+  frontend?: ViteDevServer;
 };
 
 const digest = (value: string) => createHash('sha256').update(value).digest();
@@ -26,11 +28,17 @@ export function createServer(config: Config) {
   const recoveryKey = scryptSync(config.password, JSON.stringify(['entry-guidance.recovery.v1', source, config.apiKey ?? '', config.apiSecret ?? '']), 32);
   const signature = (payload: string) => createHmac('sha256', recoveryKey).update(payload).digest('base64url');
   const loginPage = readFileSync(new URL('../public/login.html', import.meta.url), 'utf8');
-  const accountPage = readFileSync(new URL('../public/account.html', import.meta.url), 'utf8');
+  const accountPage = config.frontend ? '' : readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8');
   const style = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
-  const script = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-  const draftScript = readFileSync(new URL('../public/draft.js', import.meta.url), 'utf8');
-  const selectScript = readFileSync(new URL('../public/select.js', import.meta.url), 'utf8');
+  // Only built JS/CSS filenames are published; request paths never reach the filesystem.
+  const assets = new Map<string, { body: Buffer; type: string }>();
+  if (!config.frontend) {
+    const directory = new URL('../dist/assets/', import.meta.url);
+    for (const name of readdirSync(directory)) {
+      if (!/^[\w-]+\.(js|css)$/.test(name)) continue;
+      assets.set(`/assets/${name}`, { body: readFileSync(new URL(name, directory)), type: name.endsWith('.css') ? 'text/css' : 'text/javascript' });
+    }
+  }
   const sessions = new Map<string, { expiresAt: number; generation: number; plans: Map<string, Plan> }>();
   // ponytail: 单人应用共用登录限流；扩展多用户时改为分用户限流。
   let attempts = 0;
@@ -40,7 +48,9 @@ export function createServer(config: Config) {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
-    res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    res.setHeader('Content-Security-Policy', config.frontend
+      ? "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:24678; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+      : "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
     const send = (status: number, value: unknown) => {
       res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(value));
@@ -144,10 +154,17 @@ export function createServer(config: Config) {
         return send(error.status, { error: error.message, code: error.code, source: plan.source, attemptedAt: new Date().toISOString() });
       }
     }
-    if (path === '/') return html(200, accountPage.replace('{{source}}', config.mode === 'demo' ? '模拟数据 · 仅用于界面与流程验证' : '真实模式 · 数据由 Binance 只读接口查询'));
-    if (path === '/app.js') return res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }).end(script);
-    if (path === '/draft.js') return res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }).end(draftScript);
-    if (path === '/select.js') return res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }).end(selectScript);
+    if (path === '/') {
+      const page = config.frontend
+        ? await config.frontend.transformIndexHtml('/', readFileSync(new URL('../frontend/index.html', import.meta.url), 'utf8'))
+        : accountPage;
+      return html(200, page.replace('{{source}}', config.mode === 'demo' ? '模拟数据 · 仅用于界面与流程验证' : '真实模式 · 数据由 Binance 只读接口查询'));
+    }
+    const asset = assets.get(path ?? '');
+    if (asset) return res.writeHead(200, { 'Content-Type': `${asset.type}; charset=utf-8` }).end(asset.body);
+    if (config.frontend && path && !path.startsWith('/api/')) {
+      return config.frontend.middlewares(req, res, () => send(404, { error: '入口不存在。' }));
+    }
     if (path === '/api/symbols') {
       try { return send(200, await readSymbols(config)); }
       catch (error) {

@@ -5,8 +5,8 @@
 ## 开始工作
 
 - 先读 [项目索引](docs/index.md)，按任务进入对应规格与模块；修改代码前读 [开发与验证](docs/development.md)。
-- 修改 HTML、CSS 或前端渲染前，读 [前端规则](public/AGENTS.md)。`public/draft.js` 是前后端共用的计算模块，修改它须检查两端调用方。
-- 验证命令为 `pnpm typecheck`、`pnpm test`；启动、定向测试和浏览器验收条件见开发文档。命令定义以 `package.json` 为准。
+- 修改 `frontend/`、HTML、CSS 或前端渲染前，读 [前端规则](public/AGENTS.md)。`public/draft.js` 是前后端共用的计算模块，修改它须检查两端调用方。
+- 完整验证入口为 `pnpm check`；启动、定向测试和浏览器验收条件见开发文档。命令定义以 `package.json` 为准。
 
 ## 不变量
 

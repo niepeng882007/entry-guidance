@@ -49,34 +49,27 @@ test('anonymous visitors cannot open the account page or read account data', asy
   assert.equal(account.headers.get('cache-control'), 'no-store');
 });
 
-test('workbench navigation has focusable destinations and keeps result states initially hidden', async (t) => {
+test('built frontend assets require login and only explicit build filenames are served', async (t) => {
   const base = await start(t, { mode: 'demo' });
   const signedIn = await login(base);
   const cookie = signedIn.headers.get('set-cookie')!.split(';')[0]!;
   const page = await (await fetch(base, { headers: { Cookie: cookie } })).text();
-  const ids = Array.from(page.matchAll(/\bid="([^"]+)"/g), (match) => match[1]);
-  assert.equal(new Set(ids).size, ids.length, 'IDs must be unique for focus and render targets');
-  const destinations = Array.from(page.matchAll(/class="module-nav__link" href="#([^"]+)"/g), (match) => match[1]);
-  assert.equal(destinations.length, 6);
-  for (const id of destinations) assert.match(page, new RegExp(`<[^>]+id="${id}"[^>]+tabindex="-1"`));
-  for (const id of ['draft-result', 'entry-checks', 'entry-card', 'verification']) {
-    assert.match(page, new RegExp(`<section[^>]*id="${id}"[^>]*\\bhidden\\b`));
+  assert.match(page, /id="app"/);
+  assert.match(page, /模拟数据/);
+  const assets = Array.from(page.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g), (match) => match[1]!);
+  assert.ok(assets.some((path) => path.endsWith('.js')));
+  assert.ok(assets.some((path) => path.endsWith('.css')));
+  for (const path of assets) {
+    assert.equal((await fetch(`${base}${path}`)).status, 401);
+    const asset = await fetch(`${base}${path}`, { headers: { Cookie: cookie } });
+    assert.equal(asset.status, 200);
+    assert.equal(asset.headers.get('cache-control'), 'no-store');
+    assert.match(asset.headers.get('content-type')!, path.endsWith('.js') ? /text\/javascript/ : /text\/css/);
+    assert.equal(asset.headers.get('content-security-policy'), "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
   }
-  assert.match(page, /尚未生成开仓卡/);
-  assert.match(page, /尚无可核验的方案/);
-  assert.ok(page.indexOf('id="plan-module"') < page.indexOf('id="account-module"'));
-});
-
-test('select enhancement is served as an authenticated JavaScript module', async (t) => {
-  const base = await start(t, { mode: 'demo' });
-  const anonymous = await fetch(`${base}/select.js`, { redirect: 'manual' });
-  assert.equal(anonymous.status, 401);
-  const signedIn = await login(base);
-  const cookie = signedIn.headers.get('set-cookie')!.split(';')[0]!;
-  const module = await fetch(`${base}/select.js`, { headers: { Cookie: cookie } });
-  assert.equal(module.status, 200);
-  assert.match(module.headers.get('content-type')!, /text\/javascript/);
-  assert.match(await module.text(), /export function enhanceSelects/);
+  for (const path of ['/assets/missing.js', '/assets/index.js.map', '/assets/%2e%2e%2fsrc%2fserver.ts', '/.env', '/src/server.ts', '/@vite/client', '/app.js', '/draft.js', '/select.js']) {
+    assert.equal((await fetch(`${base}${path}`, { headers: { Cookie: cookie } })).status, 404);
+  }
 });
 
 test('personal login rejects wrong passwords and allows access until logout', async (t) => {
@@ -94,7 +87,7 @@ test('personal login rejects wrong passwords and allows access until logout', as
   const cookie = cookieHeader.split(';')[0]!;
   const page = await fetch(base, { headers: { Cookie: cookie } });
   assert.equal(page.status, 200);
-  assert.match(await page.text(), /账户权益/);
+  assert.match(await page.text(), /id="app"/);
   const account = await fetch(`${base}/api/account`, { headers: { Cookie: cookie } });
   assert.equal(account.status, 503);
   assert.equal((await account.json()).code, 'missing_credentials');

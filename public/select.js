@@ -1,11 +1,14 @@
-/** Enhance native selects while retaining their values, options and form events. */
-export function enhanceSelects() {
+/** Enhance native selects while retaining their values, options and form events.
+ * @param {ParentNode} [root]
+ * @param {AbortSignal} [signal]
+ */
+export function enhanceSelects(root = document, signal) {
   /** @type {(() => void)[]} */
   const updates = [];
   /** @type {(() => void) | undefined} */
   let closeCurrent;
 
-  for (const node of document.querySelectorAll('select.field-control--select')) {
+  for (const node of root.querySelectorAll('select.field-control--select')) {
     if (!(node instanceof HTMLSelectElement)) continue;
     const select = node;
     const wrapper = document.createElement('div');
@@ -179,16 +182,18 @@ export function enhanceSelects() {
       }
     });
     menu.addEventListener('pointerdown', (event) => { if (event.pointerType === 'mouse') event.preventDefault(); });
-    document.addEventListener('pointerdown', (event) => { if (event.target instanceof Node && !wrapper.contains(event.target)) close(); });
-    document.addEventListener('focusin', (event) => { if (event.target instanceof Node && !wrapper.contains(event.target)) close(); });
-    window.addEventListener('resize', close);
-    window.addEventListener('scroll', position, true);
-    window.visualViewport?.addEventListener('resize', close);
-    window.visualViewport?.addEventListener('scroll', position);
+    document.addEventListener('pointerdown', (event) => { if (event.target instanceof Node && !wrapper.contains(event.target)) close(); }, { signal });
+    document.addEventListener('focusin', (event) => { if (event.target instanceof Node && !wrapper.contains(event.target)) close(); }, { signal });
+    window.addEventListener('resize', close, { signal });
+    window.addEventListener('scroll', position, { capture: true, signal });
+    window.visualViewport?.addEventListener('resize', close, { signal });
+    window.visualViewport?.addEventListener('scroll', position, { signal });
     select.addEventListener('input', sync);
     select.addEventListener('change', sync);
     // Dynamic options and disabled/error attributes stay owned by the native field.
-    new MutationObserver(sync).observe(select, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'hidden', 'selected', 'label', 'aria-invalid', 'aria-describedby', 'aria-busy', 'required'] });
+    const observer = new MutationObserver(sync);
+    observer.observe(select, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'hidden', 'selected', 'label', 'aria-invalid', 'aria-describedby', 'aria-busy', 'required'] });
+    signal?.addEventListener('abort', () => { observer.disconnect(); close(); }, { once: true });
     updates.push(sync);
     sync();
   }
