@@ -21,7 +21,7 @@ if (!(verify instanceof HTMLButtonElement)) throw new Error('核验按钮缺失'
 const statusBox = element('status').closest('section');
 const form = element('draft-form');
 const symbol = field('symbol');
-const settingIds = ['symbol', 'side', 'entry-type', 'budget-mode', 'budget', 'stop-mode', 'slippage', 'funding', 'leverage', 'minimum-buffer'];
+const settingIds = ['symbol', 'side', 'entry-type', 'budget-mode', 'budget', 'stop-mode', 'stop-levels', 'near-stop-mode', 'near-percent', 'slippage', 'funding', 'leverage', 'minimum-buffer'];
 const storageKey = 'entry-guidance.preferences.v1';
 let hasAccount = false;
 let requestId = 0;
@@ -51,7 +51,8 @@ function saveSettings() {
 }
 
 function readInput() {
-  return { symbol: symbol.value, side: field('side').value, entryType: field('entry-type').value, limitPrice: field('entry-type').value === 'LIMIT' ? field('limit-price').value.trim() : '', budgetMode: field('budget-mode').value, budget: field('budget').value.trim(), stopMode: field('stop-mode').value, stop: field('stop').value.trim(), slippage: field('slippage').value.trim(), funding: field('funding').value.trim(), leverage: field('leverage').value.trim(), minimumBuffer: field('minimum-buffer').value.trim(), fundingCap: field('funding-cap').value.trim() };
+  const two = field('stop-levels').value === 'two';
+  return { symbol: symbol.value, side: field('side').value, entryType: field('entry-type').value, limitPrice: field('entry-type').value === 'LIMIT' ? field('limit-price').value.trim() : '', budgetMode: field('budget-mode').value, budget: field('budget').value.trim(), stopMode: field('stop-mode').value, stop: field('stop').value.trim(), stopLevels: field('stop-levels').value, nearStopMode: two ? field('near-stop-mode').value : '', nearStop: two ? field('near-stop').value.trim() : '', nearPercent: two ? field('near-percent').value.trim() : '', slippage: field('slippage').value.trim(), funding: field('funding').value.trim(), leverage: field('leverage').value.trim(), minimumBuffer: field('minimum-buffer').value.trim(), fundingCap: field('funding-cap').value.trim() };
 }
 
 /** @param {string} reason */
@@ -103,7 +104,10 @@ function renderVerification(result, plan) {
     risk: `${result.plannedLoss ?? '未完整核算'} / ${plan.budget} USDT（原止损 ${plan.stopPrice}）`, excess: `${result.excess ?? '—'} USDT`,
     paid: `${result.paidCommission ?? '—'} / ${result.paidFunding ?? '—'} USDT`, reserved: `${result.remainingFunding ?? '—'} / ${result.exitFee ?? '—'} USDT`,
     liquidation: `${result.liquidationPrice ?? '—'} USDT`, buffer: `${result.liquidationBuffer ?? '—'}% / ${plan.minimumBuffer}%`, coverage: result.coverage ?? '未确认有效覆盖',
+    near: `${result.nearStatus ?? '未确认'} / ${result.nearQuantity ?? '—'} ${plan.baseAsset}（按累计入场量分配的实际比例 ${result.nearActualPercent ?? '—'}%）`,
+    realized: `${result.realizedPnl ?? '未完整核算'} USDT`,
   };
+  element('verification-near-row').hidden = !plan.nearStop;
   for (const [id, value] of Object.entries(outputs)) show(`verification-${id}`, value);
   element('verification-details').hidden = false;
   if (result.account) renderAccount(result.account);
@@ -146,6 +150,14 @@ async function verifyCurrentPlan() {
 
 function renderDraft() {
   const limit = field('entry-type').value === 'LIMIT';
+  const two = field('stop-levels').value === 'two';
+  for (const row of document.querySelectorAll('[data-two-input]')) if (row instanceof HTMLElement) row.hidden = !two;
+  for (const id of ['near-stop', 'near-stop-mode', 'near-percent']) field(id).disabled = !two;
+  show('near-stop-unit', field('near-stop-mode').value === 'percent' ? '%' : 'USDT');
+  try {
+    const ratio = parseDecimal(field('near-percent').value.trim(), '近端比例');
+    show('final-percent', ratio > 0n && ratio < 10_000_000_000n ? `${formatDecimal(10_000_000_000n - ratio)}%` : '—');
+  } catch { show('final-percent', '—'); }
   element('limit-field').hidden = !limit;
   field('limit-price').disabled = !limit;
   field('limit-price').required = limit;
@@ -172,13 +184,15 @@ function renderDraft() {
     } catch (error) { show('entry-error', `需处理 · ${message(error)} 当前试算仅包含价格风险约束。`); }
     const outputs = {
       quantity: `${plan.quantity} ${snapshot.baseAsset}`, budget: `${plan.budget} USDT`, notional: `${plan.notional} USDT`,
-      stop: `${plan.stopPrice} USDT`, distance: `约 ${plan.stopDistance}%`, loss: `${plan.plannedLoss} USDT`,
+      stop: `${plan.stopPrice} USDT / 约 ${plan.stopDistance}%`, distance: plan.nearStop ? `近端 ${plan.nearStop.quantity} ${snapshot.baseAsset} / ${plan.nearStop.actualPercent}%；最终剩余 ${plan.finalQuantity} / ${plan.finalPercent}%` : '全部仓位 / 100%', loss: `${plan.plannedLoss} USDT`,
+      near: plan.nearStop ? `${plan.nearStop.price} USDT / 约 ${plan.nearStop.distance}%` : '—',
       reference: `${plan.referencePrice} USDT（${limit ? '用户委托价' : field('side').value === 'long' ? '卖一' : '买一'}）`, entry: `${plan.entryEstimate} USDT`, exit: `${plan.exitEstimate} USDT`,
       fees: `${plan.entryFee} / ${plan.exitFee} USDT`, slippage: `${plan.slippagePercent}%`, funding: plan.fundingReserved ? `${plan.funding} USDT` : '未预留资金费',
-      condition: `标记价 ${field('side').value === 'long' ? '≤' : '≥'} ${plan.stopPrice} USDT 时触发止损市价，退出全部仓位；触发价不等于成交价。`,
+      condition: `标记价 ${field('side').value === 'long' ? '≤' : '≥'} ${plan.stopPrice} USDT 时触发最终止损市价，退出全部剩余仓位；触发价不等于成交价。${plan.nearStop ? '总仓位按全部落到最终止损计算，不依赖近端退出成功。' : ''}`,
       time: `${plan.source === 'demo' ? '模拟数据' : 'Binance 只读快照'} · ${time(plan.queriedAt)}；按此快照试算，行情变化后请刷新。`,
     };
     for (const [id, value] of Object.entries(outputs)) show(`draft-${id}`, value);
+    element('draft-near-row').hidden = !plan.nearStop;
     show('draft-error', '');
     element('draft-result').hidden = false;
   } catch (error) { show('draft-error', message(error)); }
@@ -192,6 +206,10 @@ function renderCard() {
     symbol: plan.symbol, direction: plan.side === 'long' ? '· 做多' : '· 做空', quantity: `${plan.quantity} ${plan.baseAsset}`,
     'entry-type': limit ? '普通限价入场 · GTC · 按 taker 费率预留' : '市价入场', limitPrice: plan.limitPrice,
     stopPrice: plan.stopPrice, exitMode: `${plan.exitMode} · 止损${plan.execution.stopSide === 'SELL' ? '卖出' : '买入'}，不填写固定退出数量`, leverage: `所选杠杆 ${plan.leverage} 倍`,
+    'final-allocation': `实际距离约 ${plan.stopDistance}%${plan.nearStop ? `；近端成功退出后预计剩余 ${plan.finalQuantity} ${plan.baseAsset} / ${plan.finalPercent}%。最终单始终选择整仓退出。` : ''}`,
+    nearPrice: plan.nearStop?.price ?? '—', nearQuantity: plan.nearStop ? `${plan.nearStop.quantity} ${plan.baseAsset}` : '—',
+    'near-distance': plan.nearStop ? `实际距离约 ${plan.nearStop.distance}%；标记价触发、止损市价、关闭价格保护。` : '',
+    'near-ratio': plan.nearStop ? `原输入 ${plan.nearStop.percent}%，取整后实际 ${plan.nearStop.actualPercent}%。` : '',
     budget: `${plan.budget} USDT`, notional: `${plan.notional} USDT`, loss: `${plan.plannedLoss} USDT`,
     funding: `${plan.fundingRequired} / ${plan.fundingLimit} USDT`, margin: `${plan.initialMargin} USDT`, 'open-costs': `${plan.openLoss} / ${plan.openFeeReserve} USDT`,
     liquidation: `${plan.liquidationPrice} USDT`, buffer: `${plan.liquidationBuffer}% / ${plan.minimumBuffer}%`,
@@ -199,12 +217,14 @@ function renderCard() {
     reserves: `${plan.slippagePercent}% / ${plan.fundingReserved ? plan.funding + ' USDT' : '未预留资金费'}`,
     wallet: `${plan.isolatedWalletAssumption} USDT`, tier: `${plan.liquidationTier} / ${plan.maintenanceRate}% / ${plan.maintenanceAmount} USDT`, limit: `${plan.notionalLimit} USDT`,
     'account-time': time(plan.accountTime), 'book-time': time(plan.bookTime), 'price-times': `${time(plan.markTime)} / ${time(plan.lastTime)}`, time: time(plan.queriedAt),
-    instructions: `在 Binance 采用逐仓、单向持仓、${plan.leverage} 倍杠杆；${limit ? `普通限价（GTC，委托价 ${plan.limitPrice} USDT）` : '市价'}${plan.side === 'long' ? '买入做多' : '卖出做空'} ${plan.quantity} ${plan.baseAsset}。附带止损市价：绝对触发价 ${plan.stopPrice} USDT、标记价触发、关闭价格保护、整仓退出。${limit ? '部分成交后先人工撤余单，再返回刷新核验；止损执行不代表余单已撤。' : '请确认这些设置后手动执行。'}`,
+    instructions: `在 Binance 采用逐仓、单向持仓、${plan.leverage} 倍杠杆；${limit ? `普通限价（GTC，委托价 ${plan.limitPrice} USDT）` : '市价'}${plan.side === 'long' ? '买入做多' : '卖出做空'} ${plan.quantity} ${plan.baseAsset}。先附带并确认最终止损市价：绝对触发价 ${plan.stopPrice} USDT、标记价触发、关闭价格保护、整仓退出。${plan.nearStop ? `确认整仓保护有效后，再补近端 ${plan.nearStop.price} USDT、${plan.nearStop.quantity} ${plan.baseAsset} 的止损市价，只减仓、标记价触发、关闭价格保护；保留最终整仓保护。仅有最终单还未完成双层计划。` : ''}${limit ? '部分成交后先人工撤余单，再返回刷新核验；近端数量按实际累计入场量与原比例复算，止损执行不代表余单已撤。' : '请确认这些设置后手动执行。'}`,
     'funding-model': `${limit ? '限价多头保证金按委托价；空头按最新成交价 × 1.0015、标记价、委托价中的较大值。开仓浮亏按委托价与标记价的不利差计算。' : '市价下单资金估值采用最新成交价 × 1.0015。'}费用按下单估值与不利成交估值中的较大名义价值预留。名义价值上限同时约束标记价、下单估值和不利成交估值。`,
   };
   for (const [id, value] of Object.entries(outputs)) show(`card-${id}`, value);
   element('card-limit-row').hidden = !limit;
+  element('card-near').hidden = !plan.nearStop;
   for (const option of document.querySelectorAll('[data-limit-only]')) if (option instanceof HTMLOptionElement) option.disabled = option.hidden = !limit;
+  for (const option of document.querySelectorAll('[data-two-only]')) if (option instanceof HTMLOptionElement) option.disabled = option.hidden = !plan.nearStop;
   field('demo-scenario').value = limit ? 'waiting' : 'missing-stop';
   show('card-title', plan.source === 'demo' ? '模拟开仓卡 · 不可用于真实交易' : '本次开仓卡');
   show('card-status', `${plan.notice} 数据截至 ${time(plan.queriedAt)}。`);
@@ -216,7 +236,7 @@ function renderCard() {
   element('demo-verification').hidden = plan.source !== 'demo';
   element('verification-details').hidden = true;
   element('verification-issues').replaceChildren();
-  show('verification-start', `本单空仓起点 ${time(plan.startedAt)} · ${plan.symbol} · 原预算 ${plan.budget} USDT · 原止损 ${plan.stopPrice} USDT`);
+  show('verification-start', `本单空仓起点 ${time(plan.startedAt)} · ${plan.symbol} · 原预算 ${plan.budget} USDT · 原最终止损 ${plan.stopPrice} USDT${plan.nearStop ? ` · 原近端止损 ${plan.nearStop.price} USDT` : ''}`);
   show('verification-status', '待核验 · 在 Binance 手动执行后，返回此处刷新。');
   show('verification-time', '尚无完整查询');
   show('refresh', '刷新账户与核验原方案');
@@ -365,6 +385,7 @@ form.addEventListener('submit', (event) => { event.preventDefault(); renderDraft
 form.addEventListener('input', () => { inputVersion++; invalidateCard('输入已修改'); saveSettings(); renderDraft(); });
 symbol.addEventListener('change', () => {
   if (field('stop-mode').value === 'price') field('stop').value = '';
+  if (field('near-stop-mode').value === 'price') field('near-stop').value = '';
   field('limit-price').value = '';
   saveSettings();
   void load();
@@ -375,12 +396,12 @@ verify.addEventListener('click', () => { void verifyCurrentPlan(); });
 field('demo-scenario').addEventListener('change', () => { inputVersion++; invalidateVerification('模拟场景已变化，请刷新'); });
 for (const button of document.querySelectorAll('[data-copy]')) button.addEventListener('click', async () => {
   if (!(button instanceof HTMLButtonElement) || !entryPlan || !cardCurrent) return;
-  const values = { quantity: entryPlan.quantity, limitPrice: entryPlan.limitPrice, stopPrice: entryPlan.stopPrice, leverage: entryPlan.leverage, exitMode: entryPlan.exitMode };
+  const values = { quantity: entryPlan.quantity, limitPrice: entryPlan.limitPrice, stopPrice: entryPlan.stopPrice, nearPrice: entryPlan.nearStop?.price ?? '', nearQuantity: entryPlan.nearStop?.quantity ?? '', leverage: entryPlan.leverage, exitMode: entryPlan.exitMode };
   const key = button.dataset.copy;
-  if (key !== 'quantity' && key !== 'limitPrice' && key !== 'stopPrice' && key !== 'leverage' && key !== 'exitMode') return;
+  if (key !== 'quantity' && key !== 'limitPrice' && key !== 'stopPrice' && key !== 'nearPrice' && key !== 'nearQuantity' && key !== 'leverage' && key !== 'exitMode') return;
   try {
     await navigator.clipboard.writeText(values[key]);
-    show('copy-status', `已复制：${values[key]}${key === 'quantity' ? '（单位 ' + entryPlan.baseAsset + '）' : key === 'stopPrice' || key === 'limitPrice' ? '（USDT 绝对价格）' : ''}`);
+    show('copy-status', `已复制：${values[key]}${key === 'quantity' || key === 'nearQuantity' ? '（单位 ' + entryPlan.baseAsset + '）' : key === 'stopPrice' || key === 'nearPrice' || key === 'limitPrice' ? '（USDT 绝对价格）' : ''}`);
   } catch { show('copy-status', '浏览器无法复制，请长按卡片中的参数手动复制。'); }
 });
 void load();

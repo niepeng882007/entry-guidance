@@ -22,7 +22,7 @@
     <details class="account-details"><summary>账户快照详情</summary><dl class="details"><div><dt>钱包余额</dt><dd id="wallet">—</dd></div><div><dt>未实现盈亏</dt><dd id="pnl">—</dd></div><div><dt>账户查询时间</dt><dd id="queried">尚无成功查询</dd></div><div><dt>最近尝试时间</dt><dd id="attempted">—</dd></div></dl></details>
     <button id="refresh" type="button">刷新账户与行情</button>
     <form id="draft-form" novalidate>
-      <div class="section-heading"><h2>本次计划</h2><span class="muted">市价 / 限价入场 · 单层止损</span></div>
+      <div class="section-heading"><h2>本次计划</h2><span class="muted">市价 / 限价入场 · 单层 / 双层止损</span></div>
       <div class="field-grid">
         <div><label for="symbol">USDT 永续币种</label><select id="symbol" name="symbol"><option value="">选择币种</option></select></div>
         <div><label for="side">方向</label><select id="side" name="side"><option value="">选择方向</option><option value="long">做多</option><option value="short">做空</option></select></div>
@@ -30,8 +30,12 @@
         <div id="limit-field" hidden><label for="limit-price">限价委托价 · USDT</label><input id="limit-price" name="limitPrice" inputmode="decimal" autocomplete="off" aria-describedby="limit-help draft-error" maxlength="34"><p id="limit-help" class="help">仅用于本单；须符合价格步长，不自动改价。GTC 保持挂单直至成交、撤销或交易所失效。</p></div>
         <div><label for="budget-mode">亏损预算方式</label><select id="budget-mode" name="budgetMode"><option value="amount">固定 USDT 金额</option><option value="percent">账户权益百分比</option></select></div>
         <div><label for="budget">亏损预算 <span id="budget-unit">USDT</span></label><input id="budget" name="budget" inputmode="decimal" autocomplete="off" aria-describedby="draft-error" maxlength="34"></div>
-        <div><label for="stop-mode">止损输入方式</label><select id="stop-mode" name="stopMode"><option value="percent">相对入场参考价的距离</option><option value="price">绝对止损触发价</option></select></div>
-        <div><label for="stop">止损 <span id="stop-unit">%</span></label><input id="stop" name="stop" inputmode="decimal" autocomplete="off" aria-describedby="draft-error" maxlength="34"></div>
+        <div><label for="stop-levels">止损结构</label><select id="stop-levels" name="stopLevels"><option value="single">单层止损</option><option value="two">双层止损</option></select></div>
+        <div><label for="stop-mode">最终止损输入方式</label><select id="stop-mode" name="stopMode"><option value="percent">相对入场参考价的距离</option><option value="price">绝对止损触发价</option></select></div>
+        <div><label for="stop">最终止损 <span id="stop-unit">%</span></label><input id="stop" name="stop" inputmode="decimal" autocomplete="off" aria-describedby="draft-error" maxlength="34"></div>
+        <div data-two-input hidden><label for="near-stop-mode">近端止损输入方式</label><select id="near-stop-mode" name="nearStopMode"><option value="percent">相对入场参考价的距离</option><option value="price">绝对止损触发价</option></select></div>
+        <div data-two-input hidden><label for="near-stop">近端止损 <span id="near-stop-unit">%</span></label><input id="near-stop" name="nearStop" inputmode="decimal" autocomplete="off" aria-describedby="draft-error" maxlength="34"></div>
+        <div data-two-input hidden><label for="near-percent">近端退出比例 %</label><input id="near-percent" name="nearPercent" value="70" inputmode="decimal" autocomplete="off" aria-describedby="ratio-help draft-error" maxlength="34"><p id="ratio-help" class="help">最终剩余比例 <output id="final-percent">30%</output>。两层均须大于零；数量取整后以卡片显示的实际比例为准。</p></div>
         <div><label for="leverage">所选杠杆 · 倍</label><input id="leverage" name="leverage" inputmode="numeric" autocomplete="off" aria-describedby="leverage-help entry-error" maxlength="3"><p class="help" id="leverage-help">读取账户适用杠杆档位后校验。</p></div>
         <div><label for="funding-cap">本单资金上限 USDT（可选）</label><input id="funding-cap" name="fundingCap" inputmode="decimal" autocomplete="off" aria-describedby="cap-help entry-error" maxlength="34"><p class="help" id="cap-help">包含保证金、开仓浮亏和手续费；留空使用可用余额。</p></div>
       </div>
@@ -54,8 +58,9 @@
       <dl class="details">
         <div><dt>本单亏损预算</dt><dd id="draft-budget">—</dd></div>
         <div><dt>仓位名义价值</dt><dd id="draft-notional">—</dd></div>
-        <div><dt>实际止损触发价</dt><dd id="draft-stop">—</dd></div>
-        <div><dt>实际止损距离</dt><dd id="draft-distance">—</dd></div>
+        <div><dt>最终触发价 / 实际距离</dt><dd id="draft-stop">—</dd></div>
+        <div><dt>分层退出数量 / 实际比例</dt><dd id="draft-distance">—</dd></div>
+        <div id="draft-near-row" hidden><dt>近端触发价 / 实际距离</dt><dd id="draft-near">—</dd></div>
         <div><dt>计划止损亏损</dt><dd id="draft-loss">—</dd></div>
         <div><dt>入场参考价</dt><dd id="draft-reference">—</dd></div>
         <div><dt>不利入场估值</dt><dd id="draft-entry">—</dd></div>
@@ -84,8 +89,12 @@
       <p id="card-entry-type" class="muted"></p>
       <div class="copy-row"><div><p class="muted">开仓数量 <span id="card-direction"></span></p><p class="amount" id="card-quantity">—</p></div><button type="button" data-copy="quantity" aria-label="复制开仓数量">复制数量</button></div>
       <div id="card-limit-row" class="copy-row" hidden><div><p class="muted">限价委托价 · USDT</p><p class="amount" id="card-limitPrice">—</p></div><button type="button" data-copy="limitPrice" aria-label="复制限价委托价">复制委托价</button></div>
-      <div class="copy-row"><div><p class="muted">绝对止损触发价 · USDT</p><p class="amount" id="card-stopPrice">—</p></div><button type="button" data-copy="stopPrice" aria-label="复制绝对止损触发价">复制止损价</button></div>
+      <div class="copy-row"><div><p class="muted">① 最终止损触发价 · USDT</p><p class="amount" id="card-stopPrice">—</p><p id="card-final-allocation" class="help"></p></div><button type="button" data-copy="stopPrice" aria-label="复制绝对止损触发价">复制止损价</button></div>
       <div class="copy-row"><p id="card-exitMode">整仓退出</p><button type="button" data-copy="exitMode" aria-label="复制整仓退出方式">复制退出方式</button></div>
+      <div id="card-near" hidden>
+        <div class="copy-row"><div><p class="muted">② 近端止损触发价 · USDT</p><p class="amount" id="card-nearPrice">—</p><p id="card-near-distance" class="help"></p></div><button type="button" data-copy="nearPrice" aria-label="复制近端止损触发价">复制近端价</button></div>
+        <div class="copy-row"><div><p class="muted">近端退出数量 · 只减仓</p><p class="amount" id="card-nearQuantity">—</p><p id="card-near-ratio" class="help"></p></div><button type="button" data-copy="nearQuantity" aria-label="复制近端退出数量">复制近端量</button></div>
+      </div>
       <div class="copy-row"><p id="card-leverage">—</p><button type="button" data-copy="leverage" aria-label="复制杠杆倍数">复制杠杆</button></div>
       <p id="copy-status" class="help" role="status" aria-live="polite">数量和价格仅复制数值，请核对上方单位。</p>
       <dl class="details">
@@ -107,11 +116,11 @@
       <p class="notice">卡片生成不表示已下单或挂好止损。实际亏损可能超过预算，交易所仍可能拒单；成交后须检查真实仓位与止损。</p>
     </section>
     <section id="verification" class="entry-card" hidden aria-labelledby="verification-title">
-      <h2 id="verification-title">成交后单层止损核验</h2>
+      <h2 id="verification-title">成交后止损核验</h2>
       <p class="help" id="verification-start"></p>
       <div id="demo-verification" hidden>
         <label for="demo-scenario">模拟账户场景 · 不会执行交易</label>
-        <select id="demo-scenario"><option value="missing-stop">已成交，缺少止损</option><option value="protected">全部成交，已补齐止损</option><option value="waiting">尚未成交 / 限价挂单中</option><option value="partial" data-limit-only>限价：首次部分成交，余单仍在</option><option value="partial-more" data-limit-only>限价：再次部分成交，余单仍在</option><option value="canceled-remainder" data-limit-only>限价：已人工撤余单，保留实际仓位</option><option value="stop-first" data-limit-only>限价：止损先执行，入场余单仍在</option><option value="failure">模拟查询失败</option></select>
+        <select id="demo-scenario"><option value="missing-stop">已成交，缺少止损</option><option value="protected">全部成交，已补齐止损</option><option value="final-only" data-two-only>双层：仅最终整仓保护</option><option value="near-filled" data-two-only>双层：近端已执行，核验剩余仓位</option><option value="final-canceled" data-two-only>双层：近端已执行，最终保护被取消</option><option value="missing-attribution" data-two-only>双层：近端已执行，损益归属缺失</option><option value="waiting">尚未成交 / 限价挂单中</option><option value="partial" data-limit-only>限价：首次部分成交，余单仍在</option><option value="partial-more" data-limit-only>限价：再次部分成交，余单仍在</option><option value="canceled-remainder" data-limit-only>限价：已人工撤余单，保留实际仓位</option><option value="stop-first" data-limit-only>限价：止损先执行，入场余单仍在</option><option value="failure">模拟查询失败</option></select>
       </div>
       <button id="verify" type="button">返回后刷新核验</button>
       <p id="verification-status" role="status" aria-live="polite">待核验</p>
@@ -131,9 +140,11 @@
         <div><dt>当前强平价（实际持仓）</dt><dd id="verification-liquidation">—</dd></div>
         <div><dt>当前强平缓冲 / 最低要求</dt><dd id="verification-buffer">—</dd></div>
         <div><dt>止损覆盖方式</dt><dd id="verification-coverage">—</dd></div>
+        <div id="verification-near-row" hidden><dt>近端执行 / 待退出数量</dt><dd id="verification-near">—</dd></div>
+        <div><dt>本单已实现损益</dt><dd id="verification-realized">—</dd></div>
       </dl>
       <p class="help">始终沿用原预算与原绝对止损。资金费支出消耗原预留，收入不扩大风险预算。修改输入后需恢复原输入才能核验此卡；新方案需重新确认空仓起点。</p>
-      <p class="notice">核验仅对应显示的查询时点，不代表持续监测，也不保证未来成交。修正由你在 Binance 完成；部分平仓损益归属暂不支持完整核验。</p>
+      <p class="notice">核验仅对应显示的查询时点，不代表持续监测，也不保证未来成交。修正由你在 Binance 完成；部分退出需能关联原近端止损、成交及费用，否则无法完整核验。</p>
     </section>
     <p class="notice">草稿按最近成功快照估算。正式开仓卡须另行刷新生成；工具不会下单或调整账户设置。</p>
     <details id="market-details" hidden><summary>本次行情与交易规则</summary><dl class="details">
@@ -144,7 +155,7 @@
       <div><dt>标记价数据时间</dt><dd id="market-mark-time">—</dd></div><div><dt>本次读取完成</dt><dd id="market-time">—</dd></div>
       <div><dt>最新成交价 / 数据时间</dt><dd id="market-last">—</dd></div><div><dt>账户杠杆档位</dt><dd id="market-brackets">—</dd></div>
     </dl></details>
-    <p class="footnote">名义价值按入场参考价计算，不等于保证金。止损为标记价触发的止损市价、整仓退出、关闭价格保护。工具不会下单或修改账户。</p>
+    <p class="footnote">名义价值按入场参考价计算，不等于保证金。止损均为标记价触发的止损市价、关闭价格保护；最终止损整仓退出，双层近端按固定数量只减仓。工具不会下单或修改账户。</p>
     <noscript>请启用 JavaScript 以读取账户状态。</noscript>
   </main>
 </body>

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { AccountError, object, readAccount, readBinance, type AccountConfig } from './account.ts';
 import { readMarket } from './market.ts';
-import { generateEntryPlan, parseDecimal, formatDecimal, type EntryInput, type Snapshot } from '../public/draft.js';
+import { generateEntryPlan, parseDecimal, formatDecimal, splitStopQuantity, type EntryInput, type Snapshot } from '../public/draft.js';
 
 type Config = AccountConfig & { mode?: 'real' | 'demo' };
 const SCALE = 100_000_000n;
@@ -9,6 +9,7 @@ const PERCENT = 100n * SCALE;
 const abs = (value: bigint) => value < 0n ? -value : value;
 const max = (a: bigint, b: bigint) => a > b ? a : b;
 const ceil = (value: bigint, denominator: bigint) => (value + denominator - 1n) / denominator;
+const serialize = (value: unknown) => JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? item.toString() : item);
 export type Plan = ReturnType<typeof generateEntryPlan> & { id: string; startedAt: string; account: Snapshot['account'] };
 export type Verification = {
   status: 'waiting' | 'ended' | 'incomplete' | 'needs-action' | 'verified';
@@ -19,6 +20,7 @@ export type Verification = {
   entryStatus?: string; filledQuantity?: string;
   pendingEntries?: { orderId: string; filledQuantity: string; remainingQuantity: string }[];
   paidCommission?: string; paidFunding?: string; remainingFunding?: string; exitFee?: string; coverage?: string;
+  nearQuantity?: string; nearActualPercent?: string; nearStatus?: string; realizedPnl?: string;
   account?: Snapshot['account'];
 };
 
@@ -54,13 +56,15 @@ function flag(value: unknown): boolean {
 function normalizeOrders(value: unknown, symbol: string, algo: boolean) {
   return rows(value).map((row) => {
     if (row.symbol !== symbol) throw new AccountError('invalid_response', '挂单币种不一致，无法完整核验。');
+    const triggerTime = algo ? stamp(row.triggerTime) : 0;
+    const actualOrderId = algo && row.actualOrderId !== '' && row.actualOrderId !== '0' ? id(row.actualOrderId) : null;
     return { id: id(algo ? row.algoId : row.orderId), algo, status: algo ? row.algoStatus : row.status,
       type: algo ? row.orderType : row.type, side: row.side, positionSide: row.positionSide,
       quantity: amount(algo ? row.quantity : row.origQty, '挂单数量'), executed: algo ? 0n : amount(row.executedQty, '挂单已成交数量'),
       price: row.type === 'LIMIT' && !algo ? amount(row.price, '限价挂单价格') : 0n,
       stop: amount(algo ? row.triggerPrice : row.stopPrice, '挂单触发价'), workingType: row.workingType,
       close: flag(row.closePosition), reduce: flag(row.reduceOnly), protect: flag(row.priceProtect),
-      triggered: algo && (stamp(row.triggerTime) !== 0 || (row.actualOrderId !== '' && row.actualOrderId !== '0')),
+      actualOrderId, triggerTime, triggered: triggerTime !== 0 || actualOrderId !== null,
       updateTime: stamp(row.updateTime), timeInForce: row.timeInForce, goodTillDate: stamp(row.goodTillDate),
     };
   }).sort((a, b) => a.id.localeCompare(b.id));
@@ -87,7 +91,7 @@ async function readState(config: Config, symbol: string, signal: AbortSignal) {
 export async function createPlan(config: Config, value: unknown): Promise<Plan> {
   const data = object(value);
   const keys = ['symbol', 'side', 'budgetMode', 'budget', 'stopMode', 'stop', 'slippage', 'funding', 'leverage', 'minimumBuffer', 'fundingCap'] as const;
-  const optional = ['entryType', 'limitPrice'];
+  const optional = ['entryType', 'limitPrice', 'stopLevels', 'nearStopMode', 'nearStop', 'nearPercent'];
   if (Object.keys(data).some((key) => ![...keys, ...optional].includes(key)) || keys.some((key) => typeof data[key] !== 'string' || data[key].length > 34)
     || optional.some((key) => data[key] !== undefined && (typeof data[key] !== 'string' || data[key].length > 34))) throw new AccountError('invalid_input', '本次计划输入缺失或格式无效。', 400);
   const input = data as EntryInput;
@@ -111,21 +115,23 @@ export async function verifyPosition(config: Config, plan: Plan, demo = 'missing
   const before = await readState(config, plan.symbol, signal);
   const end = await serverTime(config, signal);
   const period = { startTime: Date.parse(plan.startedAt), endTime: end };
-  const [tradeData, historyData, incomeData, exchangeData, feeData, markData] = await Promise.all([
+  const [tradeData, historyData, incomeData, exchangeData, feeData, markData, algoHistory] = await Promise.all([
     readBinance(config, 'trades', signal, plan.symbol, period), readBinance(config, 'history', signal, plan.symbol, period),
     readBinance(config, 'income', signal, plan.symbol, period), readBinance(config, 'exchange', signal),
     readBinance(config, 'fee', signal, plan.symbol), readBinance(config, 'mark', signal, plan.symbol),
+    plan.nearStop ? readBinance(config, 'algoHistory', signal, plan.symbol, period) : [],
   ]);
   const after = await readState(config, plan.symbol, signal);
-  const serialize = (value: unknown) => JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? item.toString() : item);
   if (serialize(before) !== serialize(after)) throw new AccountError('inconsistent_snapshot', '查询期间持仓或挂单发生变化，本次快照不一致，请重新刷新核验。');
-  return { ...evaluate(plan, after, { trades: rows(tradeData), history: rows(historyData), income: rows(incomeData), exchange: object(exchangeData), fee: object(feeData), mark: object(markData), start: period.startTime, end }), account };
+  return { ...evaluate(plan, after, { trades: rows(tradeData), history: rows(historyData), algoHistory: rows(algoHistory), income: rows(incomeData), exchange: object(exchangeData), fee: object(feeData), mark: object(markData), start: period.startTime, end }), account };
 }
 
 async function verifyDemo(config: Config, plan: Plan, scenario: string): Promise<Verification> {
   const partial = ['partial', 'partial-more', 'canceled-remainder', 'stop-first'].includes(scenario);
+  const nearFilled = ['near-filled', 'final-canceled', 'missing-attribution'].includes(scenario);
+  const twoOnly = nearFilled || scenario === 'final-only';
   const limit = plan.execution.entryType === 'LIMIT';
-  if ((!partial && !['waiting', 'missing-stop', 'protected', 'failure'].includes(scenario)) || (partial && !limit)) throw new AccountError('invalid_demo', '此入场方式不支持该模拟场景。', 400);
+  if ((!partial && !twoOnly && !['waiting', 'missing-stop', 'protected', 'failure'].includes(scenario)) || (partial && !limit) || (twoOnly && !plan.nearStop)) throw new AccountError('invalid_demo', '此入场方式或止损结构不支持该模拟场景。', 400);
   if (scenario === 'failure') throw new AccountError('demo_failure', '模拟查询失败：原方案与上次时间保留，通过状态已撤销。', 503);
   const snapshot = await readMarket(config, plan.symbol);
   const now = Date.now(), waiting = scenario === 'waiting', stopped = scenario === 'stop-first';
@@ -142,25 +148,34 @@ async function verifyDemo(config: Config, plan: Plan, scenario: string): Promise
   const order = { symbol: plan.symbol, orderId: 10, side: plan.execution.entrySide, positionSide: 'BOTH', type: plan.execution.entryType, origType: plan.execution.entryType, status: entryStatus,
     time: now, updateTime: now, price: plan.limitPrice || '0', origQty: plan.quantity, executedQty: formatDecimal(q), closePosition: false, reduceOnly: false, stopPrice: '0', workingType: 'CONTRACT_PRICE', priceProtect: false, timeInForce: 'GTC', goodTillDate: 0 };
   const history = waiting && !limit ? [] : [order];
-  if (stopped) {
-    const stopPrice = amount(plan.stopPrice, '模拟止损价');
-    trades.push({ ...trade(q, 3), orderId: 11, side: plan.execution.stopSide, price: plan.stopPrice, commission: formatDecimal(ceil(q * stopPrice * amount(snapshot.takerRate, ''), SCALE * SCALE)), realizedPnl: formatDecimal((stopPrice - entry) * q * (plan.side === 'long' ? 1n : -1n) / SCALE) });
-    history.push({ ...order, orderId: 11, side: plan.execution.stopSide, type: 'MARKET', origType: 'STOP_MARKET', status: 'FILLED', origQty: formatDecimal(q), reduceOnly: true });
+  const split = plan.nearStop && q > 0n ? splitStopQuantity(q, plan.nearStop.percent, snapshot.rules) : null;
+  const closed = stopped ? q : nearFilled && split ? split.near : 0n;
+  const income: Record<string, unknown>[] = [];
+  if (closed > 0n) {
+    const triggerPrice = nearFilled && plan.nearStop ? plan.nearStop.price : plan.stopPrice;
+    const stopPrice = amount(triggerPrice, '模拟止损价');
+    const realizedPnl = formatDecimal((stopPrice - entry) * closed * (plan.side === 'long' ? 1n : -1n) / SCALE);
+    trades.push({ ...trade(closed, 3), orderId: 11, side: plan.execution.stopSide, price: triggerPrice, commission: formatDecimal(ceil(closed * stopPrice * amount(snapshot.takerRate, ''), SCALE * SCALE)), realizedPnl });
+    history.push({ ...order, orderId: 11, side: plan.execution.stopSide, type: 'MARKET', origType: 'STOP_MARKET', status: 'FILLED', origQty: formatDecimal(closed), executedQty: formatDecimal(closed), reduceOnly: true });
+    if (scenario !== 'missing-attribution') income.push({ symbol: plan.symbol, incomeType: 'REALIZED_PNL', income: realizedPnl, tradeId: '3', asset: 'USDT', time: now });
   }
-  const stop = { symbol: plan.symbol, algoId: 20, algoStatus: 'NEW', orderType: 'STOP_MARKET', side: plan.execution.stopSide, positionSide: 'BOTH', quantity: '0', triggerPrice: plan.stopPrice, workingType: 'MARK_PRICE', closePosition: true, reduceOnly: false, priceProtect: false, actualOrderId: '', triggerTime: 0, updateTime: now, timeInForce: 'GTC', goodTillDate: 0 };
-  const state: State = { position: { quantity: flat ? 0n : q * (plan.side === 'long' ? 1n : -1n), entry: flat ? 0n : entry, liquidation: flat ? 0n : amount(plan.liquidationPrice, '模拟强平价'), leverage: amount(plan.leverage, '模拟杠杆'), isolated: true, wallet: 0n, updateTime: now },
+  const stop = { symbol: plan.symbol, algoId: 20, algoStatus: scenario === 'final-canceled' ? 'CANCELED' : 'NEW', orderType: 'STOP_MARKET', side: plan.execution.stopSide, positionSide: 'BOTH', quantity: '0', triggerPrice: plan.stopPrice, workingType: 'MARK_PRICE', closePosition: true, reduceOnly: false, priceProtect: false, actualOrderId: '', triggerTime: 0, createTime: now, updateTime: now, timeInForce: 'GTC', goodTillDate: 0 };
+  const near = plan.nearStop && split ? { ...stop, algoId: 21, algoStatus: nearFilled ? 'FINISHED' : 'NEW', quantity: formatDecimal(split.near), triggerPrice: plan.nearStop.price, closePosition: false, reduceOnly: true, actualOrderId: nearFilled ? '11' : '', triggerTime: nearFilled ? now : 0 } : null;
+  const protectedScenario = scenario === 'protected' || twoOnly || (partial && !stopped);
+  const state: State = { position: { quantity: flat ? 0n : (q - closed) * (plan.side === 'long' ? 1n : -1n), entry: flat ? 0n : entry, liquidation: flat ? 0n : amount(plan.liquidationPrice, '模拟强平价'), leverage: amount(plan.leverage, '模拟杠杆'), isolated: true, wallet: 0n, updateTime: now },
     orders: normalizeOrders(limit && (waiting || (partial && scenario !== 'canceled-remainder')) ? [order] : [], plan.symbol, false),
-    algoOrders: normalizeOrders(scenario === 'protected' || (partial && !stopped) ? [stop] : [], plan.symbol, true) };
+    algoOrders: normalizeOrders(protectedScenario ? [stop, ...(near && !twoOnly ? [near] : [])] : [], plan.symbol, true) };
   const rules = snapshot.rules;
   const exchange = { symbols: [{ symbol: plan.symbol, status: 'TRADING', contractType: 'PERPETUAL', marginAsset: 'USDT', filters: [
     { filterType: 'PRICE_FILTER', minPrice: rules.minPrice, maxPrice: rules.maxPrice, tickSize: rules.tickSize },
     { filterType: 'LOT_SIZE', ...rules.lotSize }, { filterType: 'MARKET_LOT_SIZE', minQty: rules.minQty, maxQty: rules.maxQty, stepSize: rules.stepSize },
   ] }] };
-  return { ...evaluate(plan, state, { trades, history, income: [], exchange, fee: { symbol: plan.symbol, takerCommissionRate: snapshot.takerRate }, mark: { symbol: plan.symbol, markPrice: snapshot.mark, time: now }, start: Date.parse(plan.startedAt), end: now }), account: snapshot.account };
+  const algoHistory = plan.nearStop && protectedScenario ? [stop, ...(near && scenario !== 'final-only' ? [near] : [])] : [];
+  return { ...evaluate(plan, state, { trades, history, algoHistory, income, exchange, fee: { symbol: plan.symbol, takerCommissionRate: snapshot.takerRate }, mark: { symbol: plan.symbol, markPrice: snapshot.mark, time: now }, start: Date.parse(plan.startedAt), end: now }), account: snapshot.account };
 }
 
 type State = Awaited<ReturnType<typeof readState>>;
-type Records = { trades: Record<string, unknown>[]; history: Record<string, unknown>[]; income: Record<string, unknown>[]; exchange: Record<string, unknown>; fee: Record<string, unknown>; mark: Record<string, unknown>; start: number; end: number };
+type Records = { trades: Record<string, unknown>[]; history: Record<string, unknown>[]; algoHistory: Record<string, unknown>[]; income: Record<string, unknown>[]; exchange: Record<string, unknown>; fee: Record<string, unknown>; mark: Record<string, unknown>; start: number; end: number };
 
 function evaluate(plan: Plan, state: State, data: Records): Verification {
   const { position } = state;
@@ -169,11 +184,26 @@ function evaluate(plan: Plan, state: State, data: Records): Verification {
   const incomplete = (message: string) => { result.issues.push(message); return result; };
   if (position.updateTime > data.end || (quantity > 0n && position.updateTime === 0) || [...state.orders, ...state.algoOrders].some((order) => order.updateTime > data.end)) return incomplete('持仓或挂单时间与本次查询不一致，请重新刷新。');
   // ponytail: one bounded history window; refuse a full page instead of silently truncating. Add pagination for longer/multi-order workflows.
-  if ([data.trades, data.history, data.income].some((items) => items.length >= 1000)) return incomplete('历史记录达到查询上限，无法证明本单数据完整。');
+  if ([data.trades, data.history, data.income, data.algoHistory].some((items) => items.length >= 1000)) return incomplete('历史记录达到查询上限，无法证明本单数据完整。');
   for (const items of [data.trades, data.history, data.income]) {
     if (items.some((row) => row.symbol !== plan.symbol || stamp(row.time) < data.start || stamp(row.time) > data.end)) return incomplete('历史记录币种或时间区间不一致，无法关联本单。');
   }
-  const pending = [...state.orders, ...state.algoOrders].filter((order) => !['CANCELED', 'EXPIRED', 'EXPIRED_IN_MATCH', 'FILLED', 'FINISHED', 'REJECTED'].includes(String(order.status)));
+  if (data.algoHistory.some((row) => row.symbol !== plan.symbol || stamp(row.createTime) < data.start || stamp(row.createTime) > data.end || stamp(row.updateTime) > data.end)) return incomplete('条件单历史时间或币种不一致，无法关联本单。');
+  if (new Set(data.algoHistory.map((row) => id(row.algoId))).size !== data.algoHistory.length) return incomplete('条件单历史重复，无法完整核验。');
+  const isPending = (order: State['orders'][number]) => !['CANCELED', 'EXPIRED', 'EXPIRED_IN_MATCH', 'FILLED', 'FINISHED', 'REJECTED'].includes(String(order.status));
+  if (plan.nearStop) {
+    const historical = normalizeOrders(data.algoHistory, plan.symbol, true);
+    for (const current of state.algoOrders) {
+      const recorded = historical.find((order) => order.id === current.id);
+      if ((!recorded && isPending(current)) || (recorded && serialize(recorded) !== serialize(current))) return incomplete('当前条件单与历史记录不一致或缺失，请重新刷新核验。');
+    }
+    if (historical.some((order) => order.status === 'NEW' && !state.algoOrders.some((current) => current.id === order.id))) return incomplete('条件单历史仍有效但当前挂单缺失，两份快照不一致，请重新刷新核验。');
+    for (const algo of historical.filter((order) => order.triggered)) {
+      const actual = data.history.filter((order) => id(order.orderId) === algo.actualOrderId);
+      if (actual.length !== 1 || !['FILLED', 'CANCELED', 'EXPIRED', 'EXPIRED_IN_MATCH', 'REJECTED'].includes(String(actual[0]!.status))) return incomplete('已触发条件单的实际退出订单尚未结束或缺失，无法完整核验。');
+    }
+  }
+  const pending = [...state.orders, ...state.algoOrders].filter(isPending);
   const entries = pending.filter((order) => !order.close && !order.reduce);
   if (entries.some((order) => order.quantity <= 0n || order.executed > order.quantity)) return incomplete('入场挂单数量无效，无法完整核验。');
   result.pendingEntries = entries.map((order) => ({ orderId: order.algo ? `条件单 ${order.id}` : order.id, filledQuantity: formatDecimal(order.executed), remainingQuantity: formatDecimal(order.quantity - order.executed) }));
@@ -224,7 +254,7 @@ function evaluate(plan: Plan, state: State, data: Records): Verification {
   const direction = plan.side === 'long' ? 1n : -1n;
   const entrySide = plan.execution.entrySide;
   const tradeIds = new Set<string>();
-  let total = 0n, closed = 0n, cost = 0n, commission = 0n;
+  let total = 0n, closed = 0n, cost = 0n, commission = 0n, realizedPnl = 0n;
   const executedByOrder = new Map<string, bigint>();
   const sortedTrades = [...data.trades].sort((a, b) => stamp(a.time) - stamp(b.time) || (BigInt(id(a.id)) < BigInt(id(b.id)) ? -1 : 1));
   for (const trade of sortedTrades) {
@@ -244,6 +274,8 @@ function evaluate(plan: Plan, state: State, data: Records): Verification {
     } else {
       closed += q;
       if (closed > total) return incomplete('存在反向开仓，无法关联原单。');
+      if (plan.nearStop && abs(realized * SCALE * total - direction * (price * total - cost) * q) > SCALE * total) return incomplete('已实现损益与可归属成交价格不一致，无法完整核验。');
+      realizedPnl += realized;
     }
     const orderId = id(trade.orderId);
     executedByOrder.set(orderId, (executedByOrder.get(orderId) ?? 0n) + q);
@@ -268,9 +300,16 @@ function evaluate(plan: Plan, state: State, data: Records): Verification {
   let funding = 0n;
   const fundingIds = new Set<string>();
   const pnlIds = new Set<string>();
+  const commissionIds = new Set<string>();
   const firstTrade = Math.min(...data.trades.map((trade) => stamp(trade.time)));
   for (const income of data.income) {
     if (income.incomeType !== 'FUNDING_FEE') {
+      if (plan.nearStop && income.incomeType === 'COMMISSION') {
+        const tradeId = id(income.tradeId);
+        const trade = data.trades.find((item) => id(item.id) === tradeId);
+        if (commissionIds.has(tradeId) || income.asset !== 'USDT' || !trade || amount(income.income, '手续费收支', true) !== -amount(trade.commission, '成交手续费')) return incomplete('手续费收支无法与本单成交对应，无法完整核验。');
+        commissionIds.add(tradeId);
+      }
       if (closed === 0n && income.incomeType === 'REALIZED_PNL' && amount(income.income, '已实现损益', true) !== 0n) return incomplete('收支记录包含已实现损益，与未平仓的成交链不一致。');
       if (closed > 0n && income.incomeType === 'REALIZED_PNL') {
         const tradeId = id(income.tradeId);
@@ -289,15 +328,38 @@ function evaluate(plan: Plan, state: State, data: Records): Verification {
   }
   result.paidCommission = formatDecimal(commission);
   result.paidFunding = formatDecimal(funding);
+  if (plan.nearStop && closed > 0n && data.trades.some((trade) => trade.side !== entrySide && amount(trade.realizedPnl, '成交损益', true) !== 0n && !pnlIds.has(id(trade.id)))) return incomplete('本单已实现损益收支缺失，无法完整核验。');
   if (closed > 0n) {
-    if (quantity > 0n) return incomplete('已发生部分平仓，本期无法完整核验本单损益与剩余敞口，请在 Binance 检查。');
-    if (pending.length) result.issues.push('当前已平仓，但仍有挂单，请在 Binance 处理后刷新。');
-    result.status = result.issues.length ? 'needs-action' : 'ended';
-    if (!result.issues.length) result.issues.push('已结束：本单开平仓成交与空仓对账一致；这不是止损核验通过。');
-    return result;
+    if (quantity === 0n) {
+      if (pending.length) result.issues.push('当前已平仓，但仍有挂单，请在 Binance 处理后刷新。');
+      result.status = result.issues.length ? 'needs-action' : 'ended';
+      if (!result.issues.length) result.issues.push('已结束：本单开平仓成交与空仓对账一致；这不是止损核验通过。');
+      return result;
+    }
+    if (!plan.nearStop) return incomplete('已发生部分平仓，本期单层方案无法完整核验本单损益与剩余敞口，请在 Binance 检查。');
+    const closingIds = new Set(data.trades.filter((trade) => trade.side !== entrySide).map((trade) => id(trade.orderId)));
+    for (const orderId of closingIds) {
+      const matches = data.algoHistory.filter((row) => row.actualOrderId !== '' && row.actualOrderId !== '0' && id(row.actualOrderId) === orderId);
+      if (matches.length !== 1) return incomplete('近端成交缺少唯一历史条件单关联，无法完整核验。');
+      const raw = matches[0]!;
+      const algo = normalizeOrders([raw], plan.symbol, true)[0]!;
+      const executed = executedByOrder.get(orderId)!;
+      const fills = data.trades.filter((trade) => id(trade.orderId) === orderId);
+      const order = data.history.find((item) => id(item.orderId) === orderId)!;
+      if (!['TRIGGERED', 'FINISHED'].includes(String(algo.status)) || !algo.triggered || algo.type !== 'STOP_MARKET'
+        || algo.side !== plan.execution.stopSide || algo.positionSide !== 'BOTH' || algo.close || !algo.reduce || algo.protect
+        || algo.workingType !== 'MARK_PRICE' || algo.stop !== amount(plan.nearStop.price, '原近端止损')
+        || algo.quantity < executed || algo.quantity !== amount(order.origQty, '近端委托数量')
+        || order.type !== 'MARKET' || !flag(order.reduceOnly) || flag(order.closePosition)
+        || !['FILLED', 'CANCELED', 'EXPIRED', 'EXPIRED_IN_MATCH'].includes(String(order.status))
+        || (order.status === 'FILLED' && executed !== algo.quantity) || stamp(order.updateTime) > data.end
+        || stamp(raw.triggerTime) < stamp(raw.createTime) || fills.some((trade) => stamp(trade.time) < stamp(raw.triggerTime))
+        || (algo.timeInForce !== 'GTC' && (algo.timeInForce !== 'GTD' || algo.goodTillDate <= stamp(raw.triggerTime)))) return incomplete('部分退出无法归属于原近端止损及成交链，无法完整核验。');
+    }
   }
+  result.realizedPnl = formatDecimal(realizedPnl);
   // Binance reports a rounded average; tolerate at most one 8-decimal price unit, never a quantity difference.
-  if (position.entry <= 0n || abs(cost - position.entry * quantity) > quantity) return incomplete('实际均价与成交记录不一致，无法完整核验。');
+  if (position.entry <= 0n || abs(cost - position.entry * total) > total) return incomplete('实际均价与成交记录不一致，无法完整核验。');
   const fee = amount(data.fee.takerCommissionRate, '当前退出费率');
   const mark = amount(data.mark.markPrice, '当前标记价');
   if (data.fee.symbol !== plan.symbol || data.mark.symbol !== plan.symbol || fee >= SCALE || mark <= 0n || Math.abs(stamp(data.mark.time) - data.end) > 30_000) return incomplete('当前费率或标记价缺失、过期或币种不一致。');
@@ -305,57 +367,99 @@ function evaluate(plan: Plan, state: State, data: Records): Verification {
   const budget = amount(plan.budget, '原预算');
   const remainingFunding = max(0n, amount(plan.funding, '原资金费预留') - funding);
   const exit = stop * (PERCENT - direction * amount(plan.slippagePercent, '原滑点'));
-  // Use exact fills for comparisons; the exchange's displayed average may hide a material cost at large quantities.
-  const loss = max(0n, direction * (cost * PERCENT - exit * quantity)) * SCALE + quantity * exit * fee + (commission + funding + remainingFunding) * 10n ** 26n;
-  result.plannedLoss = formatDecimal(ceil(loss, 10n ** 26n));
-  result.excess = formatDecimal(ceil(max(0n, loss - budget * 10n ** 26n), 10n ** 26n));
+  // Allocate remaining cost using the exact original average cost/total; never round that average.
+  // A common denominator combines the remaining price loss, signed realized PnL and all costs.
+  const denominator = 10n ** 26n * total;
+  const loss = max(0n, direction * (cost * quantity * PERCENT - exit * quantity * total) * SCALE - realizedPnl * denominator)
+    + quantity * exit * fee * total + (commission + funding + remainingFunding) * denominator;
+  result.plannedLoss = formatDecimal(ceil(loss, denominator));
+  result.excess = formatDecimal(ceil(max(0n, loss - budget * denominator), denominator));
   result.remainingFunding = formatDecimal(remainingFunding);
   result.exitFee = formatDecimal(ceil(quantity * exit * fee, 10n ** 26n));
-  if (loss > budget * 10n ** 26n) result.issues.push(`按原止损 ${plan.stopPrice} 计算的亏损 ${result.plannedLoss} USDT 超过原预算 ${plan.budget} USDT，超额 ${result.excess} USDT。请在 Binance 处理风险敞口；具体减仓量需包含减仓成交成本，本期不提供无法可靠复核的减仓数量。`);
+  if (loss > budget * denominator) result.issues.push(`按原止损 ${plan.stopPrice} 计算的亏损 ${result.plannedLoss} USDT 超过原预算 ${plan.budget} USDT，超额 ${result.excess} USDT。请在 Binance 处理风险敞口；具体减仓量需包含减仓成交成本，本期不提供无法可靠复核的减仓数量。`);
   if (position.leverage <= 0n || position.leverage % SCALE !== 0n) return incomplete('实际杠杆数据无效。');
   if (position.leverage > amount(plan.leverage, '原杠杆')) result.issues.push(`实际杠杆 ${result.leverage} 倍高于原方案 ${plan.leverage} 倍，请在 Binance 调整后刷新。`);
   const gap = direction * (stop - position.liquidation);
   const minimum = amount(plan.minimumBuffer, '最低强平缓冲');
   if (position.liquidation <= 0n || minimum <= 0n) return incomplete('当前强平价或最低缓冲缺失，无法完整核验。');
-  result.liquidationBuffer = formatDecimal(gap * PERCENT * quantity / cost);
-  if (gap <= 0n || gap * PERCENT * quantity < minimum * cost) result.issues.push(`当前强平缓冲 ${result.liquidationBuffer}% 低于要求 ${plan.minimumBuffer}%，差 ${formatDecimal(ceil(minimum * cost - gap * PERCENT * quantity, cost))} 个百分点；请在 Binance 降低杠杆或增加逐仓保证金后刷新，不改动原止损。`);
+  result.liquidationBuffer = formatDecimal(gap * PERCENT * total / cost);
+  if (gap <= 0n || gap * PERCENT * total < minimum * cost) result.issues.push(`当前强平缓冲 ${result.liquidationBuffer}% 低于要求 ${plan.minimumBuffer}%，差 ${formatDecimal(ceil(minimum * cost - gap * PERCENT * total, cost))} 个百分点；请在 Binance 降低杠杆或增加逐仓保证金后刷新，不改动原止损。`);
   if (direction * (mark - stop) <= 0n) result.issues.push('当前标记价已达到原止损条件，尚有持仓；请立即在 Binance 检查实际执行状态。');
-  const protections = pending.filter((item) => item.close || item.reduce || item.type === 'STOP_MARKET');
-  if (protections.length !== 1) result.issues.push(`需要一张有效单层止损，目前找到 ${protections.length} 张候选；请在 Binance 设置或整理 ${plan.execution.stopSide} 止损市价、标记价 ${plan.stopPrice}、关闭价格保护、整仓退出。`);
-  else {
-    const protection = protections[0]!;
+  const contracts = rows(data.exchange.symbols).filter((contract) => contract.symbol === plan.symbol);
+  if (contracts.length !== 1 || contracts[0]!.status !== 'TRADING' || contracts[0]!.contractType !== 'PERPETUAL' || contracts[0]!.marginAsset !== 'USDT') return incomplete('当前合约状态或规则无法确认。');
+  const filters = rows(contracts[0]!.filters);
+  const filter = (name: string) => {
+    const matches = filters.filter((item) => item.filterType === name);
+    if (matches.length !== 1) throw new AccountError('invalid_rules', '当前退出规则缺失或重复，无法完整核验。');
+    return matches[0]!;
+  };
+  const price = filter('PRICE_FILTER');
+  const tick = amount(price.tickSize, '价格步长'), minPrice = amount(price.minPrice, '最小价格'), maxPrice = amount(price.maxPrice, '最大价格');
+  if (tick <= 0n) return incomplete('当前价格步长不支持，无法完整核验。');
+  const checkProtection = (protection: State['orders'][number], stop: bigint, expected: bigint, partial = false) => {
     if (protection.status !== 'NEW' || protection.triggered || protection.executed !== 0n) result.issues.push('止损已触发、执行或失效，不能作为有效保护。');
     if (protection.side !== plan.execution.stopSide || protection.positionSide !== 'BOTH') result.issues.push(`止损平仓方向不符，应为单向持仓 ${plan.execution.stopSide}。`);
     if (protection.type !== 'STOP_MARKET') result.issues.push('止损类型不符，应为止损市价 STOP_MARKET。');
-    if (protection.stop !== stop) result.issues.push(`止损触发价 ${formatDecimal(protection.stop)} 不符，应保持原绝对止损 ${plan.stopPrice} USDT。`);
+    if (protection.stop !== stop) result.issues.push(`止损触发价 ${formatDecimal(protection.stop)} 不符，应保持原绝对止损 ${formatDecimal(stop)} USDT。`);
     if (protection.workingType !== 'MARK_PRICE') result.issues.push('触发依据不符，应使用标记价 MARK_PRICE。');
     if (protection.protect) result.issues.push('价格保护已开启，请在 Binance 关闭价格保护后刷新。');
     if (protection.timeInForce !== 'GTC' && (protection.timeInForce !== 'GTD' || protection.goodTillDate <= data.end)) result.issues.push('止损有效期无效或已经到期，请在 Binance 重新设置。');
-    const contracts = rows(data.exchange.symbols).filter((contract) => contract.symbol === plan.symbol);
-    if (contracts.length !== 1 || contracts[0]!.status !== 'TRADING' || contracts[0]!.contractType !== 'PERPETUAL' || contracts[0]!.marginAsset !== 'USDT') return incomplete('当前合约状态或规则无法确认。');
-    const filters = rows(contracts[0]!.filters);
-    const filter = (name: string) => {
-      const matches = filters.filter((item) => item.filterType === name);
-      if (matches.length !== 1) throw new AccountError('invalid_rules', '当前退出规则缺失或重复，无法完整核验。');
-      return matches[0]!;
-    };
-    const price = filter('PRICE_FILTER');
-    const tick = amount(price.tickSize, '价格步长'), minPrice = amount(price.minPrice, '最小价格'), maxPrice = amount(price.maxPrice, '最大价格');
-    if (tick <= 0n) return incomplete('当前价格步长不支持，无法完整核验。');
     if (stop < minPrice || (maxPrice > 0n && stop > maxPrice) || (stop - minPrice) % tick !== 0n) result.issues.push('原止损不符合当前价格规则，请在 Binance 检查，工具不会移动原止损。');
+    if (partial && protection.close) result.issues.push('近端须按分配数量只减仓，不能整仓退出。');
     if (!protection.close) {
       if (!protection.reduce) result.issues.push('固定数量退出必须具有只减仓语义。');
-      if (protection.quantity !== quantity) result.issues.push(`固定止损数量 ${formatDecimal(protection.quantity)} ${plan.baseAsset} 与实际 ${result.quantity} 不符${protection.quantity < quantity ? `，覆盖缺口 ${formatDecimal(quantity - protection.quantity)} ${plan.baseAsset}` : '，不得超量'}；请在 Binance 调整为当前实际数量或整仓退出。`);
+      if (protection.quantity !== expected) result.issues.push(`固定止损数量 ${formatDecimal(protection.quantity)} ${plan.baseAsset} 与${partial ? '近端应退出' : '实际'} ${formatDecimal(expected)} 不符${protection.quantity < expected ? `，覆盖缺口 ${formatDecimal(expected - protection.quantity)} ${plan.baseAsset}` : '，不得超量'}；请在 Binance 修正退出数量。`);
       for (const name of ['LOT_SIZE', 'MARKET_LOT_SIZE']) {
         const lot = filter(name);
         const minimum = amount(lot.minQty, '退出最小数量'), maximum = amount(lot.maxQty, '退出最大数量'), step = amount(lot.stepSize, '退出数量步长');
-        if (maximum <= 0n || maximum < minimum || step <= 0n) return incomplete('当前退出数量规则无效或不支持。');
+        if (maximum <= 0n || maximum < minimum || step <= 0n) throw new AccountError('invalid_rules', '当前退出数量规则无效或不支持。');
         if (protection.quantity < minimum || protection.quantity > maximum || (protection.quantity - minimum) % step !== 0n) result.issues.push(`固定止损不符合 ${name} 数量规则：范围 ${formatDecimal(minimum)}–${formatDecimal(maximum)}，步长 ${formatDecimal(step)}；只减仓不豁免数量规则，可在 Binance 检查整仓退出方式。`);
       }
-      result.coverage = `固定数量 ${formatDecimal(protection.quantity)} ${plan.baseAsset} · 只减仓，仅覆盖当前数量`;
+      if (!partial) result.coverage = `固定数量 ${formatDecimal(protection.quantity)} ${plan.baseAsset} · 只减仓，仅覆盖当前数量`;
     }
     else if (protection.quantity !== 0n) result.issues.push('整仓止损同时包含固定数量，平仓语义无法确认。');
-    else result.coverage = '整仓退出';
+    else if (!partial) result.coverage = '整仓退出';
+  };
+  const protections = pending.filter((item) => item.close || item.reduce || item.type === 'STOP_MARKET');
+  if (plan.nearStop) {
+    const lot = (name: string) => {
+      const row = filter(name);
+      return { minQty: formatDecimal(amount(row.minQty, '退出最小数量')), maxQty: formatDecimal(amount(row.maxQty, '退出最大数量')), stepSize: formatDecimal(amount(row.stepSize, '退出数量步长')) };
+    };
+    let split;
+    try { split = splitStopQuantity(total, plan.nearStop.percent, { ...lot('MARKET_LOT_SIZE'), lotSize: lot('LOT_SIZE') }); }
+    catch (error) {
+      result.issues.push(error instanceof Error ? error.message : '当前数量无法按原比例分层。');
+      result.status = 'needs-action';
+      return result;
+    }
+    const remainingNear = max(0n, split.near - closed);
+    result.nearQuantity = formatDecimal(remainingNear);
+    result.nearActualPercent = split.actualPercent;
+    result.nearStatus = closed === 0n ? '待核验' : closed === split.near ? '已执行' : '执行量偏差，需处理';
+    const nearPrice = amount(plan.nearStop.price, '原近端止损');
+    const final = protections.filter((item) => item.stop === stop);
+    const near = protections.filter((item) => item.stop === nearPrice);
+    if (final.length !== 1) result.issues.push('最终止损缺失或重复，请先确保整仓有原最终止损保护。');
+    else {
+      checkProtection(final[0]!, stop, quantity);
+      if (!final[0]!.close) result.issues.push('双层最终止损须为整仓退出，保护触发时全部剩余仓位。');
+    }
+    if (closed > split.near) result.issues.push('近端累计退出超过原比例分配量，请核对实际执行；不会改变原预算或止损。');
+    if (remainingNear === 0n) {
+      if (near.length) result.issues.push('近端已执行，仍存在近端退出委托，请在 Binance 清理后刷新。');
+    } else if (near.length !== 1) result.issues.push('近端计划仍待补齐或存在重复，请按原近端触发价和当前分配数量设置只减仓止损。');
+    else {
+      const previousIssues = result.issues.length;
+      checkProtection(near[0]!, nearPrice, remainingNear, true);
+      if (result.issues.length === previousIssues) result.nearStatus = closed > 0n ? '部分执行，剩余近端有效待触发' : '有效待触发';
+    }
+    if (remainingNear > 0n && direction * (mark - nearPrice) <= 0n) result.issues.push('当前标记价已达到原近端止损条件，请在 Binance 检查执行状态。');
+    if (protections.some((item) => item.stop !== stop && item.stop !== nearPrice)) result.issues.push('存在原双层方案之外的退出委托，请在 Binance 整理后刷新。');
+  } else if (protections.length !== 1) {
+    result.issues.push(`需要一张有效单层止损，目前找到 ${protections.length} 张候选；请在 Binance 设置或整理 ${plan.execution.stopSide} 止损市价、标记价 ${plan.stopPrice}、关闭价格保护、整仓退出。`);
+  } else {
+    checkProtection(protections[0]!, stop, quantity);
   }
   result.status = result.issues.length ? 'needs-action' : 'verified';
   return result;

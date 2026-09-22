@@ -2,9 +2,183 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { test, type TestContext } from 'node:test';
 import { createServer } from '../src/server.ts';
+import type { EntryInput } from '../public/draft.js';
 
 const input = { symbol: 'BTCUSDT', side: 'long', budgetMode: 'amount', budget: '20', stopMode: 'price', stop: '98', slippage: '1', funding: '1', leverage: '10', minimumBuffer: '1', fundingCap: '5' };
 const limitInput = { ...input, entryType: 'LIMIT', limitPrice: '100' };
+const twoInput = { ...input, stopLevels: 'two', nearStopMode: 'price', nearStop: '99', nearPercent: '70' };
+
+test('demo exposes final-only, both stops, near-filled remainder and attribution failure through the same verifier', async (t) => {
+  const app = await start(t, fixture(), 'demo');
+  for (const entryType of ['MARKET', 'LIMIT']) {
+    const plan = await (await app.create({ ...twoInput, entryType, limitPrice: '100' })).json();
+    const read = async (scenario: string) => {
+      const response = await app.read(`/api/verification?planId=${plan.id}&demo=${scenario}`);
+      assert.equal(response.status, 200);
+      return response.json();
+    };
+    assert.equal((await read('final-only')).status, 'needs-action');
+    assert.equal((await read('protected')).status, 'verified');
+    const filled = await read('near-filled');
+    assert.equal(filled.status, 'verified');
+    assert.equal(filled.quantity, entryType === 'MARKET' ? '0.2' : '0.195');
+    assert.equal(filled.plannedLoss, entryType === 'MARKET' ? '1.875204' : '1.9792189');
+    assert.equal((await read('final-canceled')).status, 'needs-action');
+    assert.equal((await read('missing-attribution')).status, 'incomplete');
+    if (entryType === 'LIMIT') {
+      assert.equal((await read('partial')).status, 'needs-action');
+      const canceled = await read('canceled-remainder');
+      assert.equal(canceled.status, 'verified');
+      assert.equal(canceled.nearQuantity, '0.2');
+      assert.equal(canceled.nearActualPercent, '53.90835579');
+    }
+  }
+});
+
+test('two-level verification checks near allocation and final whole-position cover independently', async (t) => {
+  const app = await start(t);
+  const response = await app.create(twoInput);
+  assert.equal(response.status, 200);
+  const plan = await response.json();
+  const final = fill(app);
+  const near = { ...final, algoId: 21, closePosition: false, reduceOnly: true, quantity: '0.2', triggerPrice: '99' };
+  app.data['/fapi/v1/openAlgoOrders'] = [final];
+  app.data['/fapi/v1/allAlgoOrders'] = [final];
+  const path = `/api/verification?planId=${plan.id}`;
+  const onlyFinal = await (await app.read(path)).json();
+  assert.equal(onlyFinal.status, 'needs-action');
+  assert.match(onlyFinal.issues.join(' '), /近端.*补齐/);
+  app.data['/fapi/v1/openAlgoOrders'] = [final, near];
+  app.data['/fapi/v1/allAlgoOrders'] = [final, near];
+  const both = await (await app.read(path)).json();
+  assert.equal(both.status, 'verified');
+  assert.equal(both.nearQuantity, '0.2');
+  assert.equal(both.nearActualPercent, '50');
+  assert.match(both.coverage, /整仓/);
+  app.data['/fapi/v1/allAlgoOrders'] = [final, near, { ...near, algoId: 22, algoStatus: 'TRIGGERED', actualOrderId: '12', triggerTime: app.now + 150 }];
+  assert.equal((await (await app.read(path)).json()).status, 'incomplete');
+  app.data['/fapi/v1/allAlgoOrders'] = [{ ...final, algoStatus: 'CANCELED', updateTime: app.now + 150 }, near];
+  const conflict = await (await app.read(path)).json();
+  assert.equal(conflict.status, 'incomplete');
+  assert.match(conflict.issues.join(' '), /条件单.*不一致/);
+  app.data['/fapi/v1/allAlgoOrders'] = [final, near];
+  near.quantity = '0.3';
+  assert.equal((await (await app.read(path)).json()).status, 'needs-action');
+  near.quantity = '0.2';
+  final.algoStatus = 'CANCELED';
+  const canceled = await (await app.read(path)).json();
+  assert.equal(canceled.status, 'needs-action');
+  assert.match(canceled.issues.join(' '), /最终.*缺失/);
+});
+
+test('an attributable near fill includes realized loss and all paid costs before checking the remainder', async (t) => {
+  const app = await start(t);
+  const plan = await (await app.create({ ...twoInput, entryType: 'LIMIT', limitPrice: '100' })).json();
+  const final = fill(app);
+  const opening = { ...limitOrder(app), status: 'CANCELED', executedQty: '0.4' };
+  app.data['/fapi/v1/allOrders'] = [opening];
+  const trades = app.data['/fapi/v1/userTrades'] as Record<string, unknown>[];
+  trades.push({ ...trades[0], id: 3, orderId: 11, side: 'SELL', qty: '0.2', price: '99', commission: '0.0198', realizedPnl: '-0.2', time: app.now + 150 });
+  (app.data['/fapi/v1/allOrders'] as Record<string, unknown>[]).push({ symbol: 'BTCUSDT', orderId: 11, side: 'SELL', positionSide: 'BOTH', type: 'MARKET', origType: 'STOP_MARKET', status: 'FILLED', origQty: '0.2', executedQty: '0.2', reduceOnly: true, closePosition: false, time: app.now + 150, updateTime: app.now + 150 });
+  const near = { ...final, algoId: 21, algoStatus: 'FINISHED', closePosition: false, reduceOnly: true, quantity: '0.2', triggerPrice: '99', actualOrderId: '11', createTime: app.now + 100, triggerTime: app.now + 150, updateTime: app.now + 150 };
+  app.data['/fapi/v1/allAlgoOrders'] = [final, near];
+  const income = app.data['/fapi/v1/income'] as Record<string, unknown>[];
+  income.push({ symbol: 'BTCUSDT', incomeType: 'REALIZED_PNL', income: '-0.2', asset: 'USDT', tradeId: '3', time: app.now + 150 });
+  app.data['/fapi/v1/openAlgoOrders'] = [final];
+  app.position.positionAmt = '0.2';
+  const path = `/api/verification?planId=${plan.id}`;
+  const result = await (await app.read(path)).json();
+  assert.equal(result.status, 'verified');
+  assert.equal(result.realizedPnl, '-0.2');
+  assert.equal(result.paidCommission, '0.0598');
+  assert.equal(result.plannedLoss, '1.875204');
+  assert.equal(result.exitFee, '0.019404');
+  assert.equal(result.liquidationBuffer, '8');
+  assert.equal(result.nearStatus, '已执行');
+  assert.equal(result.nearQuantity, '0');
+  assert.equal(plan.budget, '20');
+  assert.equal(plan.stopPrice, '98');
+  const historyRead = app.requests.find((url) => url.pathname === '/fapi/v1/allAlgoOrders');
+  assert.equal(historyRead?.searchParams.get('symbol'), 'BTCUSDT');
+  assert.equal(historyRead?.searchParams.get('limit'), '1000');
+  opening.status = 'PARTIALLY_FILLED';
+  app.data['/fapi/v1/openOrders'] = [opening];
+  const pending = await (await app.read(path)).json();
+  assert.equal(pending.status, 'needs-action');
+  assert.equal(pending.pendingEntries[0].remainingQuantity, '0.095');
+  assert.equal(pending.plannedLoss, '1.875204');
+  opening.status = 'CANCELED';
+  app.data['/fapi/v1/openOrders'] = [];
+  for (const patch of [{ actualOrderId: '999' }, { workingType: 'CONTRACT_PRICE' }, { triggerPrice: '98.9' }, { priceProtect: true }, { reduceOnly: false }, { algoStatus: 'CANCELED' }, { triggerTime: app.now + 180 }]) {
+    app.data['/fapi/v1/allAlgoOrders'] = [final, { ...near, ...patch }];
+    assert.equal((await (await app.read(path)).json()).status, 'incomplete');
+  }
+  for (const history of [[], [near, near], Array(1000).fill(near)]) {
+    app.data['/fapi/v1/allAlgoOrders'] = history;
+    assert.equal((await (await app.read(path)).json()).status, 'incomplete');
+  }
+  app.data['/fapi/v1/allAlgoOrders'] = [final, near];
+  const closingOrder = (app.data['/fapi/v1/allOrders'] as Record<string, unknown>[])[1]!;
+  closingOrder.orderId = trades[2]!.orderId = '9007199254740992';
+  app.data['/fapi/v1/allAlgoOrders'] = [final, { ...near, actualOrderId: 9_007_199_254_740_992 }];
+  assert.equal((await app.read(path)).status, 502);
+  closingOrder.orderId = trades[2]!.orderId = 11;
+  app.data['/fapi/v1/allAlgoOrders'] = [final, near];
+  near.quantity = '0.3';
+  closingOrder.origQty = '0.3';
+  closingOrder.status = 'PARTIALLY_FILLED';
+  assert.equal((await (await app.read(path)).json()).status, 'incomplete');
+  closingOrder.status = 'FILLED';
+  assert.equal((await (await app.read(path)).json()).status, 'incomplete');
+  closingOrder.origQty = near.quantity = '0.2';
+  app.data['/fapi/v1/openAlgoOrders'] = [final, near];
+  assert.equal((await (await app.read(path)).json()).status, 'verified');
+  for (const patch of [{ actualOrderId: '999' }, { triggerTime: app.now + 151 }]) {
+    app.data['/fapi/v1/openAlgoOrders'] = [final, { ...near, ...patch }];
+    assert.equal((await (await app.read(path)).json()).status, 'incomplete');
+  }
+  const extra = { ...near, algoId: 22, algoStatus: 'NEW', triggerTime: 0, actualOrderId: '' };
+  app.data['/fapi/v1/openAlgoOrders'] = [final, extra];
+  app.data['/fapi/v1/allAlgoOrders'] = [final, near, extra];
+  assert.equal((await (await app.read(path)).json()).status, 'needs-action');
+  app.data['/fapi/v1/allAlgoOrders'] = [final, near];
+  app.data['/fapi/v1/openAlgoOrders'] = [];
+  final.algoStatus = 'CANCELED';
+  assert.equal((await (await app.read(path)).json()).status, 'needs-action');
+  final.algoStatus = 'NEW';
+  app.data['/fapi/v1/openAlgoOrders'] = [final];
+  app.position.positionAmt = '0.3';
+  assert.equal((await (await app.read(path)).json()).status, 'incomplete');
+  app.position.positionAmt = '0.2';
+  income[0]!.income = '-25';
+  const exceeded = await (await app.read(path)).json();
+  assert.equal(exceeded.status, 'needs-action');
+  assert.equal(exceeded.plannedLoss, '25.875204');
+  assert.equal(exceeded.excess, '5.875204');
+  income[0]!.income = '-0.3';
+  income.push({ symbol: 'BTCUSDT', incomeType: 'COMMISSION', income: '-1', asset: 'USDT', tradeId: '999', time: app.now + 150 });
+  assert.equal((await (await app.read(path)).json()).status, 'incomplete');
+  income.pop();
+  income.pop();
+  const missing = await (await app.read(path)).json();
+  assert.equal(missing.status, 'incomplete');
+  assert.equal(missing.plannedLoss, undefined);
+  assert.match(missing.issues.join(' '), /损益.*缺失/);
+});
+
+test('short near exits preserve signed realized loss, remaining funding and liquidation direction', async (t) => {
+  const app = await start(t, fixture(), 'demo');
+  for (const entryType of ['MARKET', 'LIMIT']) {
+    const plan = await (await app.create({ ...twoInput, side: 'short', stop: '102', nearStop: '101', entryType, limitPrice: '100' })).json();
+    const result = await (await app.read(`/api/verification?planId=${plan.id}&demo=near-filled`)).json();
+    assert.equal(result.status, 'verified');
+    assert.equal(result.side, 'short');
+    assert.equal(result.quantity, entryType === 'MARKET' ? '0.2' : '0.194');
+    assert.equal(result.realizedPnl, entryType === 'MARKET' ? '-0.4' : '-0.3');
+    assert.equal(result.plannedLoss, entryType === 'MARKET' ? '2.284404' : '1.98556588');
+    assert.ok(Number(result.liquidationBuffer) > 1);
+  }
+});
 
 function fixture() {
   const now = Date.now() - 1000;
@@ -17,7 +191,7 @@ function fixture() {
     '/fapi/v1/positionSide/dual': { dualSidePosition: false },
     '/fapi/v2/positionRisk': [position],
     '/fapi/v1/openOrders': [], '/fapi/v1/openAlgoOrders': [],
-    '/fapi/v1/userTrades': [], '/fapi/v1/allOrders': [], '/fapi/v1/income': [],
+    '/fapi/v1/userTrades': [], '/fapi/v1/allOrders': [], '/fapi/v1/income': [], '/fapi/v1/allAlgoOrders': [],
     '/fapi/v1/commissionRate': { symbol: 'BTCUSDT', takerCommissionRate: '0.001' },
     '/fapi/v1/leverageBracket': { symbol: 'BTCUSDT', brackets: [{ bracket: 1, initialLeverage: 20, notionalFloor: 0, notionalCap: 1000000, maintMarginRatio: 0.01, cum: 0 }] },
     '/fapi/v2/ticker/price': { symbol: 'BTCUSDT', price: '100', time: now },
@@ -55,7 +229,7 @@ async function start(t: TestContext, f = fixture(), mode: 'real' | 'demo' = 'rea
   const login = await fetch(`${base}/login`, { method: 'POST', redirect: 'manual', headers: { Origin: base, 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'password=test-password-only' });
   const cookie = login.headers.get('set-cookie')!.split(';')[0]!;
   const read = (path: string) => fetch(base + path, { headers: { Cookie: cookie } });
-  const create = (value = input) => fetch(`${base}/api/plan`, { method: 'POST', headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+  const create = (value: EntryInput = input) => fetch(`${base}/api/plan`, { method: 'POST', headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
   return { ...f, base, cookie, read, create, requests };
 }
 

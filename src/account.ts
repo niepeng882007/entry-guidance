@@ -56,6 +56,7 @@ const endpoints = {
   positions: 'https://fapi.binance.com/fapi/v2/positionRisk',
   trades: 'https://fapi.binance.com/fapi/v1/userTrades',
   history: 'https://fapi.binance.com/fapi/v1/allOrders',
+  algoHistory: 'https://fapi.binance.com/fapi/v1/allAlgoOrders',
   income: 'https://fapi.binance.com/fapi/v1/income',
 } as const;
 
@@ -63,11 +64,11 @@ export async function readBinance(config: AccountConfig, operation: keyof typeof
   const url = new URL(endpoints[operation]);
   const isPublic = operation === 'exchange' || operation === 'book' || operation === 'mark' || operation === 'last' || operation === 'time';
   if (symbol !== undefined) {
-    if (!/^[\p{L}\p{N}_]{1,30}USDT$/u.test(symbol) || !['book', 'mark', 'last', 'brackets', 'fee', 'orders', 'algoOrders', 'positions', 'trades', 'history', 'income'].includes(operation)) throw new AccountError('invalid_symbol', '币种参数无效。', 400);
+    if (!/^[\p{L}\p{N}_]{1,30}USDT$/u.test(symbol) || !['book', 'mark', 'last', 'brackets', 'fee', 'orders', 'algoOrders', 'positions', 'trades', 'history', 'algoHistory', 'income'].includes(operation)) throw new AccountError('invalid_symbol', '币种参数无效。', 400);
     url.searchParams.set('symbol', symbol);
   }
   if (period) {
-    if (!symbol || !['trades', 'history', 'income'].includes(operation) || !Number.isSafeInteger(period.startTime) || !Number.isSafeInteger(period.endTime) || period.startTime <= 0 || period.endTime < period.startTime || period.endTime - period.startTime >= 7 * 86_400_000) throw new AccountError('invalid_period', '成交查询区间无效或超过支持范围。', 400);
+    if (!symbol || !['trades', 'history', 'algoHistory', 'income'].includes(operation) || !Number.isSafeInteger(period.startTime) || !Number.isSafeInteger(period.endTime) || period.startTime <= 0 || period.endTime < period.startTime || period.endTime - period.startTime >= 7 * 86_400_000) throw new AccountError('invalid_period', '成交查询区间无效或超过支持范围。', 400);
     url.searchParams.set('startTime', String(period.startTime));
     url.searchParams.set('endTime', String(period.endTime));
     url.searchParams.set('limit', '1000');

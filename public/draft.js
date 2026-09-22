@@ -1,4 +1,4 @@
-/** @typedef {{symbol: string, side: string, budgetMode: string, budget: string, stopMode: string, stop: string, slippage: string, funding: string, entryType?: string, limitPrice?: string}} DraftInput */
+/** @typedef {{symbol: string, side: string, budgetMode: string, budget: string, stopMode: string, stop: string, slippage: string, funding: string, entryType?: string, limitPrice?: string, stopLevels?: string, nearStopMode?: string, nearStop?: string, nearPercent?: string}} DraftInput */
 /** @typedef {DraftInput & {leverage: string, minimumBuffer: string, fundingCap: string}} EntryInput */
 /** @typedef {{minQty: string, maxQty: string, stepSize: string}} LotSize */
 /** @typedef {LotSize & {minPrice: string, maxPrice: string, tickSize: string, minNotional: string, lotSize: LotSize, marketTakeBound: string, limitSupported?: boolean, percentPrice?: {up: string, down: string}}} Rules */
@@ -46,12 +46,35 @@ const min = (...values) => values.reduce((a, b) => a < b ? a : b);
 /** @param {bigint[]} values */
 const max = (...values) => values.reduce((a, b) => a > b ? a : b);
 
+/** @param {LotSize & {lotSize: LotSize}} rules */
+function marketLots(rules) {
+  const lots = [rules, rules.lotSize].map((lot) => ({ min: parseDecimal(lot.minQty, '退出最小数量'), max: parseDecimal(lot.maxQty, '退出最大数量'), step: parseDecimal(lot.stepSize, '退出数量步长') }));
+  const [market, normal] = lots;
+  if (!market || !normal || lots.some((lot) => lot.step <= 0n || lot.max <= 0n || lot.max < lot.min || lot.min % lot.step !== 0n)) throw new Error('数量规则缺失或步长起点不支持，暂停新建议。');
+  let a = market.step, b = normal.step;
+  while (b) [a, b] = [b, a % b];
+  const step = market.step / a * normal.step;
+  return { step, min: ceil(max(market.min, normal.min), step) * step, max: min(market.max, normal.max) };
+}
+
+/** @param {bigint} quantity @param {string} percent @param {LotSize & {lotSize: LotSize}} rules */
+export function splitStopQuantity(quantity, percent, rules) {
+  const ratio = parseDecimal(percent, '近端比例');
+  if (ratio <= 0n || ratio >= PERCENT) throw new Error('双层比例均须为正数，近端比例须小于 100%，剩余比例自动归最终止损。');
+  const lot = marketLots(rules);
+  const near = quantity * ratio / PERCENT / lot.step * lot.step;
+  if (near <= 0n || near < lot.min || near > lot.max || near >= quantity) throw new Error('近端数量取整后为零或不符合退出数量规则，无法生成双层方案；不会增仓或自动改单层。');
+  const actual = near * PERCENT / quantity;
+  return { near, remaining: quantity - near, actualPercent: formatDecimal(actual), finalPercent: formatDecimal(PERCENT - actual) };
+}
+
 /** @param {DraftInput} input @param {Snapshot} snapshot @param {EntryInput} [entryInput] */
 function calculatePlan(input, snapshot, entryInput) {
   if (input.symbol !== snapshot.symbol) throw new Error('币种已变化，请刷新行情。');
   if (!['long', 'short'].includes(input.side)) throw new Error('请选择做多或做空方向。');
   if (!['amount', 'percent'].includes(input.budgetMode)) throw new Error('预算方式无效。');
   if (!['price', 'percent'].includes(input.stopMode)) throw new Error('止损方式无效。');
+  if (!['single', 'two'].includes(input.stopLevels ?? 'single')) throw new Error('请选择单层或双层止损。');
   if (!['MARKET', 'LIMIT'].includes(input.entryType ?? 'MARKET')) throw new Error('请选择市价或限价入场。');
   const limit = input.entryType === 'LIMIT';
   const direction = input.side === 'long' ? 1n : -1n;
@@ -59,15 +82,27 @@ function calculatePlan(input, snapshot, entryInput) {
   const entry = parseDecimal(limit ? input.limitPrice : marketEntry, limit ? '限价委托价' : '入场参考价');
   const mark = parseDecimal(snapshot.mark, '标记价');
   if (entry <= 0n || mark <= 0n) throw new Error('行情价格须为正数，请刷新。');
-  const stopInput = parseDecimal(input.stop, '止损');
-  if (stopInput <= 0n) throw new Error('止损须为正数。');
-  const desiredStop = input.stopMode === 'price' ? stopInput * PERCENT : entry * (PERCENT - direction * stopInput);
-  if (desiredStop <= 0n || direction * (entry * PERCENT - desiredStop) <= 0n) throw new Error('止损须位于入场参考价的不利方向，且价格大于零。');
-  if (direction * (mark * PERCENT - desiredStop) <= 0n) throw new Error('当前标记价已满足止损条件，请刷新行情或修改止损。');
   const tick = parseDecimal(snapshot.rules.tickSize, '价格步长');
   const minPrice = parseDecimal(snapshot.rules.minPrice, '最小价格');
   const maxPrice = parseDecimal(snapshot.rules.maxPrice, '最大价格');
-  if (tick <= 0n || desiredStop < minPrice * PERCENT) throw new Error('止损价格低于合约下限或价格步长不支持。');
+  /** @param {string | undefined} value @param {string | undefined} mode */
+  const stopPrice = (value, mode) => {
+    if (!mode || !['price', 'percent'].includes(mode)) throw new Error('止损方式无效。');
+    const stopInput = parseDecimal(value, '止损');
+    if (stopInput <= 0n) throw new Error('止损须为正数。');
+    const desired = mode === 'price' ? stopInput * PERCENT : entry * (PERCENT - direction * stopInput);
+    if (desired <= 0n || direction * (entry * PERCENT - desired) <= 0n) throw new Error('止损须位于入场参考价的不利方向，且价格大于零。');
+    if (direction * (mark * PERCENT - desired) <= 0n) throw new Error('当前标记价已满足止损条件，请刷新行情或修改止损。');
+    if (tick <= 0n || desired < minPrice * PERCENT) throw new Error('止损价格低于合约下限或价格步长不支持。');
+    const denominator = PERCENT * tick;
+    const rounded = minPrice + (desired - minPrice * PERCENT + (direction === -1n ? denominator - 1n : 0n)) / denominator * tick;
+    if (rounded <= 0n || (maxPrice > 0n && rounded > maxPrice)) throw new Error('取整后止损价格超出合约范围。');
+    if (direction * (mark - rounded) <= 0n) throw new Error('当前标记价已满足取整后的止损条件。');
+    return rounded;
+  };
+  const stop = stopPrice(input.stop, input.stopMode);
+  const nearPrice = input.stopLevels === 'two' ? stopPrice(input.nearStop, input.nearStopMode) : null;
+  if (nearPrice !== null && direction * (nearPrice - stop) <= 0n) throw new Error('双层取整后价格重合或近远顺序错误，近端必须先于最终止损。');
   if (limit) {
     if (snapshot.rules.limitSupported !== true) throw new Error('当前合约未确认支持普通 GTC 限价入场。');
     if (entry < minPrice || (maxPrice > 0n && entry > maxPrice) || (entry - minPrice) % tick !== 0n) throw new Error(`限价委托价不符合价格范围或步长 ${snapshot.rules.tickSize}，请修正；不会自动改价。`);
@@ -77,10 +112,6 @@ function calculatePlan(input, snapshot, entryInput) {
     if (down <= 0n || up < down) throw new Error('限价价格范围规则无效。');
     if (direction === 1n ? entry * SCALE > mark * up : entry * SCALE < mark * down) throw new Error('限价超出当前标记价允许的价格范围，请自行修正后重算。');
   }
-  const tickDenominator = PERCENT * tick;
-  const stop = minPrice + (desiredStop - minPrice * PERCENT + (direction === -1n ? tickDenominator - 1n : 0n)) / tickDenominator * tick;
-  if (stop <= 0n || (maxPrice > 0n && stop > maxPrice)) throw new Error('取整后止损价格超出合约范围。');
-  if (direction * (mark - stop) <= 0n) throw new Error('当前标记价已满足取整后的止损条件。');
   const budgetInput = parseDecimal(input.budget, '亏损预算');
   if (budgetInput <= 0n) throw new Error('亏损预算须大于零。');
   if (input.budgetMode === 'percent' && budgetInput > PERCENT) throw new Error('权益预算比例须大于 0 且不超过 100%。');
@@ -105,16 +136,10 @@ function calculatePlan(input, snapshot, entryInput) {
   const riskQuantity = (budget - funding) * 10n ** 26n / unitLoss;
   const constraints = entryInput ? entryConstraints(entryInput, snapshot, entryEstimate, mark, direction, fee) : null;
   if (constraints && !limit) {
-    const normal = snapshot.rules.lotSize;
-    const normalStep = parseDecimal(normal.stepSize, '普通数量步长');
-    const normalMin = parseDecimal(normal.minQty, '普通最小数量');
-    const normalMax = parseDecimal(normal.maxQty, '普通最大数量');
-    if (normalStep <= 0n || normalMax <= 0n || normalMax < normalMin || minQty % step !== 0n || normalMin % normalStep !== 0n) throw new Error('数量规则缺失或步长起点不支持，暂停新建议。');
-    let a = step, b = normalStep;
-    while (b) [a, b] = [b, a % b];
-    step = step / a * normalStep;
-    minQty = ceil(max(minQty, normalMin), step) * step;
-    maxQty = min(maxQty, normalMax);
+    const combined = marketLots(snapshot.rules);
+    step = combined.step;
+    minQty = combined.min;
+    maxQty = combined.max;
   }
   const allowedQuantity = constraints ? min(riskQuantity, maxQty, constraints.quantityLimit) : min(riskQuantity, maxQty);
   if (allowedQuantity < minQty) throw new Error(`预算${constraints ? '、可用资金或账户档位' : ''}允许数量 ${formatDecimal(allowedQuantity)} ${snapshot.baseAsset} 低于最小开仓数量 ${formatDecimal(minQty)}；请自行调整输入。`);
@@ -124,7 +149,10 @@ function calculatePlan(input, snapshot, entryInput) {
   const loss = quantity * unitLoss + funding * 10n ** 26n;
   if (loss > budget * 10n ** 26n) throw new Error('取整后计划亏损超出预算，无法生成草稿。');
   const checks = constraints ? checkEntry(quantity, stop, entry, entryEstimate, direction, fee, constraints) : null;
+  const split = nearPrice !== null ? splitStopQuantity(quantity, input.nearPercent ?? '', snapshot.rules) : null;
+  const nearStop = nearPrice !== null && split ? { price: formatDecimal(nearPrice), distance: formatDecimal(direction * (entry - nearPrice) * PERCENT / entry), quantity: formatDecimal(split.near), percent: input.nearPercent ?? '', actualPercent: split.actualPercent } : null;
   return { status: 'draft', notice: '草稿 · 资金与强平检查尚未完成，不能作为正式开仓建议。',
+    nearStop, finalQuantity: formatDecimal(split?.remaining ?? quantity), finalPercent: split?.finalPercent ?? '100',
     quantity: formatDecimal(quantity), notional: formatDecimal(quantity * entry, 16),
     stopPrice: formatDecimal(stop), budget: formatDecimal(budget),
     entryEstimate: formatDecimal(entryEstimate, 18), exitEstimate: formatDecimal(exitEstimate, 18),

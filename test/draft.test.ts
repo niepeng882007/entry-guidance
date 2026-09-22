@@ -7,6 +7,54 @@ import { generateDraft, generateEntryPlan } from '../public/draft.js';
 const input = { symbol: 'BTCUSDT', side: 'long', budgetMode: 'amount', budget: '20', stopMode: 'price', stop: '98', slippage: '1', funding: '1' };
 const entryInput = { ...input, leverage: '10', minimumBuffer: '1', fundingCap: '' };
 
+test('two stops size every unit to the final stop before allocating the requested ratio', async (t) => {
+  const app = await start(t);
+  const snapshot = await (await app.read()).json();
+  snapshot.takerRate = '0';
+  snapshot.account.availableBalance = '1000';
+  const parameters = { ...entryInput, stopMode: 'percent', stop: '1.6', slippage: '0', funding: '0', stopLevels: 'two', nearStopMode: 'percent', nearStop: '0.8', nearPercent: '70' };
+  const plan = generateEntryPlan(parameters, snapshot);
+  assert.equal(plan.notional, '1250');
+  assert.equal(plan.quantity, '12.5');
+  assert.equal(plan.plannedLoss, '20');
+  assert.equal(plan.stopPrice, '98.4');
+  assert.equal(plan.nearStop?.price, '99.2');
+  assert.equal(plan.nearStop?.quantity, '8.7');
+  assert.equal(plan.nearStop?.actualPercent, '69.6');
+  assert.equal(plan.finalQuantity, '3.8');
+  assert.equal(plan.finalPercent, '30.4');
+  assert.equal(generateEntryPlan({ ...parameters, nearPercent: '20' }, snapshot).quantity, '12.5');
+  assert.equal(generateEntryPlan({ ...parameters, stopLevels: 'single' }, snapshot).quantity, '12.5');
+});
+
+test('two-stop rounding respects direction, exit lots and rejects invalid allocation without resizing', async (t) => {
+  const app = await start(t);
+  const snapshot = await (await app.read()).json();
+  const parameters = { ...entryInput, stopLevels: 'two', nearStopMode: 'price', nearStop: '99.09', nearPercent: '70' };
+  const long = generateEntryPlan(parameters, snapshot);
+  assert.equal(long.nearStop?.price, '99');
+  assert.equal(long.nearStop?.distance, '1');
+  assert.equal(long.quantity, '0.4');
+  assert.equal(long.nearStop?.quantity, '0.2');
+  const short = generateEntryPlan({ ...parameters, side: 'short', stop: '102.01', nearStop: '100.01' }, snapshot);
+  assert.equal(short.stopPrice, '102.1');
+  assert.equal(short.nearStop?.price, '100.1');
+  const limit = generateEntryPlan({ ...parameters, entryType: 'LIMIT', limitPrice: '100' }, snapshot);
+  assert.equal(limit.quantity, '0.495');
+  assert.equal(limit.nearStop?.quantity, '0.3');
+  assert.equal(limit.finalQuantity, '0.195');
+  for (const patch of [
+    { nearStop: '' }, { nearStop: '98.09' }, { nearStop: '97' }, { nearStop: '100' },
+    { nearPercent: '0' }, { nearPercent: '100' }, { nearPercent: '-1' }, { nearPercent: '0.1' },
+    { nearStopMode: 'invalid' }, { stopLevels: 'invalid' },
+  ]) assert.throws(() => generateEntryPlan({ ...parameters, ...patch }, snapshot));
+  const restrictedExit = { ...snapshot, rules: { ...snapshot.rules, minQty: '0.4' } };
+  assert.throws(() => generateEntryPlan({ ...parameters, entryType: 'LIMIT', limitPrice: '100' }, restrictedExit), /近端数量.*退出数量规则/);
+  // Opening notional is 40, while the valid near exit is only 20; no opening minimum on exits.
+  const highMinimum = { ...snapshot, rules: { ...snapshot.rules, minNotional: '30' } };
+  assert.equal(generateEntryPlan(parameters, highMinimum).nearStop?.quantity, '0.2');
+});
+
 test('limit entry keeps the specified price, uses ordinary lots and reserves taker costs', async (t) => {
   const data = responses();
   const app = await start(t, data);
