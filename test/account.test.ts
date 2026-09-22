@@ -49,6 +49,36 @@ test('anonymous visitors cannot open the account page or read account data', asy
   assert.equal(account.headers.get('cache-control'), 'no-store');
 });
 
+test('workbench navigation has focusable destinations and keeps result states initially hidden', async (t) => {
+  const base = await start(t, { mode: 'demo' });
+  const signedIn = await login(base);
+  const cookie = signedIn.headers.get('set-cookie')!.split(';')[0]!;
+  const page = await (await fetch(base, { headers: { Cookie: cookie } })).text();
+  const ids = Array.from(page.matchAll(/\bid="([^"]+)"/g), (match) => match[1]);
+  assert.equal(new Set(ids).size, ids.length, 'IDs must be unique for focus and render targets');
+  const destinations = Array.from(page.matchAll(/class="module-nav__link" href="#([^"]+)"/g), (match) => match[1]);
+  assert.equal(destinations.length, 6);
+  for (const id of destinations) assert.match(page, new RegExp(`<[^>]+id="${id}"[^>]+tabindex="-1"`));
+  for (const id of ['draft-result', 'entry-checks', 'entry-card', 'verification']) {
+    assert.match(page, new RegExp(`<section[^>]*id="${id}"[^>]*\\bhidden\\b`));
+  }
+  assert.match(page, /尚未生成开仓卡/);
+  assert.match(page, /尚无可核验的方案/);
+  assert.ok(page.indexOf('id="plan-module"') < page.indexOf('id="account-module"'));
+});
+
+test('select enhancement is served as an authenticated JavaScript module', async (t) => {
+  const base = await start(t, { mode: 'demo' });
+  const anonymous = await fetch(`${base}/select.js`, { redirect: 'manual' });
+  assert.equal(anonymous.status, 401);
+  const signedIn = await login(base);
+  const cookie = signedIn.headers.get('set-cookie')!.split(';')[0]!;
+  const module = await fetch(`${base}/select.js`, { headers: { Cookie: cookie } });
+  assert.equal(module.status, 200);
+  assert.match(module.headers.get('content-type')!, /text\/javascript/);
+  assert.match(await module.text(), /export function enhanceSelects/);
+});
+
 test('personal login rejects wrong passwords and allows access until logout', async (t) => {
   const base = await start(t);
   const loginPage = await fetch(`${base}/login`);

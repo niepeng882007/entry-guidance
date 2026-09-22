@@ -205,7 +205,7 @@ async function start(t: TestContext, data = responses(), mode: 'real' | 'demo' =
   const server = createServer({ password: 'test-password-only', mode, apiKey: 'test-key', apiSecret: 'test-secret', transport: async (url, headers) => {
     requests.push(url);
     assert.ok(url.pathname in data, `Unexpected endpoint: ${url.pathname}`);
-    const isPublic = ['/fapi/v1/exchangeInfo', '/fapi/v1/ticker/bookTicker', '/fapi/v1/premiumIndex', '/fapi/v2/ticker/price'].includes(url.pathname);
+    const isPublic = ['/fapi/v1/exchangeInfo', '/fapi/v1/ticker/bookTicker', '/fapi/v1/premiumIndex', '/fapi/v2/ticker/price', '/fapi/v1/time'].includes(url.pathname);
     assert.equal(headers['X-MBX-APIKEY'], isPublic ? undefined : 'test-key');
     assert.equal(url.searchParams.has('signature'), !isPublic);
     return { status: url.pathname.includes('/portfolio/') ? 400 : 200, body: data[url.pathname] };
@@ -235,6 +235,28 @@ test('market snapshot reads the account brackets and last trade needed for entry
   assert.equal(snapshot.rules.lotSize.stepSize, '0.001');
   assert.equal(snapshot.rules.marketTakeBound, '0.30');
   assert.ok(app.requests.some((url) => url.pathname === '/fapi/v1/leverageBracket' && url.searchParams.get('symbol') === 'BTCUSDT'));
+});
+
+test('cross margin is an actionable conflict for both market reads and plan creation', async (t) => {
+  const data = responses();
+  data['/fapi/v2/account'] = { ...(data['/fapi/v2/account'] as object), positions: [{ symbol: '0GUSDT', positionSide: 'BOTH', positionAmt: '0', isolated: false }] };
+  data['/fapi/v1/time'] = { serverTime: Date.now() };
+  const app = await start(t, data);
+  assert.equal((await app.read('/api/account')).status, 200);
+  const market = await app.read('/api/market?symbol=0GUSDT');
+  const plan = await fetch(app.base + '/api/plan', {
+    method: 'POST', headers: { Cookie: app.cookie, Origin: app.base, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...entryInput, symbol: '0GUSDT' }),
+  });
+  for (const response of [market, plan]) {
+    assert.equal(response.status, 409);
+    const failure = await response.json();
+    assert.equal(failure.code, 'unsupported_margin');
+    assert.match(failure.error, /0GUSDT.*全仓.*Binance.*逐仓.*刷新/);
+    assert.equal(failure.account, undefined);
+    assert.equal(failure.rules, undefined);
+    assert.equal(failure.quantity, undefined);
+  }
 });
 
 test('entry plan sizes to available balance including open loss and fees, keeping the stop and leverage', async (t) => {
@@ -486,7 +508,7 @@ test('ineligible accounts, old orders and incomplete data revoke the entire snap
   const account = normal['/fapi/v2/account'] as Record<string, unknown>;
   const cases: [string, unknown, string][] = [
     ['/fapi/v2/account', { ...account, positions: [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0.01', isolated: true }] }, 'existing_position'],
-    ['/fapi/v2/account', { ...account, positions: [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0', isolated: false }] }, 'unsupported_margin'],
+    ...[undefined, null, 'true', 'false', 0, 1].map((isolated): [string, unknown, string] => ['/fapi/v2/account', { ...account, positions: [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0', isolated }] }, 'unsupported_margin']),
     ['/fapi/v2/account', { ...account, positions: [] }, 'unsupported_position'],
     ['/fapi/v1/positionSide/dual', { dualSidePosition: true }, 'unsupported_position'],
     ['/fapi/v1/positionSide/dual', {}, 'unsupported_position'],

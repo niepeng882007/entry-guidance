@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>下拉框浏览器回归检查</title>
+<link rel="stylesheet" href="../public/style.css">
+<main class="page">
+  <h1>下拉框浏览器回归检查</h1>
+  <p>从项目根目录运行 <code>python3 -m http.server 3138 --bind 127.0.0.1</code>，打开 /test/select.browser.html。</p>
+  <form id="fixture">
+    <label class="field-label" for="choice">选择币种</label>
+    <select id="choice" name="choice" class="field-control field-control--select" aria-describedby="help">
+      <option value="">选择币种</option>
+      <option value="btc">BTCUSDT</option>
+      <option value="blocked" disabled>不可选</option>
+      <option value="hidden" hidden>条件不适用</option>
+      <option value="eth">ETHUSDT</option>
+    </select>
+    <p id="help" class="help">保留原生字段和表单事件。</p>
+    <label class="field-label" for="second">其他字段</label>
+    <select id="second" class="field-control field-control--select"><option>A</option><option>B</option></select>
+  </form>
+  <button id="run" class="button">运行检查</button>
+  <pre id="results" role="status"></pre>
+</main>
+<script type="module">
+  import { enhanceSelects } from '../public/select.js';
+  const sync = enhanceSelects();
+  const select = document.getElementById('choice');
+  const trigger = document.getElementById('choice-trigger');
+  const menu = document.getElementById('choice-options');
+  const results = document.getElementById('results');
+  const events = [];
+  for (const type of ['input', 'change']) document.getElementById('fixture').addEventListener(type, (event) => events.push([event.type, event.target]));
+  const key = (value) => trigger.dispatchEvent(new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true }));
+  const assert = (condition, message) => { if (!condition) throw new Error(message); results.textContent += `✓ ${message}\n`; };
+  document.getElementById('run').addEventListener('click', async () => {
+    results.textContent = '';
+    try {
+      select.replaceChildren(...[['选择币种', ''], ['BTCUSDT', 'btc'], ['不可选', 'blocked'], ['条件不适用', 'hidden'], ['ETHUSDT', 'eth']].map(([label, value]) => new Option(label, value)));
+      select.options[2].disabled = true; select.options[3].hidden = true;
+      select.value = ''; select.disabled = false; select.removeAttribute('aria-invalid'); sync(); events.length = 0;
+      await Promise.resolve();
+      assert(trigger.getAttribute('aria-describedby') === 'help', '帮助文本关联保留');
+      assert(document.querySelector('label').htmlFor === trigger.id, '标签关联可见控件');
+      trigger.click();
+      assert(!menu.hidden && menu.children.length === 4, '展开时排除隐藏选项');
+      key('ArrowDown'); key('ArrowDown');
+      assert(document.getElementById(trigger.getAttribute('aria-activedescendant')).textContent === 'ETHUSDT', '方向键跳过禁用项');
+      assert(select.value === '' && events.length === 0, '浏览选项不修改方案');
+      key('Escape');
+      assert(menu.hidden && select.value === '', 'Escape 取消且保留原值');
+      trigger.click(); key('End'); key('Enter');
+      assert(select.value === 'eth' && menu.hidden && document.activeElement === trigger, 'Enter 提交并保留焦点');
+      assert(events.length === 2 && events[0][0] === 'input' && events[1][0] === 'change' && events.every((event) => event[1] === select), '原生字段按顺序发出冒泡 input/change');
+      assert(new FormData(document.getElementById('fixture')).get('choice') === 'eth', '表单提交读取原生字段值');
+      trigger.click(); key('Enter');
+      assert(events.length === 2, '重复选择不触发方案失效');
+      trigger.click(); key('b'); key('Enter');
+      assert(select.value === 'btc', '输入字母定位币种');
+      trigger.click(); key('End'); key('Tab');
+      assert(menu.hidden && select.value === 'btc', 'Tab 关闭且不提交未确认的选择');
+      select.value = 'eth'; sync();
+      assert(trigger.textContent === 'ETHUSDT', '程序恢复字段后同步显示');
+      select.add(new Option('SOLUSDT', 'sol'));
+      await Promise.resolve();
+      trigger.click(); menu.lastElementChild.click();
+      assert(select.value === 'sol', '动态新增选项可选择');
+      select.setAttribute('aria-invalid', 'true');
+      await Promise.resolve();
+      assert(trigger.getAttribute('aria-invalid') === 'true', '错误状态同步');
+      trigger.click(); select.disabled = true;
+      await Promise.resolve();
+      assert(trigger.disabled && menu.hidden, '字段禁用时关闭面板并禁用触发器');
+      select.disabled = false; await Promise.resolve();
+      trigger.click(); document.getElementById('second-trigger').click();
+      assert(menu.hidden && !document.getElementById('second-options').hidden, '一次只展开一个下拉框');
+      document.getElementById('second-trigger').click();
+      select.replaceChildren(new Option('恢复的模板', 'restored')); select.value = 'restored';
+      await Promise.resolve();
+      assert(trigger.textContent === '恢复的模板', '模板替换与程序选值同步');
+      select.focus();
+      assert(document.activeElement === trigger, '原生字段的程序焦点转交可见控件');
+      results.textContent += '\n全部通过';
+    } catch (error) { results.textContent += `\n失败：${error.message}`; throw error; }
+  });
+</script>
+</html>

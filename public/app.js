@@ -1,4 +1,7 @@
 import { generateDraft, generateEntryPlan, formatDecimal, parseDecimal, createStopTemplate, applyStopTemplate } from './draft.js';
+import { enhanceSelects } from './select.js';
+
+const syncSelects = enhanceSelects();
 
 /** @param {string} id */
 function element(id) {
@@ -130,6 +133,10 @@ function cancelQuery(reason) {
   pending?.abort();
   pending = undefined;
   generating = false;
+  generate.removeAttribute('aria-busy');
+  verify.removeAttribute('aria-busy');
+  show('generate', '刷新并生成开仓卡');
+  show('verify', '返回后刷新核验');
   if (refresh instanceof HTMLButtonElement) refresh.disabled = false;
   if (generate instanceof HTMLButtonElement) generate.disabled = !navigator.onLine;
   invalidateCard(reason);
@@ -269,6 +276,7 @@ function invalidateCard(reason) {
 function invalidateVerification(reason) {
   if (!entryPlan) return;
   element('verification').dataset.current = 'false';
+  element('verification').dataset.state = 'pending';
   show('verification-status', `${entryPlan.source === 'demo' ? '模拟数据 · ' : ''}待核验 · ${reason}。原方案与上次时间保留。`);
   element('verification-details').hidden = true;
   element('verification-issues').replaceChildren();
@@ -294,6 +302,7 @@ function renderVerification(result, plan) {
   show('verification-status', `${result.source === 'demo' ? '模拟数据 · ' : ''}${states[result.status]}`);
   show('verification-time', `完整查询时间 ${time(result.queriedAt)}；只代表此时点。`);
   element('verification').dataset.current = result.status === 'verified' ? 'true' : 'false';
+  element('verification').dataset.state = result.status;
   const items = result.issues.map((issue) => { const li = document.createElement('li'); li.textContent = issue; return li; });
   element('verification-issues').replaceChildren(...items);
   /** @type {Record<string, string>} */
@@ -328,6 +337,8 @@ async function verifyCurrentPlan() {
   invalidateCard('正在查询成交后的实际状态');
   renderDraft();
   verify.disabled = refresh.disabled = generate.disabled = true;
+  verify.setAttribute('aria-busy', 'true');
+  show('verify', '正在刷新核验…');
   show('status', '正在重新核验');
   show('message', '保留原方案与上次查询时间，等待本次完整数据。');
   if (statusBox) statusBox.dataset.state = 'loading';
@@ -341,6 +352,7 @@ async function verifyCurrentPlan() {
     const selectedScenario = field('demo-scenario').value;
     renderCard();
     field('demo-scenario').value = selectedScenario;
+    syncSelects();
     invalidateCard('原方案已确认，正在重新查询');
     verify.disabled = true;
     if (JSON.stringify(readInput()) !== planInputs) throw new Error('输入与原方案不一致，请恢复原输入后核验。');
@@ -360,6 +372,7 @@ async function verifyCurrentPlan() {
     if (id !== requestId || version !== inputVersion) return;
     showLogin(error);
     invalidateVerification('本次查询失败，上次结果已失效');
+    element('verification').dataset.state = 'incomplete';
     show('card-status', `原方案 · 本次核验查询失败；生成时间 ${time(plan.queriedAt)}。原参数保留，复制已停用。`);
     show('verification-status', `${plan.source === 'demo' ? '模拟数据 · ' : ''}无法完整核验 · ${message(error)}`);
     show('verification-time', `${lastQueryAt ? '上次完整查询 ' + time(lastQueryAt) + '（已过期）' : '尚无完整查询'}；本次尝试 ${time(new Date().toISOString())}。`);
@@ -367,12 +380,20 @@ async function verifyCurrentPlan() {
     show('message', message(error));
     if (statusBox) statusBox.dataset.state = 'error';
   } finally {
-    if (id === requestId) { pending = undefined; refresh.disabled = false; generate.disabled = !navigator.onLine; verify.disabled = JSON.stringify(readInput()) !== planInputs; }
+    if (id === requestId) {
+      pending = undefined;
+      refresh.disabled = false;
+      generate.disabled = !navigator.onLine;
+      verify.disabled = JSON.stringify(readInput()) !== planInputs;
+      verify.removeAttribute('aria-busy');
+      show('verify', '返回后刷新核验');
+    }
   }
 }
 
 function renderDraft() {
   renderTemplatePreview();
+  element('draft-error').dataset.state = snapshot ? 'error' : 'pending';
   const limit = field('entry-type').value === 'LIMIT';
   const two = field('stop-levels').value === 'two';
   for (const row of document.querySelectorAll('[data-two-input]')) if (row instanceof HTMLElement) row.hidden = !two;
@@ -385,6 +406,7 @@ function renderDraft() {
   element('limit-field').hidden = !limit;
   field('limit-price').disabled = !limit;
   field('limit-price').required = limit;
+  syncSelects();
   element('draft-result').hidden = true;
   element('entry-checks').hidden = true;
   show('entry-error', '');
@@ -457,6 +479,8 @@ function renderCard() {
   element('entry-card').dataset.current = 'true';
   element('entry-card').hidden = false;
   element('verification').hidden = false;
+  element('verification').dataset.current = 'false';
+  element('verification').dataset.state = 'pending';
   element('demo-verification').hidden = plan.source !== 'demo';
   element('verification-details').hidden = true;
   element('verification-issues').replaceChildren();
@@ -467,6 +491,7 @@ function renderCard() {
   element('draft-result').hidden = true;
   element('entry-checks').hidden = true;
   for (const button of document.querySelectorAll('[data-copy]')) if (button instanceof HTMLButtonElement) button.disabled = false;
+  syncSelects();
 }
 
 async function generateCard() {
@@ -477,6 +502,11 @@ async function generateCard() {
   pending = new AbortController();
   generating = true;
   generate.disabled = true;
+  generate.setAttribute('aria-busy', 'true');
+  show('generate', '正在刷新并生成…');
+  show('status', '正在生成开仓卡');
+  show('message', '正在刷新账户、行情及规则，请等待本次完整结果。');
+  if (statusBox) statusBox.dataset.state = 'loading';
   invalidateCard('正在重新生成方案');
   if (refresh instanceof HTMLButtonElement) refresh.disabled = true;
   snapshot = null;
@@ -497,7 +527,8 @@ async function generateCard() {
     show('message', '本单预算与止损已固定；到 Binance 手动执行后，返回刷新核验。');
     show('attempted', time(plan.queriedAt));
     if (statusBox) statusBox.dataset.state = 'success';
-    element('entry-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    element('entry-card').focus({ preventScroll: true });
+    element('entry-card').scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });
     show('entry-error', '');
   } catch (error) {
     if (id === requestId) {
@@ -512,6 +543,8 @@ async function generateCard() {
     if (id === requestId) {
       pending = undefined;
       generating = false;
+      generate.removeAttribute('aria-busy');
+      show('generate', '刷新并生成开仓卡');
       generate.disabled = !navigator.onLine;
       if (refresh instanceof HTMLButtonElement) refresh.disabled = false;
       if (verify instanceof HTMLButtonElement) verify.disabled = !entryPlan || JSON.stringify(readInput()) !== planInputs;
@@ -524,7 +557,7 @@ async function read(path, signal, options = {}) {
   const response = await fetch(path, { ...options, cache: 'no-store', signal });
   if (response.status === 401) throw new LoginRequired('登录已过期，请重新登录后继续本单。');
   const data = await response.json();
-  if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : '查询失败，请重试。');
+  if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : '查询失败，请重试。', { cause: response.status === 409 ? data.code : undefined });
   return data;
 }
 
@@ -546,6 +579,7 @@ async function load() {
   const signal = AbortSignal.any([pending.signal, AbortSignal.timeout(15_000)]);
   snapshot = null;
   invalidateCard('数据正在刷新，原卡不代表当前状态');
+  element('account-only').hidden = true;
   element('market-details').hidden = true;
   show('fee', '等待账户查询');
   renderDraft();
@@ -593,10 +627,13 @@ async function load() {
     showLogin(error);
     snapshot = null;
     renderDraft();
-    show('status', hasAccount ? '需处理 · 下方账户快照已过期' : '需处理 · 查询未成功');
-    show('message', message(error));
+    const marginConflict = error instanceof Error && error.cause === 'unsupported_margin';
+    show('status', marginConflict ? '该币种暂不能开仓 · 需设置逐仓' : hasAccount ? '需处理 · 下方账户快照已过期' : '需处理 · 查询未成功');
+    show('message', message(error) + (marginConflict && hasAccount ? ' 下方保留的是上次账户快照，可单独刷新账户。' : ''));
+    element('account-only').hidden = !marginConflict;
     show('draft-error', message(error));
-    show('entry-error', '关键数据查询失败，暂停生成新开仓卡。');
+    element('draft-error').dataset.state = 'error';
+    show('entry-error', marginConflict ? '请先处理该币种的保证金模式，再刷新生成开仓卡。' : '关键数据查询失败，暂停生成新开仓卡。');
     invalidateCard('数据已过期，关键查询失败');
     show('attempted', time(new Date().toISOString()));
     statusBox.dataset.state = 'error';
@@ -610,6 +647,13 @@ async function load() {
 }
 
 form.addEventListener('submit', (event) => { event.preventDefault(); renderDraft(); });
+element('account-only').addEventListener('click', () => {
+  symbol.value = '';
+  symbol.dispatchEvent(new Event('input', { bubbles: true }));
+  symbol.dispatchEvent(new Event('change', { bubbles: true }));
+  syncSelects();
+  symbol.focus();
+});
 form.addEventListener('input', (event) => { if (event.target !== field('stop-template')) inputChanged('输入已修改'); });
 symbol.addEventListener('change', () => {
   if (field('stop-mode').value === 'price') field('stop').value = '';
@@ -679,6 +723,23 @@ element('clear-trade').addEventListener('click', () => {
   void load();
 });
 restoreTrade();
+// Native anchors remain usable without JS; open a collapsed destination before navigation.
+const moduleLinks = Array.from(document.querySelectorAll('.module-nav__link'));
+const modules = moduleLinks.map((link) => document.getElementById(link.getAttribute('href')?.slice(1) ?? '')).filter((target) => target instanceof HTMLElement);
+for (const link of document.querySelectorAll('a[href^="#"]')) link.addEventListener('click', () => {
+  const target = document.getElementById(link.getAttribute('href')?.slice(1) ?? '');
+  if (target instanceof HTMLDetailsElement) target.open = true;
+});
+const moduleObserver = new IntersectionObserver(() => {
+  const offset = window.innerWidth <= 960 && window.innerHeight > 480 ? 140 : 40;
+  const passed = modules.filter((target) => target.getBoundingClientRect().top <= offset);
+  const current = passed.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0] ?? document.getElementById('plan-module');
+  for (const link of moduleLinks) {
+    if (link.getAttribute('href') === `#${current?.id}`) link.setAttribute('aria-current', 'location');
+    else link.removeAttribute('aria-current');
+  }
+}, { rootMargin: '-120px 0px -55% 0px', threshold: [0, 1] });
+for (const target of modules) moduleObserver.observe(target);
 const costs = element('cost-settings');
 if (costs instanceof HTMLDetailsElement) costs.open = !field('slippage').value || !field('minimum-buffer').value;
 loadTemplates();

@@ -1,0 +1,55 @@
+{
+  "date": "2026-09-22",
+  "framework": "native HTML/CSS/JavaScript",
+  "font": "existing system CJK stack; local monospace for balances",
+  "palette": "shared monochrome login/workbench; semantic colour for errors, warnings and verification",
+  "motion": "CSS only; no dependency",
+  "spacing": "existing --space-* tokens",
+  "constraints": [
+    "single public/style.css entry",
+    "preserve all calculation/state contracts; native select data with custom combobox presentation"
+  ],
+  "validation": {
+    "typecheck": "pass",
+    "tests": "178 passed (including concurrent margin-mode changes)",
+    "viewports": [
+      320,
+      375,
+      390,
+      414,
+      768,
+      1280
+    ],
+    "browser": "Chromium, isolated local demo; no real account access",
+    "checks": [
+      "no horizontal overflow or clipped buttons",
+      "plan and result navigation; Enter/Tab and visible focus",
+      "empty draft and ungenerated result states",
+      "single-level market and two-level limit plans",
+      "copy limit price 100",
+      "verified, query failure, stale card and disabled copy",
+      "320x330 keyboard-space simulation",
+      "reduced-motion JavaScript branch via matchMedia stub; CSS fallback inspected",
+      "login components unified with the workbench",
+      "select browser harness: 19 assertions; dynamic options, value restoration, input/change ordering, keyboard and disabled states",
+      "select menus: long options wrap and scroll within a 320px viewport; saved-template application synchronizes visible controls"
+    ],
+    "not_tested": [
+      "physical iOS keyboard and app switching",
+      "real Binance account"
+    ],
+    "design_review": {
+      "philosophy": 5,
+      "hierarchy": 4,
+      "execution": 4,
+      "specificity": 5,
+      "restraint": 5,
+      "variety": 4,
+      "exceptions": [
+        "project system fonts retained",
+        "project single stylesheet retained instead of tokens.css",
+        "marketing-only gates not applicable"
+      ]
+    }
+  }
+}

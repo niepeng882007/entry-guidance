@@ -142,7 +142,8 @@ export async function readAccount(config: AccountConfig, symbol?: string, signal
       const positions = account.positions.map(object).filter((position) => position.symbol === symbol);
       if (positions.length !== 1 || positions[0]!.positionSide !== 'BOTH') throw new AccountError('unsupported_position', '无法确认目标币种为单向持仓，请在 Binance 检查后刷新。');
       if (decimal(positions[0]!.positionAmt) !== 0n) throw new AccountError('existing_position', '目标币种已有仓位，请先在 Binance 处理后刷新；本工具不支持加仓。');
-      if (positions[0]!.isolated !== true) throw new AccountError('unsupported_margin', '目标币种未确认逐仓模式，请在 Binance 设置逐仓后刷新。');
+      if (positions[0]!.isolated === false) throw new AccountError('unsupported_margin', `${symbol} 当前为全仓模式，本工具仅支持逐仓开仓方案。请在 Binance 将该合约切换为逐仓后刷新，或选择其他币种。`, 409);
+      if (positions[0]!.isolated !== true) throw new AccountError('unsupported_margin', `${symbol} 的保证金模式数据缺失或无效，无法确认逐仓，请刷新后重试。`);
     }
     return { source: 'binance' as const, queriedAt: new Date().toISOString(), walletBalance: format(wallet), unrealizedProfit: format(pnl), equity: format(wallet + pnl), availableBalance: format(available) };
   } catch (error) {

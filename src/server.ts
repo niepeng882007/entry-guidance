@@ -30,6 +30,7 @@ export function createServer(config: Config) {
   const style = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   const script = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const draftScript = readFileSync(new URL('../public/draft.js', import.meta.url), 'utf8');
+  const selectScript = readFileSync(new URL('../public/select.js', import.meta.url), 'utf8');
   const sessions = new Map<string, { expiresAt: number; generation: number; plans: Map<string, Plan> }>();
   // ponytail: 单人应用共用登录限流；扩展多用户时改为分用户限流。
   let attempts = 0;
@@ -146,6 +147,7 @@ export function createServer(config: Config) {
     if (path === '/') return html(200, accountPage.replace('{{source}}', config.mode === 'demo' ? '模拟数据 · 仅用于界面与流程验证' : '真实模式 · 数据由 Binance 只读接口查询'));
     if (path === '/app.js') return res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }).end(script);
     if (path === '/draft.js') return res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }).end(draftScript);
+    if (path === '/select.js') return res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }).end(selectScript);
     if (path === '/api/symbols') {
       try { return send(200, await readSymbols(config)); }
       catch (error) {

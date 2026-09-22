@@ -1,0 +1,16 @@
+[
+  {
+    "date": "2026-09-22",
+    "macrostructure": "Workbench",
+    "theme": "monochrome (user selected)",
+    "nav": "N3 Side-rail",
+    "footer": "Ft2 Inline-rule",
+    "enrichment": "none",
+    "brief": "根页面：计划优先、同页定位、黑白灰高频工作台",
+    "theme_axes": "light / system-sans / neutral",
+    "project_overrides": [
+      "single stylesheet; no tokens.css",
+      "preserve local system font stack"
+    ]
+  }
+]
