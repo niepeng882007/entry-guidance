@@ -53,6 +53,9 @@ summary { cursor: pointer; padding: 12px 0; min-height: 48px; font-size: 14px; f
 label span { color: #5c6b66; }
 .settings { border-top: 1px solid #cdd7ce; border-bottom: 1px solid #cdd7ce; padding-bottom: 8px; }
 .settings .muted, .fee-line { font-size: 13px; }
+#templates-heading { margin-top: 20px; }
+#template-save { width: 100%; margin-bottom: 20px; }
+.template-actions { margin-top: 12px; }
 .help { color: #5c6b66; font-size: 12px; margin: 6px 0 12px; overflow-wrap: anywhere; }
 .draft-result { margin-top: 24px; border-top: 2px solid #326454; padding: 24px 0 0; }
 .draft-result .amount { margin: 4px 0 24px; }

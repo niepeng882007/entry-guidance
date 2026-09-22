@@ -2,11 +2,34 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { test, type TestContext } from 'node:test';
 import { createServer } from '../src/server.ts';
-import type { EntryInput } from '../public/draft.js';
+import { createStopTemplate, applyStopTemplate, type EntryInput } from '../public/draft.js';
 
 const input = { symbol: 'BTCUSDT', side: 'long', budgetMode: 'amount', budget: '20', stopMode: 'price', stop: '98', slippage: '1', funding: '1', leverage: '10', minimumBuffer: '1', fundingCap: '5' };
 const limitInput = { ...input, entryType: 'LIMIT', limitPrice: '100' };
 const twoInput = { ...input, stopLevels: 'two', nearStopMode: 'price', nearStop: '99', nearPercent: '70' };
+
+test('a reused stop template generates through fresh quotes, account and rules while preserving this trade constraints', async (t) => {
+  const app = await start(t);
+  const snapshot = await (await app.read('/api/market?symbol=BTCUSDT')).json();
+  const template = createStopTemplate(input, snapshot);
+  const applied = applyStopTemplate(input, template);
+  app.data['/fapi/v1/ticker/bookTicker'] = { symbol: 'BTCUSDT', bidPrice: '199', askPrice: '200', time: app.now };
+  app.data['/fapi/v1/premiumIndex'] = { symbol: 'BTCUSDT', markPrice: '200', time: app.now };
+  app.data['/fapi/v2/ticker/price'] = { symbol: 'BTCUSDT', price: '200', time: app.now };
+  const response = await app.create(applied);
+  assert.equal(response.status, 200);
+  const plan = await response.json();
+  assert.equal(plan.stopPrice, '196');
+  assert.equal(plan.referencePrice, '200');
+  assert.equal(plan.budget, '20');
+  assert.equal(plan.leverage, '10');
+  assert.equal(plan.fundingLimit, '5');
+  app.data['/fapi/v1/exchangeInfo'] = { symbols: [] };
+  assert.equal((await app.create(applied)).status, 502);
+  app.data['/fapi/v1/exchangeInfo'] = fixture().data['/fapi/v1/exchangeInfo'];
+  app.position.positionAmt = '0.2';
+  assert.equal((await app.create(applied)).status, 502);
+});
 
 test('demo exposes final-only, both stops, near-filled remainder and attribution failure through the same verifier', async (t) => {
   const app = await start(t, fixture(), 'demo');

@@ -1,5 +1,6 @@
 /** @typedef {{symbol: string, side: string, budgetMode: string, budget: string, stopMode: string, stop: string, slippage: string, funding: string, entryType?: string, limitPrice?: string, stopLevels?: string, nearStopMode?: string, nearStop?: string, nearPercent?: string}} DraftInput */
 /** @typedef {DraftInput & {leverage: string, minimumBuffer: string, fundingCap: string}} EntryInput */
+/** @typedef {{stopLevels: 'single', stop: string} | {stopLevels: 'two', stop: string, nearStop: string, nearPercent: string}} StopTemplate */
 /** @typedef {{minQty: string, maxQty: string, stepSize: string}} LotSize */
 /** @typedef {LotSize & {minPrice: string, maxPrice: string, tickSize: string, minNotional: string, lotSize: LotSize, marketTakeBound: string, limitSupported?: boolean, percentPrice?: {up: string, down: string}}} Rules */
 /** @typedef {{maxLeverage: number, floor: string, cap: string, maintenanceRate: string, cum: string}} Bracket */
@@ -19,6 +20,62 @@ export function parseDecimal(value, label) {
 export function formatDecimal(value, places = 8) {
   const digits = (value < 0n ? -value : value).toString().padStart(places + 1, '0');
   return `${value < 0n ? '-' : ''}${digits.slice(0, -places)}.${digits.slice(-places)}`.replace(/\.?0+$/, '') || '0';
+}
+
+/** @param {DraftInput} input @param {Pick<Snapshot, 'symbol' | 'ask' | 'bid'> | null} snapshot */
+function entryReference(input, snapshot) {
+  if (!['long', 'short'].includes(input.side)) throw new Error('请选择做多或做空方向。');
+  if (!['MARKET', 'LIMIT'].includes(input.entryType ?? 'MARKET')) throw new Error('请选择市价或限价入场。');
+  if (input.entryType !== 'LIMIT' && (!snapshot || input.symbol !== snapshot.symbol)) throw new Error('请刷新当前币种行情后换算止损百分比。');
+  const label = input.entryType === 'LIMIT' ? '限价委托价' : '入场参考价';
+  const entry = parseDecimal(input.entryType === 'LIMIT' ? input.limitPrice : input.side === 'long' ? snapshot?.ask : snapshot?.bid, label);
+  if (entry <= 0n) throw new Error(`${label}须为正数。`);
+  return entry;
+}
+
+/** @param {unknown} value @returns {StopTemplate} */
+function validateStopTemplate(value) {
+  if (!value || typeof value !== 'object' || !('stopLevels' in value) || !('stop' in value)) throw new Error('模板缺少止损层数或最终百分比。');
+  if (value.stopLevels !== 'single' && value.stopLevels !== 'two') throw new Error('模板层数须为单层或双层。');
+  const keys = value.stopLevels === 'two' ? ['stopLevels', 'stop', 'nearStop', 'nearPercent'] : ['stopLevels', 'stop'];
+  if (Object.keys(value).some((key) => !keys.includes(key))) throw new Error('模板含有非止损字段，请删除后重新保存。');
+  const stop = parseDecimal(value.stop, '模板最终止损百分比');
+  if (stop <= 0n) throw new Error('模板最终止损百分比须大于零。');
+  if (value.stopLevels === 'single') return { stopLevels: 'single', stop: formatDecimal(stop) };
+  if (!('nearStop' in value) || !('nearPercent' in value)) throw new Error('双层模板缺少近端距离或分配比例。');
+  const near = parseDecimal(value.nearStop, '模板近端止损百分比');
+  const ratio = parseDecimal(value.nearPercent, '模板近端分配比例');
+  if (near <= 0n || near >= stop) throw new Error('模板近端距离须大于零且小于最终止损距离。');
+  if (ratio <= 0n || ratio >= PERCENT) throw new Error('模板近端分配比例须大于 0 且小于 100%。');
+  return { stopLevels: 'two', stop: formatDecimal(stop), nearStop: formatDecimal(near), nearPercent: formatDecimal(ratio) };
+}
+
+/** @param {DraftInput} input @param {Pick<Snapshot, 'symbol' | 'ask' | 'bid'> | null} snapshot */
+export function createStopTemplate(input, snapshot) {
+  /** @param {string | undefined} value @param {string | undefined} mode */
+  const distance = (value, mode) => {
+    if (mode !== 'percent' && mode !== 'price') throw new Error('止损方式无效。');
+    const stop = parseDecimal(value, '止损');
+    if (stop <= 0n) throw new Error('止损须为正数。');
+    if (mode === 'percent') return formatDecimal(stop);
+    const entry = entryReference(input, snapshot);
+    const difference = (input.side === 'long' ? 1n : -1n) * (entry - stop);
+    if (difference <= 0n) throw new Error('绝对止损须位于入场参考价的不利方向。');
+    const percent = difference * PERCENT / entry;
+    if (percent <= 0n) throw new Error('止损距离小于模板的 0.00000001% 精度，请手动填写百分比。');
+    return formatDecimal(percent);
+  };
+  return validateStopTemplate({ stopLevels: input.stopLevels ?? 'single', stop: distance(input.stop, input.stopMode),
+    ...(input.stopLevels === 'two' ? { nearStop: distance(input.nearStop, input.nearStopMode), nearPercent: input.nearPercent } : {}),
+  });
+}
+
+/** @param {EntryInput} input @param {unknown} template */
+export function applyStopTemplate(input, template) {
+  const value = validateStopTemplate(template);
+  return { ...input, stopLevels: value.stopLevels, stopMode: 'percent', stop: value.stop,
+    nearStopMode: value.stopLevels === 'two' ? 'percent' : '', nearStop: value.stopLevels === 'two' ? value.nearStop : '', nearPercent: value.stopLevels === 'two' ? value.nearPercent : '',
+  };
 }
 
 /** @param {DraftInput} input @param {Snapshot} snapshot */
@@ -78,8 +135,7 @@ function calculatePlan(input, snapshot, entryInput) {
   if (!['MARKET', 'LIMIT'].includes(input.entryType ?? 'MARKET')) throw new Error('请选择市价或限价入场。');
   const limit = input.entryType === 'LIMIT';
   const direction = input.side === 'long' ? 1n : -1n;
-  const marketEntry = input.side === 'long' ? snapshot.ask : snapshot.bid;
-  const entry = parseDecimal(limit ? input.limitPrice : marketEntry, limit ? '限价委托价' : '入场参考价');
+  const entry = entryReference(input, snapshot);
   const mark = parseDecimal(snapshot.mark, '标记价');
   if (entry <= 0n || mark <= 0n) throw new Error('行情价格须为正数，请刷新。');
   const tick = parseDecimal(snapshot.rules.tickSize, '价格步长');

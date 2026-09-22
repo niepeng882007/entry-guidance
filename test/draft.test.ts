@@ -2,10 +2,69 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { test, type TestContext } from 'node:test';
 import { createServer } from '../src/server.ts';
-import { generateDraft, generateEntryPlan } from '../public/draft.js';
+import { generateDraft, generateEntryPlan, createStopTemplate, applyStopTemplate } from '../public/draft.js';
 
 const input = { symbol: 'BTCUSDT', side: 'long', budgetMode: 'amount', budget: '20', stopMode: 'price', stop: '98', slippage: '1', funding: '1' };
 const entryInput = { ...input, leverage: '10', minimumBuffer: '1', fundingCap: '' };
+
+test('stop template preserves input distances and reuses current-symbol rounding without changing trade constraints', async (t) => {
+  const app = await start(t);
+  const snapshot = await (await app.read()).json();
+  const template = createStopTemplate({ ...entryInput, budget: '', stop: '98.09', stopLevels: 'two', nearStopMode: 'price', nearStop: '99.09', nearPercent: '70' }, snapshot);
+  assert.deepEqual(template, { stopLevels: 'two', stop: '1.91', nearStop: '0.91', nearPercent: '70' });
+  const target = { ...snapshot, symbol: 'ETHUSDT', baseAsset: 'ETH', ask: '20', bid: '20', mark: '20', last: '20' };
+  for (const side of ['long', 'short']) {
+    const current = { ...entryInput, symbol: 'ETHUSDT', side, fundingCap: '5' };
+    const applied = applyStopTemplate(current, template);
+    assert.equal(applied.budget, '20');
+    assert.equal(applied.leverage, '10');
+    assert.equal(applied.fundingCap, '5');
+    assert.equal(current.stop, '98');
+    const plan = generateEntryPlan(applied, target);
+    assert.equal(plan.stopPrice, side === 'long' ? '19.6' : '20.4');
+    assert.equal(plan.nearStop?.price, side === 'long' ? '19.8' : '20.2');
+    assert.equal(plan.nearStop?.actualPercent, '66.66666666');
+    assert.equal(plan.budget, '20');
+    assert.equal(plan.fundingLimit, '5');
+  }
+});
+
+test('stop templates save without funding checks, use bid or limit references, and single-level application clears the near stop', async (t) => {
+  const app = await start(t);
+  const snapshot = await (await app.read()).json();
+  const percent = createStopTemplate({ ...input, budget: '', stopMode: 'percent', stop: '02.00' }, null);
+  assert.deepEqual(percent, { stopLevels: 'single', stop: '2' });
+  assert.deepEqual(createStopTemplate({ ...input, side: 'short', stop: '100.98' }, snapshot), percent); // Bid 99, not ask 100.
+  assert.deepEqual(createStopTemplate({ ...input, entryType: 'LIMIT', limitPrice: '50', stop: '49' }, null), percent);
+  const applied = applyStopTemplate({ ...entryInput, stopLevels: 'two', nearStopMode: 'price', nearStop: '99', nearPercent: '70' }, percent);
+  assert.equal(applied.nearStop, '');
+  const plan = generateEntryPlan(applied, snapshot);
+  assert.equal(plan.nearStop, null);
+  assert.equal(plan.finalPercent, '100');
+  assert.equal(plan.stopPrice, '98');
+  assert.throws(() => generateEntryPlan({ ...applied, leverage: '50' }, snapshot), /先强平/);
+  assert.throws(() => generateEntryPlan({ ...applied, fundingCap: '1' }, snapshot), /最小/);
+});
+
+test('stop template rejects corrupt values before touching inputs and still rejects invalid target-symbol rounding', async (t) => {
+  const app = await start(t);
+  const snapshot = await (await app.read()).json();
+  for (const template of [
+    null, [], {}, { stopLevels: 'three', stop: '2' }, { stopLevels: 'single', stop: 2 },
+    { stopLevels: 'single', stop: 'NaN' }, { stopLevels: 'single', stop: '0' }, { stopLevels: 'single', stop: '-1' },
+    { stopLevels: 'single', stop: '2.000000001' }, { stopLevels: 'single', stop: '2', budget: '100' },
+    { stopLevels: 'two', stop: '2' }, { stopLevels: 'two', stop: '2', nearStop: '3', nearPercent: '70' },
+    { stopLevels: 'two', stop: '2', nearStop: '1', nearPercent: '100' },
+  ]) assert.throws(() => applyStopTemplate(entryInput, template), /模板|百分比|比例/);
+  assert.equal(entryInput.stop, '98');
+  assert.throws(() => createStopTemplate(input, null), /刷新/);
+  assert.throws(() => createStopTemplate({ ...input, symbol: 'ETHUSDT' }, snapshot), /刷新/);
+  assert.throws(() => createStopTemplate({ ...input, stop: '101' }, snapshot), /不利方向/);
+  assert.throws(() => createStopTemplate({ ...input, stop: '99999999.99999999' }, { ...snapshot, ask: '100000000' }), /精度/);
+  const applied = applyStopTemplate(entryInput, { stopLevels: 'two', stop: '2', nearStop: '1.99', nearPercent: '70' });
+  assert.throws(() => generateEntryPlan(applied, snapshot), /取整后价格重合/);
+  assert.throws(() => generateEntryPlan(applyStopTemplate(entryInput, { stopLevels: 'two', stop: '2', nearStop: '1', nearPercent: '0.1' }), snapshot), /近端数量取整后/);
+});
 
 test('two stops size every unit to the final stop before allocating the requested ratio', async (t) => {
   const app = await start(t);

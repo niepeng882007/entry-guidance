@@ -1,4 +1,4 @@
-import { generateDraft, generateEntryPlan, formatDecimal, parseDecimal } from './draft.js';
+import { generateDraft, generateEntryPlan, formatDecimal, parseDecimal, createStopTemplate, applyStopTemplate } from './draft.js';
 
 /** @param {string} id */
 function element(id) {
@@ -23,6 +23,10 @@ const form = element('draft-form');
 const symbol = field('symbol');
 const settingIds = ['symbol', 'side', 'entry-type', 'budget-mode', 'budget', 'stop-mode', 'stop-levels', 'near-stop-mode', 'near-percent', 'slippage', 'funding', 'leverage', 'minimum-buffer'];
 const storageKey = 'entry-guidance.preferences.v1';
+const templateKey = 'entry-guidance.stop-templates.v1';
+/** @type {unknown[]} */
+let templates = [];
+let templateReadError = '';
 let hasAccount = false;
 let requestId = 0;
 /** @type {AbortController | undefined} */
@@ -54,6 +58,115 @@ function readInput() {
   const two = field('stop-levels').value === 'two';
   return { symbol: symbol.value, side: field('side').value, entryType: field('entry-type').value, limitPrice: field('entry-type').value === 'LIMIT' ? field('limit-price').value.trim() : '', budgetMode: field('budget-mode').value, budget: field('budget').value.trim(), stopMode: field('stop-mode').value, stop: field('stop').value.trim(), stopLevels: field('stop-levels').value, nearStopMode: two ? field('near-stop-mode').value : '', nearStop: two ? field('near-stop').value.trim() : '', nearPercent: two ? field('near-percent').value.trim() : '', slippage: field('slippage').value.trim(), funding: field('funding').value.trim(), leverage: field('leverage').value.trim(), minimumBuffer: field('minimum-buffer').value.trim(), fundingCap: field('funding-cap').value.trim() };
 }
+
+/** @param {unknown} value */
+function templateLabel(value) {
+  const input = applyStopTemplate(readInput(), value);
+  return input.stopLevels === 'two' ? `双层 · ${input.nearStop}% / ${input.stop}% · ${input.nearPercent}/${formatDecimal(10_000_000_000n - parseDecimal(input.nearPercent, '近端比例'))}` : `单层 · ${input.stop}% · 全部退出`;
+}
+
+function templateReference() {
+  if (snapshot) return snapshot;
+  const input = readInput();
+  if (!entryPlan || input.symbol !== entryPlan.symbol || input.side !== entryPlan.side || input.entryType !== entryPlan.execution.entryType) return null;
+  return { symbol: entryPlan.symbol, ask: entryPlan.referencePrice, bid: entryPlan.referencePrice, queriedAt: entryPlan.queriedAt };
+}
+
+function renderTemplatePreview() {
+  const button = element('template-save');
+  if (!(button instanceof HTMLButtonElement)) return;
+  try {
+    const input = readInput();
+    const quote = templateReference();
+    const template = createStopTemplate(input, quote);
+    const absolute = input.stopMode === 'price' || (input.stopLevels === 'two' && input.nearStopMode === 'price');
+    const reference = input.entryType === 'LIMIT' ? input.limitPrice : input.side === 'long' ? quote?.ask : quote?.bid;
+    show('template-preview', `将保存：${templateLabel(template)}。${absolute ? `按原输入与入场参考价 ${reference} USDT 换算（${input.entryType === 'LIMIT' ? '本单限价' : '参考数据时间 ' + time(quote?.queriedAt ?? '')}），截取至最多 8 位小数；不保存绝对价格。` : '保存输入百分比；应用后按当前币种取整。'}`);
+    button.disabled = !!templateReadError;
+  } catch (error) {
+    show('template-preview', `暂不能保存：${message(error)} 可继续手动输入。`);
+    button.disabled = true;
+  }
+}
+
+/** @param {string} [selected] */
+function renderTemplates(selected = '') {
+  const select = field('stop-template');
+  if (!(select instanceof HTMLSelectElement)) return;
+  const errors = templateReadError ? [templateReadError] : [];
+  const options = templates.map((value, index) => {
+    let label;
+    try { label = templateLabel(value); }
+    catch (error) { label = `无效模板 ${index + 1}：${message(error)}`; errors.push(label); }
+    return new Option(label, String(index));
+  });
+  select.replaceChildren(new Option('选择模板', ''), ...options);
+  select.value = selected;
+  for (const id of ['template-apply', 'template-delete']) {
+    const button = element(id);
+    if (button instanceof HTMLButtonElement) button.disabled = id === 'template-delete' && !!templateReadError ? false : !select.value;
+  }
+  show('template-delete', templateReadError ? '清除损坏模板记录' : '删除所选模板');
+  show('template-list-error', errors.length ? `${errors.join('；')}。无效记录不会应用，可删除或继续手动输入。` : '');
+}
+
+function loadTemplates() {
+  try {
+    const value = JSON.parse(localStorage.getItem(templateKey) ?? '[]');
+    if (!Array.isArray(value)) throw new Error('模板列表格式损坏，须为列表');
+    templates = value;
+  } catch (error) {
+    templateReadError = error instanceof SyntaxError ? '模板记录不是有效 JSON' : `无法读取模板：${message(error)}`;
+  }
+  renderTemplates();
+}
+
+/** @param {string} reason */
+function inputChanged(reason) {
+  inputVersion++;
+  invalidateCard(reason);
+  saveSettings();
+  renderDraft();
+}
+
+element('template-save').addEventListener('click', () => {
+  if (templateReadError) return;
+  try {
+    const template = createStopTemplate(readInput(), templateReference());
+    const label = templateLabel(template);
+    const duplicate = templates.findIndex((value) => { try { return templateLabel(value) === label; } catch { return false; } });
+    if (duplicate >= 0) { renderTemplates(String(duplicate)); show('template-status', `已有相同模板：${label}。`); return; }
+    const next = [...templates, template];
+    localStorage.setItem(templateKey, JSON.stringify(next));
+    templates = next;
+    renderTemplates(String(templates.length - 1));
+    show('template-status', `已保存在当前浏览器：${label}。`);
+  } catch (error) { show('template-status', `保存失败：${message(error)} 本次手动输入保留。`); }
+});
+field('stop-template').addEventListener('change', () => { renderTemplates(field('stop-template').value); show('template-status', '选择后点击“应用模板”才会修改本单。'); });
+element('template-apply').addEventListener('click', () => {
+  if (!field('stop-template').value || templateReadError) return;
+  try {
+    const input = applyStopTemplate(readInput(), templates[Number(field('stop-template').value)]);
+    for (const [id, value] of Object.entries({ 'stop-levels': input.stopLevels, 'stop-mode': input.stopMode, stop: input.stop, 'near-stop-mode': input.nearStopMode, 'near-stop': input.nearStop, 'near-percent': input.nearPercent })) field(id).value = value;
+    inputChanged('已应用止损模板');
+    show('template-status', '模板已应用，预算、杠杆与资金上限保持不变；请检查试算及实际比例，再刷新生成开仓卡。');
+    if (!snapshot && symbol.value) void load();
+  } catch (error) { show('template-status', `无法应用：${message(error)} 本次手动输入保留。`); }
+});
+element('template-delete').addEventListener('click', () => {
+  if (!field('stop-template').value && !templateReadError) return;
+  try {
+    const next = templates.filter((_, index) => index !== Number(field('stop-template').value));
+    if (templateReadError) localStorage.removeItem(templateKey);
+    else localStorage.setItem(templateKey, JSON.stringify(next));
+    templates = templateReadError ? [] : next;
+    templateReadError = '';
+    renderTemplates();
+    renderTemplatePreview();
+    show('template-status', '模板记录已删除，本次表单保持不变。');
+  } catch (error) { show('template-status', `删除失败：${message(error)}`); }
+});
 
 /** @param {string} reason */
 function invalidateCard(reason) {
@@ -149,6 +262,7 @@ async function verifyCurrentPlan() {
 }
 
 function renderDraft() {
+  renderTemplatePreview();
   const limit = field('entry-type').value === 'LIMIT';
   const two = field('stop-levels').value === 'two';
   for (const row of document.querySelectorAll('[data-two-input]')) if (row instanceof HTMLElement) row.hidden = !two;
@@ -266,6 +380,7 @@ async function generateCard() {
     verification = null;
     renderAccount(plan.account);
     renderCard();
+    renderTemplatePreview();
     show('draft-error', '');
     show('status', plan.source === 'demo' ? '模拟方案已生成' : '正式方案已生成 · 待执行与核验');
     show('message', '本单预算与止损已固定；到 Binance 手动执行后，返回刷新核验。');
@@ -382,7 +497,7 @@ async function load() {
 }
 
 form.addEventListener('submit', (event) => { event.preventDefault(); renderDraft(); });
-form.addEventListener('input', () => { inputVersion++; invalidateCard('输入已修改'); saveSettings(); renderDraft(); });
+form.addEventListener('input', (event) => { if (event.target !== field('stop-template')) inputChanged('输入已修改'); });
 symbol.addEventListener('change', () => {
   if (field('stop-mode').value === 'price') field('stop').value = '';
   if (field('near-stop-mode').value === 'price') field('near-stop').value = '';
@@ -404,4 +519,5 @@ for (const button of document.querySelectorAll('[data-copy]')) button.addEventLi
     show('copy-status', `已复制：${values[key]}${key === 'quantity' || key === 'nearQuantity' ? '（单位 ' + entryPlan.baseAsset + '）' : key === 'stopPrice' || key === 'nearPrice' || key === 'limitPrice' ? '（USDT 绝对价格）' : ''}`);
   } catch { show('copy-status', '浏览器无法复制，请长按卡片中的参数手动复制。'); }
 });
+loadTemplates();
 void load();

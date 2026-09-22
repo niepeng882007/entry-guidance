@@ -39,6 +39,20 @@
         <div><label for="leverage">所选杠杆 · 倍</label><input id="leverage" name="leverage" inputmode="numeric" autocomplete="off" aria-describedby="leverage-help entry-error" maxlength="3"><p class="help" id="leverage-help">读取账户适用杠杆档位后校验。</p></div>
         <div><label for="funding-cap">本单资金上限 USDT（可选）</label><input id="funding-cap" name="fundingCap" inputmode="decimal" autocomplete="off" aria-describedby="cap-help entry-error" maxlength="34"><p class="help" id="cap-help">包含保证金、开仓浮亏和手续费；留空使用可用余额。</p></div>
       </div>
+      <section class="settings" aria-labelledby="templates-heading">
+        <h2 id="templates-heading">我的止损模板</h2>
+        <p class="help">仅保存在当前浏览器；复用个人参数不表示适合当前行情。应用只修改止损，正式建议仍需刷新生成。</p>
+        <p id="template-preview" class="help" aria-live="polite"></p>
+        <button id="template-save" type="button" disabled>保存当前止损为模板</button>
+        <label for="stop-template">选择已保存的模板</label>
+        <select id="stop-template" aria-describedby="template-list-error"><option value="">选择模板</option></select>
+        <div class="field-grid template-actions">
+          <button id="template-apply" type="button" disabled>应用模板</button>
+          <button id="template-delete" type="button" disabled>删除所选模板</button>
+        </div>
+        <p id="template-list-error" class="error" role="status"></p>
+        <p id="template-status" class="help" role="status"></p>
+      </section>
       <details id="cost-settings" class="settings" open>
         <summary>成本与强平偏好</summary>
         <p class="muted">开仓与止损退出均按账户 taker 费率预留；不假定额外折扣。</p>
