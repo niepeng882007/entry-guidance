@@ -4,14 +4,14 @@
 
 ## 本机启动
 
-需要 Node.js **22.21.0 或更高的受支持版本**（支持原生 TypeScript 和 `--use-env-proxy`），使用 npm。
+需要 Node.js **22.21.0 或更高的受支持版本**（支持原生 TypeScript 和 `--use-env-proxy`），使用 **pnpm 11.7.0**。
 
-1. `npm ci` 安装锁定的开发依赖。
+1. `pnpm install --frozen-lockfile` 安装锁定的开发依赖。
 2. 参考 [`.env.example`](.env.example)，在本机 `.env` 中设置至少 12 字符的独立 `APP_PASSWORD`。已有 `.env` 时合并变量，**不要覆盖原文件**。API Key、Secret、个人密码都只填写在本机，不发到聊天。
 3. 首先运行模拟模式，无需 API 凭据：
 
 ```sh
-APP_MODE=demo npm start
+APP_MODE=demo pnpm start
 ```
 
 打开 <http://127.0.0.1:3000>，用 `APP_PASSWORD` 登录。模拟数据始终标识“模拟数据”，不发送任何 Binance 请求，也不代表真实账户验证。
@@ -19,7 +19,7 @@ APP_MODE=demo npm start
 连接真实账户时，在 `.env` 中配置专用 **HMAC** 类型的 `BINANCE_API_KEY`、`BINANCE_API_SECRET`，然后重启：
 
 ```sh
-APP_MODE=real npm start
+APP_MODE=real pnpm start
 ```
 
 默认就是 `real`；没有完整凭据时可登录，但账户显示未连接。失败不会切换模拟数据。已有 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 由 Node 原生代理支持读取，无需复制代理地址到源码。不要启用 Node 的 HTTP 调试日志，以免记录请求头和签名 URL。
@@ -43,7 +43,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 30 \
 chmod 600 .local/key.pem
 ```
 
-在手机上安装并信任自己生成的 `cert.pem`（**不要传输 `key.pem`**）。在 `.env` 中设置以下变量，替换 IP 后重启 `npm start`：
+在手机上安装并信任自己生成的 `cert.pem`（**不要传输 `key.pem`**）。在 `.env` 中设置以下变量，替换 IP 后重启 `pnpm start`：
 
 ```dotenv
 APP_ORIGIN=https://192.168.1.100:3000
@@ -227,11 +227,11 @@ HTTP 回归从“登录→生成→恢复→重新核验”验证重登、会话
 上述流程已在浏览器完成，320px、390px 手机视口与 1280px 桌面未见横向溢出；输入声明 decimal 键盘。移动视口的原生 select 自动化不可用，演示通过设置 DOM 控件并派发 input/change 事件操作同一页面。用户已同意本次交付手机视口演示，实体手机软键盘、切换 Binance App 返回及真实只读账户联调仍待验收；未将这些记为通过。
 
 ```sh
-npm run typecheck
+pnpm typecheck
 node --test test/account.test.ts
 node --test test/draft.test.ts
 node --test test/verification.test.ts
-npm test
+pnpm test
 ```
 
 测试在本机临时端口通过公开 HTTP 读取入口及 `generateDraft` / `generateEntryPlan` 业务入口验证，唯一替换的业务边界是 Binance 外部响应；不读取 `.env`，不进行真实资金操作。除原账户与草稿测试外，还覆盖资金缩量、浮亏、资金上限、档位边界及跨档、多空有方向缓冲、缺失偏好、规则/数据失败、预算与止损冻结、数量规则交集、同仓位杠杆不改变价格风险。超时用例约需 10 秒。
