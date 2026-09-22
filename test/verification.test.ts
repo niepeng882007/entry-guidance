@@ -8,6 +8,78 @@ const input = { symbol: 'BTCUSDT', side: 'long', budgetMode: 'amount', budget: '
 const limitInput = { ...input, entryType: 'LIMIT', limitPrice: '100' };
 const twoInput = { ...input, stopLevels: 'two', nearStopMode: 'price', nearStop: '99', nearPercent: '70' };
 
+test('relogin restores the original plan and rechecks the position without creating a larger budget', async (t) => {
+  const app = await start(t);
+  const plan = await (await app.create()).json();
+  app.data['/fapi/v1/openAlgoOrders'] = [fill(app)];
+  await app.login();
+  assert.equal((await app.read(`/api/verification?planId=${plan.id}`)).status, 409);
+  const response = await app.post('/api/plan/recover', { recovery: plan.recovery });
+  assert.equal(response.status, 200);
+  const restored = await response.json();
+  assert.equal(restored.id, plan.id);
+  assert.equal(restored.budget, '20');
+  assert.equal(restored.stopPrice, '98');
+  assert.deepEqual(restored.input, input);
+  assert.equal(restored.status, 'ready'); // Plan readiness is not position verification.
+  const result = await (await app.read(`/api/verification?planId=${restored.id}`)).json();
+  assert.equal(result.status, 'verified');
+  assert.equal(result.source, 'binance');
+});
+
+test('a restarted server recovers market and limit, single and two-level plans without losing near-exit attribution', async (t) => {
+  const app = await start(t, fixture(), 'demo');
+  const plans = [];
+  for (const value of [input, limitInput, twoInput, { ...twoInput, ...limitInput }]) plans.push(await (await app.create(value)).json());
+  await new Promise<void>((resolve) => app.server.close(() => resolve()));
+  const restarted = await start(t, fixture(), 'demo');
+  for (const plan of plans) {
+    const response = await restarted.post('/api/plan/recover', { recovery: plan.recovery });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), plan);
+    const result = await (await restarted.read(`/api/verification?planId=${plan.id}&demo=${plan.nearStop ? 'near-filled' : 'protected'}`)).json();
+    assert.equal(result.status, 'verified');
+    assert.equal(result.source, 'demo');
+    if (plan.nearStop) assert.equal(result.nearStatus, '已执行');
+  }
+  assert.equal(restarted.requests.length, 0);
+});
+
+test('recovery requires login and rejects changed budgets, sources, credentials and malformed records', async (t) => {
+  const app = await start(t);
+  const plan = await (await app.create()).json();
+  const payload = JSON.parse(Buffer.from(plan.recovery.split('.')[0], 'base64url').toString());
+  payload.plan.budget = '999';
+  const forged = Buffer.from(JSON.stringify(payload)).toString('base64url') + '.' + plan.recovery.split('.')[1];
+  assert.equal((await app.post('/api/plan/recover', { recovery: forged })).status, 409);
+  for (const value of [null, {}, { recovery: 'broken' }, { recovery: plan.recovery, budget: '999' }]) {
+    assert.equal((await app.post('/api/plan/recover', value)).status, 400);
+  }
+  assert.equal((await fetch(app.base + '/api/plan/recover', { method: 'POST', headers: { Origin: app.base, 'Content-Type': 'application/json' }, body: JSON.stringify({ recovery: plan.recovery }) })).status, 401);
+  const changedAccount = await start(t, fixture(), 'real', 'another-account-key');
+  assert.equal((await changedAccount.post('/api/plan/recover', { recovery: plan.recovery })).status, 409);
+  const demo = await start(t, fixture(), 'demo');
+  assert.equal((await demo.post('/api/plan/recover', { recovery: plan.recovery })).status, 409);
+  const simulated = await (await demo.create()).json();
+  assert.equal((await app.post('/api/plan/recover', { recovery: simulated.recovery })).status, 409);
+  assert.equal(changedAccount.requests.length, 0);
+  assert.equal(demo.requests.length, 0);
+});
+
+test('an expired login cannot read a plan, but reauthentication can recover its original budget', async (t) => {
+  const app = await start(t, fixture(), 'demo');
+  const plan = await (await app.create()).json();
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 8 * 60 * 60_000 + 1 });
+  assert.equal((await app.read(`/api/verification?planId=${plan.id}`)).status, 401);
+  assert.equal((await app.post('/api/plan/recover', { recovery: plan.recovery })).status, 401);
+  t.mock.timers.reset();
+  await app.login();
+  assert.equal((await app.post('/api/plan/recover', { recovery: plan.recovery })).status, 200);
+  const result = await (await app.read(`/api/verification?planId=${plan.id}&demo=protected`)).json();
+  assert.equal(result.status, 'verified');
+  assert.equal(result.source, 'demo');
+});
+
 test('a reused stop template generates through fresh quotes, account and rules while preserving this trade constraints', async (t) => {
   const app = await start(t);
   const snapshot = await (await app.read('/api/market?symbol=BTCUSDT')).json();
@@ -231,13 +303,13 @@ function fixture() {
   return { data, position, now };
 }
 
-async function start(t: TestContext, f = fixture(), mode: 'real' | 'demo' = 'real') {
+async function start(t: TestContext, f = fixture(), mode: 'real' | 'demo' = 'real', apiKey = 'test-key') {
   const requests: URL[] = [];
-  const server = createServer({ password: 'test-password-only', mode, apiKey: 'test-key', apiSecret: 'test-secret', transport: async (url, headers, signal) => {
+  const server = createServer({ password: 'test-password-only', mode, apiKey, apiSecret: 'test-secret', transport: async (url, headers, signal) => {
     requests.push(url);
     assert.ok(url.pathname in f.data, `Unexpected endpoint ${url.pathname}`);
     const isPublic = ['/fapi/v1/time', '/fapi/v1/exchangeInfo', '/fapi/v1/ticker/bookTicker', '/fapi/v1/premiumIndex', '/fapi/v2/ticker/price'].includes(url.pathname);
-    assert.equal(headers['X-MBX-APIKEY'], isPublic ? undefined : 'test-key');
+    assert.equal(headers['X-MBX-APIKEY'], isPublic ? undefined : apiKey);
     const source = f.data[url.pathname];
     const body: unknown = typeof source === 'function' ? await source(signal) : source;
     if (body instanceof Error) throw body;
@@ -249,11 +321,16 @@ async function start(t: TestContext, f = fixture(), mode: 'real' | 'demo' = 'rea
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
   const base = `http://127.0.0.1:${address.port}`;
-  const login = await fetch(`${base}/login`, { method: 'POST', redirect: 'manual', headers: { Origin: base, 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'password=test-password-only' });
-  const cookie = login.headers.get('set-cookie')!.split(';')[0]!;
+  let cookie = '';
+  const login = async () => {
+    const response = await fetch(`${base}/login`, { method: 'POST', redirect: 'manual', headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'password=test-password-only' });
+    cookie = response.headers.get('set-cookie')!.split(';')[0]!;
+  };
+  await login();
   const read = (path: string) => fetch(base + path, { headers: { Cookie: cookie } });
-  const create = (value: EntryInput = input) => fetch(`${base}/api/plan`, { method: 'POST', headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
-  return { ...f, base, cookie, read, create, requests };
+  const post = (path: string, value: unknown) => fetch(base + path, { method: 'POST', headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+  const create = (value: EntryInput = input) => post('/api/plan', value);
+  return { ...f, server, base, get cookie() { return cookie; }, read, create, post, login, requests };
 }
 
 function fill(f: ReturnType<typeof fixture>) {

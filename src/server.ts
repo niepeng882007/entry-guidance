@@ -1,10 +1,13 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { AccountError, readAccount, type AccountConfig } from './account.ts';
 import { demoAccount, readMarket, readSymbols } from './market.ts';
 import { createPlan, verifyPosition, type Plan } from './verification.ts';
+import type { EntryInput } from '../public/draft.js';
+
+export type SavedPlan = Plan & { input: EntryInput; recovery: string };
 
 type Config = AccountConfig & {
   password: string;
@@ -18,6 +21,10 @@ const digest = (value: string) => createHash('sha256').update(value).digest();
 export function createServer(config: Config) {
   if (config.password.length < 12) throw new Error('APP_PASSWORD 至少需要 12 个字符。');
   const passwordHash = digest(config.password);
+  const source = config.mode === 'demo' ? 'demo' : 'binance';
+  // Bind restored plans to this installation's password, data mode and account credentials.
+  const recoveryKey = scryptSync(config.password, JSON.stringify(['entry-guidance.recovery.v1', source, config.apiKey ?? '', config.apiSecret ?? '']), 32);
+  const signature = (payload: string) => createHmac('sha256', recoveryKey).update(payload).digest('base64url');
   const loginPage = readFileSync(new URL('../public/login.html', import.meta.url), 'utf8');
   const accountPage = readFileSync(new URL('../public/account.html', import.meta.url), 'utf8');
   const style = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
@@ -85,28 +92,40 @@ export function createServer(config: Config) {
       res.setHeader('Set-Cookie', `session=; ${cookieFlags}; Max-Age=0`);
       return redirect('/login');
     }
-    if (path === '/api/plan' && req.method === 'POST') {
+    if ((path === '/api/plan' || path === '/api/plan/recover') && req.method === 'POST') {
       if (req.headers['content-type'] !== 'application/json') return send(415, { error: '方案输入格式不支持。' });
       let body = '';
       for await (const chunk of req) {
         body += chunk.toString();
-        if (Buffer.byteLength(body) > 4096) return send(413, { error: '方案输入过大。' });
+        if (Buffer.byteLength(body) > (path === '/api/plan/recover' ? 16_384 : 4096)) return send(413, { error: '方案输入过大。' });
       }
       let input: unknown;
       try { input = JSON.parse(body); }
       catch { return send(400, { error: '方案输入格式无效。' }); }
       try {
         const existing = sessions.get(cookie!);
-        if (!existing) return send(401, { error: '登录已过期，请重新登录。' });
-        // ponytail: retain up to 20 plans per session without eviction; persistent recovery belongs to task 08.
+        if (!existing || existing.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
+        if (path === '/api/plan/recover') {
+          const recovery = input && typeof input === 'object' && 'recovery' in input ? input.recovery : undefined;
+          if (typeof recovery !== 'string' || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/.test(recovery) || Object.keys(input!).length !== 1) return send(400, { error: '恢复凭证缺失或格式无效，原参数仍可查看。' });
+          const [payload, mac] = recovery.split('.') as [string, string];
+          if (!timingSafeEqual(Buffer.from(mac), Buffer.from(signature(payload)))) return send(409, { error: '无法完整核验：原方案凭证损坏，或密码、账户配置、数据模式已改变。请保留原参数，不要为已有仓位重新扩大预算。' });
+          const saved = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { version: number; plan: Plan; input: EntryInput };
+          if (saved.version !== 1 || saved.plan.source !== source) return send(409, { error: '原方案版本或数据来源不匹配，无法完整核验。' });
+          if (!existing.plans.has(saved.plan.id) && existing.plans.size >= 20) return send(409, { error: '当前会话方案数量已达上限，请重新登录后恢复本单。' });
+          existing.plans.set(saved.plan.id, saved.plan);
+          return send(200, { ...saved.plan, input: saved.input, recovery } satisfies SavedPlan);
+        }
+        // ponytail: cap in-memory plans at 20; browser-held signed plans survive relogin without a history database.
         if (existing.plans.size >= 20) return send(409, { error: '当前会话已保存 20 个方案，暂停生成；原方案仍可核验，请完成本单后再重新登录。' });
         const generation = ++existing.generation;
         const plan = await createPlan(config, input);
         const session = sessions.get(cookie!);
-        if (!session) return send(401, { error: '登录已过期，请重新登录。' });
+        if (!session || session.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
         if (generation !== session.generation) return send(409, { error: '已有更新的方案请求，本次结果已作废。' });
         session.plans.set(plan.id, plan);
-        return send(200, plan);
+        const payload = Buffer.from(JSON.stringify({ version: 1, plan, input })).toString('base64url');
+        return send(200, { ...plan, input: input as EntryInput, recovery: `${payload}.${signature(payload)}` } satisfies SavedPlan);
       } catch (error) {
         if (!(error instanceof AccountError)) throw error;
         return send(error.status, { error: error.message, code: error.code, attemptedAt: new Date().toISOString() });

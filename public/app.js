@@ -24,6 +24,11 @@ const symbol = field('symbol');
 const settingIds = ['symbol', 'side', 'entry-type', 'budget-mode', 'budget', 'stop-mode', 'stop-levels', 'near-stop-mode', 'near-percent', 'slippage', 'funding', 'leverage', 'minimum-buffer'];
 const storageKey = 'entry-guidance.preferences.v1';
 const templateKey = 'entry-guidance.stop-templates.v1';
+const tradeKey = 'entry-guidance.current-trade.v1';
+const inputIds = [...settingIds, 'stop', 'near-stop', 'limit-price', 'funding-cap'];
+let tradeReadError = '';
+let lastQueryAt = '';
+let symbolsLoaded = false;
 /** @type {unknown[]} */
 let templates = [];
 let templateReadError = '';
@@ -33,11 +38,9 @@ let requestId = 0;
 let pending;
 /** @type {import('./draft.js').Snapshot | null} */
 let snapshot = null;
-/** @type {import('../src/verification.ts').Plan | null} */
+/** @type {import('../src/server.ts').SavedPlan | null} */
 let entryPlan = null;
 let planInputs = '';
-/** @type {import('../src/verification.ts').Verification | null} */
-let verification = null;
 let cardCurrent = false;
 let inputVersion = 0;
 let generating = false;
@@ -48,6 +51,89 @@ const time = (value) => new Date(value).toLocaleString('zh-CN', { hour12: false 
 const show = (id, value) => { element(id).textContent = value; };
 /** @param {unknown} error */
 const message = (error) => error instanceof Error && !['TimeoutError', 'TypeError', 'AbortError'].includes(error.name) ? error.message : '网络中断或查询超时，请稍后重试。';
+
+class LoginRequired extends Error {}
+
+/** @param {unknown} error */
+function showLogin(error) {
+  if (error instanceof LoginRequired) element('relogin').hidden = false;
+}
+
+function saveTrade() {
+  if (tradeReadError) return;
+  try {
+    localStorage.setItem(tradeKey, JSON.stringify({ version: 1, fields: Object.fromEntries(inputIds.map((id) => [id, field(id).value])), recovery: entryPlan?.recovery ?? '', lastQueryAt, scenario: field('demo-scenario').value }));
+    show('recovery-status', '本次输入与原方案已保存在当前浏览器；返回后重新查询，页面关闭期间不监控。');
+  } catch { show('recovery-status', '无法保存本单；当前页面仍可继续，关闭或重新登录可能丢失本次计划。'); }
+}
+
+/** @param {Record<string, unknown>} values */
+function restoreFields(values) {
+  for (const id of inputIds) {
+    const value = values[id];
+    if (typeof value !== 'string' || value.length > 34) throw new Error('本单输入记录损坏');
+    const control = field(id);
+    if (id === 'symbol') {
+      if (value && !/^[A-Z0-9]{1,30}USDT$/.test(value)) throw new Error('本单币种记录损坏');
+    } else if (control instanceof HTMLSelectElement && !Array.from(control.options).some((option) => option.value === value)) throw new Error('本单选项记录损坏');
+  }
+  for (const id of inputIds) {
+    const value = /** @type {string} */ (values[id]);
+    if (id === 'symbol' && symbol instanceof HTMLSelectElement && value && !Array.from(symbol.options).some((option) => option.value === value)) symbol.add(new Option(value, value));
+    field(id).value = value;
+  }
+}
+
+function restoreTrade() {
+  try {
+    const settings = JSON.parse(localStorage.getItem(storageKey) ?? '{}');
+    const fields = Object.fromEntries(inputIds.map((id) => [id, field(id).value]));
+    for (const id of settingIds) if (typeof settings?.[id] === 'string') fields[id] = settings[id];
+    restoreFields(fields);
+  } catch { show('save-status', '无法读取保存的设置，请填写本次参数。'); }
+  try {
+    const raw = localStorage.getItem(tradeKey);
+    if (!raw) return;
+    if (raw.length > 24_000) throw new Error('本单记录过大');
+    const saved = JSON.parse(raw);
+    if (!saved || saved.version !== 1 || !saved.fields || typeof saved.recovery !== 'string' || typeof saved.lastQueryAt !== 'string' || (saved.lastQueryAt && !Number.isFinite(Date.parse(saved.lastQueryAt)))) throw new Error('本单记录格式损坏');
+    if (saved.recovery) {
+      // This local copy is display-only until the server authenticates the recovery envelope.
+      const payload = saved.recovery.split('.')[0].replace(/-/g, '+').replace(/_/g, '/');
+      const envelope = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(payload), (char) => char.charCodeAt(0))));
+      const plan = envelope?.plan;
+      if (envelope.version !== 1 || !plan || !['demo', 'binance'].includes(plan.source) || !plan.execution || !plan.account || !envelope.input || !['id', 'symbol', 'budget', 'quantity', 'stopPrice', 'queriedAt', 'startedAt'].every((key) => typeof plan[key] === 'string') || (plan.nearStop && typeof plan.nearStop !== 'object')) throw new Error('原方案记录损坏');
+      entryPlan = { ...plan, input: envelope.input, recovery: saved.recovery };
+      planInputs = JSON.stringify(envelope.input);
+    }
+    restoreFields(saved.fields);
+    lastQueryAt = saved.lastQueryAt;
+    if (entryPlan) {
+      renderCard();
+      renderAccount(entryPlan.account);
+      invalidateCard('已恢复本地副本，须确认原方案并重新查询');
+    }
+    if (typeof saved.scenario === 'string' && Array.from(/** @type {HTMLSelectElement} */ (field('demo-scenario')).options).some((option) => option.value === saved.scenario && !option.disabled)) field('demo-scenario').value = saved.scenario;
+    show('recovery-status', '已恢复本次输入与旧参数；旧结果不证明当前状态，正在重新查询。');
+  } catch (error) {
+    entryPlan = null;
+    planInputs = '';
+    element('entry-card').hidden = element('verification').hidden = true;
+    tradeReadError = `无法恢复本单：${error instanceof SyntaxError ? '本单记录格式损坏' : message(error)}。未覆盖原记录，可清除本单记录后重新开始。`;
+    show('recovery-status', tradeReadError);
+  }
+}
+
+/** @param {string} reason */
+function cancelQuery(reason) {
+  requestId++;
+  pending?.abort();
+  pending = undefined;
+  generating = false;
+  if (refresh instanceof HTMLButtonElement) refresh.disabled = false;
+  if (generate instanceof HTMLButtonElement) generate.disabled = !navigator.onLine;
+  invalidateCard(reason);
+}
 
 function saveSettings() {
   try { localStorage.setItem(storageKey, JSON.stringify(Object.fromEntries(settingIds.map((id) => [id, field(id).value])))); }
@@ -124,8 +210,9 @@ function loadTemplates() {
 /** @param {string} reason */
 function inputChanged(reason) {
   inputVersion++;
-  invalidateCard(reason);
+  cancelQuery(reason);
   saveSettings();
+  saveTrade();
   renderDraft();
 }
 
@@ -182,8 +269,10 @@ function invalidateCard(reason) {
 function invalidateVerification(reason) {
   if (!entryPlan) return;
   element('verification').dataset.current = 'false';
-  show('verification-status', `待核验 · ${reason}。原方案与上次时间保留。`);
-  if (verification) show('verification-time', `上次完整查询 ${time(verification.queriedAt)}（已失效，需重新核验）。`);
+  show('verification-status', `${entryPlan.source === 'demo' ? '模拟数据 · ' : ''}待核验 · ${reason}。原方案与上次时间保留。`);
+  element('verification-details').hidden = true;
+  element('verification-issues').replaceChildren();
+  if (lastQueryAt) show('verification-time', `上次完整查询 ${time(lastQueryAt)}（已失效，需重新核验）。`);
   if (verify instanceof HTMLButtonElement) verify.disabled = JSON.stringify(readInput()) !== planInputs || generating;
 }
 
@@ -199,7 +288,7 @@ function renderAccount(account) {
 
 /** @param {import('../src/verification.ts').Verification} result @param {import('../src/verification.ts').Plan} plan */
 function renderVerification(result, plan) {
-  verification = result;
+  lastQueryAt = result.queriedAt;
   show('card-status', `原方案 · 成交后状态已另行查询；生成时间 ${time(plan.queriedAt)}。原参数保留，开仓复制已停用。`);
   const states = { waiting: '待成交', ended: '已结束', incomplete: '无法完整核验', 'needs-action': '需处理', verified: '已核验 · 本次流程完成' };
   show('verification-status', `${result.source === 'demo' ? '模拟数据 · ' : ''}${states[result.status]}`);
@@ -224,12 +313,14 @@ function renderVerification(result, plan) {
   for (const [id, value] of Object.entries(outputs)) show(`verification-${id}`, value);
   element('verification-details').hidden = false;
   if (result.account) renderAccount(result.account);
+  saveTrade();
 }
 
 async function verifyCurrentPlan() {
   if (!entryPlan || generating || !(verify instanceof HTMLButtonElement) || !(refresh instanceof HTMLButtonElement) || !(generate instanceof HTMLButtonElement)) return;
   if (JSON.stringify(readInput()) !== planInputs) { invalidateVerification('输入已修改，请恢复原输入后核验此卡'); return; }
-  const plan = entryPlan, version = inputVersion, id = ++requestId;
+  let plan = entryPlan;
+  const version = inputVersion, id = ++requestId;
   pending?.abort();
   pending = new AbortController();
   const signal = AbortSignal.any([pending.signal, AbortSignal.timeout(15_000)]);
@@ -237,11 +328,29 @@ async function verifyCurrentPlan() {
   invalidateCard('正在查询成交后的实际状态');
   renderDraft();
   verify.disabled = refresh.disabled = generate.disabled = true;
+  show('status', '正在重新核验');
+  show('message', '保留原方案与上次查询时间，等待本次完整数据。');
+  if (statusBox) statusBox.dataset.state = 'loading';
   try {
     const scenario = plan.source === 'demo' ? `&demo=${encodeURIComponent(field('demo-scenario').value)}` : '';
+    const restored = await read('/api/plan/recover', signal, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ recovery: plan.recovery }) });
+    if (id !== requestId || version !== inputVersion || entryPlan !== plan) return;
+    if (restored.id !== plan.id || restored.source !== plan.source) throw new Error('恢复的方案或数据来源不一致，无法完整核验。');
+    entryPlan = plan = /** @type {import('../src/server.ts').SavedPlan} */ (restored);
+    planInputs = JSON.stringify(plan.input);
+    const selectedScenario = field('demo-scenario').value;
+    renderCard();
+    field('demo-scenario').value = selectedScenario;
+    invalidateCard('原方案已确认，正在重新查询');
+    verify.disabled = true;
+    if (JSON.stringify(readInput()) !== planInputs) throw new Error('输入与原方案不一致，请恢复原输入后核验。');
+    await loadSymbols(signal, id);
+    if (id !== requestId) return;
     const result = await read(`/api/verification?planId=${encodeURIComponent(plan.id)}${scenario}`, signal);
     if (id !== requestId || version !== inputVersion || entryPlan !== plan) return;
-    if (result.source !== plan.source || !['waiting', 'ended', 'incomplete', 'needs-action', 'verified'].includes(result.status) || !Array.isArray(result.issues)) throw new Error('核验响应不完整，请重新查询。');
+    if (result.source !== plan.source || !['waiting', 'ended', 'incomplete', 'needs-action', 'verified'].includes(result.status) || !Array.isArray(result.issues)
+      || !Number.isFinite(Date.parse(result.queriedAt)) || result.account?.source !== plan.source || !Number.isFinite(Date.parse(result.account.queriedAt))
+      || Math.abs(Date.parse(result.queriedAt) - Date.parse(result.account.queriedAt)) > 10_000) throw new Error('核验响应不完整或查询时间不一致，请重新查询。');
     renderVerification(result, plan);
     show('status', plan.source === 'demo' ? '模拟核验查询完成' : '实际仓位查询完成');
     show('message', '请查看下方成交后核验结果，开仓前估值保留在原卡。');
@@ -249,15 +358,16 @@ async function verifyCurrentPlan() {
     if (statusBox) statusBox.dataset.state = result.status === 'verified' ? 'success' : 'error';
   } catch (error) {
     if (id !== requestId || version !== inputVersion) return;
+    showLogin(error);
     invalidateVerification('本次查询失败，上次结果已失效');
     show('card-status', `原方案 · 本次核验查询失败；生成时间 ${time(plan.queriedAt)}。原参数保留，复制已停用。`);
-    show('verification-status', `无法完整核验 · ${message(error)}`);
-    show('verification-time', `${verification ? '上次完整查询 ' + time(verification.queriedAt) + '（已过期）' : '尚无完整查询'}；本次尝试 ${time(new Date().toISOString())}。`);
+    show('verification-status', `${plan.source === 'demo' ? '模拟数据 · ' : ''}无法完整核验 · ${message(error)}`);
+    show('verification-time', `${lastQueryAt ? '上次完整查询 ' + time(lastQueryAt) + '（已过期）' : '尚无完整查询'}；本次尝试 ${time(new Date().toISOString())}。`);
     show('status', '需处理 · 本次核验查询失败');
     show('message', message(error));
     if (statusBox) statusBox.dataset.state = 'error';
   } finally {
-    if (id === requestId) { refresh.disabled = generate.disabled = false; verify.disabled = JSON.stringify(readInput()) !== planInputs; }
+    if (id === requestId) { pending = undefined; refresh.disabled = false; generate.disabled = !navigator.onLine; verify.disabled = JSON.stringify(readInput()) !== planInputs; }
   }
 }
 
@@ -375,11 +485,12 @@ async function generateCard() {
     const plan = await read('/api/plan', AbortSignal.any([pending.signal, AbortSignal.timeout(15_000)]), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
     if (id !== requestId) return;
     if (version !== inputVersion) throw new Error('查询期间输入已变化，请重新生成开仓卡。');
-    entryPlan = /** @type {import('../src/verification.ts').Plan} */ (plan);
+    entryPlan = /** @type {import('../src/server.ts').SavedPlan} */ (plan);
     planInputs = JSON.stringify(input);
-    verification = null;
+    lastQueryAt = '';
     renderAccount(plan.account);
     renderCard();
+    saveTrade();
     renderTemplatePreview();
     show('draft-error', '');
     show('status', plan.source === 'demo' ? '模拟方案已生成' : '正式方案已生成 · 待执行与核验');
@@ -390,6 +501,7 @@ async function generateCard() {
     show('entry-error', '');
   } catch (error) {
     if (id === requestId) {
+      showLogin(error);
       show('entry-error', `需处理 · ${message(error)}`);
       show('status', '需处理 · 本次方案未生成');
       show('message', message(error));
@@ -397,9 +509,10 @@ async function generateCard() {
     }
   }
   finally {
-    generating = false;
     if (id === requestId) {
-      generate.disabled = false;
+      pending = undefined;
+      generating = false;
+      generate.disabled = !navigator.onLine;
       if (refresh instanceof HTMLButtonElement) refresh.disabled = false;
       if (verify instanceof HTMLButtonElement) verify.disabled = !entryPlan || JSON.stringify(readInput()) !== planInputs;
     }
@@ -409,10 +522,20 @@ async function generateCard() {
 /** @param {string} path @param {AbortSignal} signal @param {RequestInit} [options] */
 async function read(path, signal, options = {}) {
   const response = await fetch(path, { ...options, cache: 'no-store', signal });
-  if (response.status === 401) { location.replace('/login'); throw new Error('登录已过期，请重新登录。'); }
+  if (response.status === 401) throw new LoginRequired('登录已过期，请重新登录后继续本单。');
   const data = await response.json();
   if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : '查询失败，请重试。');
   return data;
+}
+
+/** @param {AbortSignal} signal @param {number} id */
+async function loadSymbols(signal, id) {
+  if (symbolsLoaded || !(symbol instanceof HTMLSelectElement)) return;
+  const data = await read('/api/symbols', signal);
+  if (id !== requestId) return;
+  if (!Array.isArray(data.symbols) || !data.symbols.every((/** @type {unknown} */ value) => typeof value === 'string')) throw new Error('币种列表无效。');
+  for (const value of data.symbols) if (!Array.from(symbol.options).some((option) => option.value === value)) symbol.add(new Option(value, value));
+  symbolsLoaded = true;
 }
 
 async function load() {
@@ -432,20 +555,8 @@ async function load() {
   show('status', '正在查询');
   show('message', hasAccount ? '保留上次账户快照，正在读取本次数据…' : '正在读取账户与合约数据…');
   try {
-    if (symbol.options.length === 1) {
-      const data = await read('/api/symbols', signal);
-      if (id !== requestId) return;
-      if (!Array.isArray(data.symbols) || !data.symbols.every((/** @type {unknown} */ value) => typeof value === 'string')) throw new Error('币种列表无效。');
-      for (const value of data.symbols) symbol.add(new Option(value, value));
-      try {
-        const settings = JSON.parse(localStorage.getItem(storageKey) ?? '{}');
-        if (settings && typeof settings === 'object') {
-          for (const setting of settingIds) if (typeof settings[setting] === 'string' && settings[setting].length <= 34) field(setting).value = settings[setting];
-        }
-      } catch { show('save-status', '无法读取保存的设置，请填写本次参数。'); }
-      const costs = element('cost-settings');
-      if (costs instanceof HTMLDetailsElement) costs.open = !field('slippage').value || !field('minimum-buffer').value;
-    }
+    await loadSymbols(signal, id);
+    if (id !== requestId) return;
     const selected = symbol.value;
     const data = await read(selected ? `/api/market?symbol=${encodeURIComponent(selected)}` : '/api/account', signal);
     if (id !== requestId || symbol.value !== selected) return;
@@ -479,6 +590,7 @@ async function load() {
     return snapshot;
   } catch (error) {
     if (id !== requestId) return;
+    showLogin(error);
     snapshot = null;
     renderDraft();
     show('status', hasAccount ? '需处理 · 下方账户快照已过期' : '需处理 · 查询未成功');
@@ -490,8 +602,9 @@ async function load() {
     statusBox.dataset.state = 'error';
   } finally {
     if (id === requestId) {
+      pending = undefined;
       refresh.disabled = false;
-      if (generate instanceof HTMLButtonElement) generate.disabled = generating;
+      if (generate instanceof HTMLButtonElement) generate.disabled = generating || !navigator.onLine;
     }
   }
 }
@@ -503,12 +616,13 @@ symbol.addEventListener('change', () => {
   if (field('near-stop-mode').value === 'price') field('near-stop').value = '';
   field('limit-price').value = '';
   saveSettings();
+  saveTrade();
   void load();
 });
 refresh.addEventListener('click', () => { void (entryPlan && JSON.stringify(readInput()) === planInputs ? verifyCurrentPlan() : load()); });
 generate.addEventListener('click', () => { void generateCard(); });
 verify.addEventListener('click', () => { void verifyCurrentPlan(); });
-field('demo-scenario').addEventListener('change', () => { inputVersion++; invalidateVerification('模拟场景已变化，请刷新'); });
+field('demo-scenario').addEventListener('change', () => { inputVersion++; cancelQuery('模拟场景已变化，请刷新'); saveTrade(); });
 for (const button of document.querySelectorAll('[data-copy]')) button.addEventListener('click', async () => {
   if (!(button instanceof HTMLButtonElement) || !entryPlan || !cardCurrent) return;
   const values = { quantity: entryPlan.quantity, limitPrice: entryPlan.limitPrice, stopPrice: entryPlan.stopPrice, nearPrice: entryPlan.nearStop?.price ?? '', nearQuantity: entryPlan.nearStop?.quantity ?? '', leverage: entryPlan.leverage, exitMode: entryPlan.exitMode };
@@ -519,5 +633,54 @@ for (const button of document.querySelectorAll('[data-copy]')) button.addEventLi
     show('copy-status', `已复制：${values[key]}${key === 'quantity' || key === 'nearQuantity' ? '（单位 ' + entryPlan.baseAsset + '）' : key === 'stopPrice' || key === 'nearPrice' || key === 'limitPrice' ? '（USDT 绝对价格）' : ''}`);
   } catch { show('copy-status', '浏览器无法复制，请长按卡片中的参数手动复制。'); }
 });
+function resume() {
+  if (document.hidden || pending) return;
+  if (!navigator.onLine) { suspend('网络已断开，请联网后重试'); return; }
+  void (entryPlan && JSON.stringify(readInput()) === planInputs ? verifyCurrentPlan() : load());
+}
+
+/** @param {string} reason */
+function suspend(reason) {
+  snapshot = null;
+  cancelQuery(reason);
+  saveTrade();
+  renderDraft();
+  show('status', entryPlan ? '待核验 · 原查询已失效' : '草稿 · 等待重新查询');
+  show('message', reason);
+  if (statusBox) statusBox.dataset.state = 'error';
+}
+
+document.addEventListener('visibilitychange', () => { if (document.hidden) suspend('页面已离开；返回后重新查询，离开期间不监控'); else resume(); });
+window.addEventListener('pagehide', () => { suspend('页面已关闭或离开；重新打开后查询'); });
+window.addEventListener('pageshow', (event) => { if (event.persisted) { suspend('已返回页面；原查询已失效'); resume(); } });
+window.addEventListener('offline', () => { suspend('网络已断开，请联网后重试'); });
+window.addEventListener('online', resume);
+element('restore-inputs').addEventListener('click', () => {
+  if (!entryPlan) return;
+  const controls = /** @type {HTMLFormElement} */ (form).elements;
+  for (const [key, value] of Object.entries(entryPlan.input)) {
+    const control = controls.namedItem(key);
+    if (control instanceof HTMLInputElement || (control instanceof HTMLSelectElement && Array.from(control.options).some((option) => option.value === value))) control.value = value;
+  }
+  inputChanged('已恢复原方案输入，请重新核验');
+  resume();
+});
+element('clear-trade').addEventListener('click', () => {
+  if (!confirm('清除本单记录并开始新一单？不会改变 Binance 仓位或挂单；原计划将无法从当前浏览器恢复。')) return;
+  try { localStorage.removeItem(tradeKey); }
+  catch { show('recovery-status', '清除失败，本单记录保留。'); return; }
+  cancelQuery('已清除本单');
+  entryPlan = null;
+  planInputs = lastQueryAt = tradeReadError = '';
+  element('entry-card').hidden = element('verification').hidden = true;
+  for (const id of ['stop', 'near-stop', 'limit-price', 'funding-cap']) field(id).value = '';
+  show('refresh', '刷新账户与行情');
+  show('recovery-status', '已清除本单记录；新方案仍须确认空仓起点。');
+  void load();
+});
+restoreTrade();
+const costs = element('cost-settings');
+if (costs instanceof HTMLDetailsElement) costs.open = !field('slippage').value || !field('minimum-buffer').value;
 loadTemplates();
-void load();
+renderDraft();
+resume();
