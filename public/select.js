@@ -34,10 +34,40 @@ export function enhanceSelects(root = document, signal) {
     const menu = document.createElement('div');
     menu.id = `${select.id}-options`;
     menu.className = 'select-control__menu';
-    menu.setAttribute('role', 'listbox');
-    menu.setAttribute('aria-labelledby', label?.id ?? trigger.id);
     menu.hidden = true;
-    trigger.setAttribute('aria-controls', menu.id);
+    const searchLabel = select.getAttribute('data-search');
+    const searchable = typeof searchLabel === 'string' && searchLabel.trim() !== '';
+    /** @type {HTMLInputElement | undefined} */
+    let search;
+    /** @type {HTMLElement} */
+    let optionsHost = menu;
+    if (searchable) {
+      menu.classList.add('select-control__menu--search');
+      search = document.createElement('input');
+      search.type = 'text';
+      search.id = `${select.id}-search`;
+      search.className = 'field-control select-control__search';
+      search.placeholder = searchLabel;
+      search.setAttribute('aria-label', searchLabel);
+      search.setAttribute('aria-autocomplete', 'list');
+      search.autocomplete = 'off';
+      search.autocapitalize = 'none';
+      search.spellcheck = false;
+      search.setAttribute('autocorrect', 'off');
+      search.enterKeyHint = 'search';
+      const list = document.createElement('div');
+      list.id = `${select.id}-listbox`;
+      list.className = 'select-control__list';
+      list.setAttribute('role', 'listbox');
+      list.setAttribute('aria-labelledby', label?.id ?? trigger.id);
+      search.setAttribute('aria-controls', list.id);
+      optionsHost = list;
+      menu.append(search, list);
+    } else {
+      menu.setAttribute('role', 'listbox');
+      menu.setAttribute('aria-labelledby', label?.id ?? trigger.id);
+    }
+    trigger.setAttribute('aria-controls', optionsHost.id);
     wrapper.append(trigger, menu);
     select.classList.add('select-control__native');
     select.tabIndex = -1;
@@ -48,13 +78,22 @@ export function enhanceSelects(root = document, signal) {
     let active = -1;
     let typed = '';
     let typedAt = 0;
+    let suppressClose = false;
+    const empty = document.createElement('p');
+    empty.className = 'select-control__empty';
+    empty.textContent = '无匹配币种';
 
-    function close() {
+    /** @param {{ focusTrigger?: boolean }} [action] */
+    function close(action) {
+      const wasOpen = !menu.hidden;
       menu.hidden = true;
       trigger.setAttribute('aria-expanded', 'false');
       trigger.removeAttribute('aria-activedescendant');
+      search?.removeAttribute('aria-activedescendant');
       typed = '';
+      if (search) search.value = '';
       if (closeCurrent === close) closeCurrent = undefined;
+      if (wasOpen && action?.focusTrigger && search && document.activeElement === search) trigger.focus({ preventScroll: true });
     }
 
     function position() {
@@ -69,6 +108,7 @@ export function enhanceSelects(root = document, signal) {
       const below = top + height - box.bottom - 12;
       const above = box.top - top - 12;
       menu.style.width = `${Math.min(box.width, width - 24)}px`;
+      if (searchable) menu.style.maxHeight = 'none';
       const upwards = below < Math.min(menu.scrollHeight, 280) && above > below;
       menu.style.left = `${Math.max(left + 12, Math.min(box.left, left + width - menu.offsetWidth - 12))}px`;
       menu.style.maxHeight = `${Math.max(48, Math.min(320, upwards ? above : below))}px`;
@@ -79,15 +119,60 @@ export function enhanceSelects(root = document, signal) {
     function activate(index) {
       if (!options[index] || options[index].disabled) return;
       active = index;
-      for (const [i, item] of Array.from(menu.children).entries()) {
+      for (const [i, item] of Array.from(optionsHost.children).entries()) {
         if (item instanceof HTMLElement) item.dataset.active = String(i === active);
       }
-      const item = menu.children[active];
+      const item = optionsHost.children[active];
       if (!(item instanceof HTMLElement)) return;
       trigger.setAttribute('aria-activedescendant', item.id);
+      search?.setAttribute('aria-activedescendant', item.id);
+      if (menu.hidden) return;
+      const scroller = searchable ? optionsHost : menu;
       // Scroll only the popup; scrollIntoView can move the entire planning form.
-      if (item.offsetTop < menu.scrollTop) menu.scrollTop = item.offsetTop;
-      else if (item.offsetTop + item.offsetHeight > menu.scrollTop + menu.clientHeight) menu.scrollTop = item.offsetTop + item.offsetHeight - menu.clientHeight;
+      if (item.offsetTop < scroller.scrollTop) scroller.scrollTop = item.offsetTop;
+      else if (item.offsetTop + item.offsetHeight > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = item.offsetTop + item.offsetHeight - scroller.clientHeight;
+    }
+
+    /** @param {'default' | 'preserve'} mode */
+    function paint(mode) {
+      const previous = mode === 'preserve' ? options[active] : undefined;
+      const query = search?.value ?? '';
+      const needle = query.toLocaleLowerCase();
+      options = Array.from(select.options).filter((option) => {
+        if (option.hidden) return false;
+        if (!searchable || query === '') return true;
+        return option.value !== '' && option.label.toLocaleLowerCase().includes(needle);
+      });
+      const retained = previous && options.includes(previous) ? options.indexOf(previous) : -1;
+      const fallback = !searchable || query === ''
+        ? options.findIndex((option) => option.selected && !option.disabled)
+        : -1;
+      const next = retained >= 0 ? retained : fallback >= 0 ? fallback : options.findIndex((option) => !option.disabled);
+      if (searchable && options.length === 0) {
+        optionsHost.replaceChildren(empty);
+        active = -1;
+        trigger.removeAttribute('aria-activedescendant');
+        search?.removeAttribute('aria-activedescendant');
+        return;
+      }
+      optionsHost.replaceChildren(...options.map((option, index) => {
+        const item = document.createElement('div');
+        item.id = `${optionsHost.id}-${index}`;
+        item.className = 'select-control__option';
+        item.setAttribute('role', 'option');
+        item.setAttribute('aria-selected', String(option.selected));
+        item.setAttribute('aria-disabled', String(option.disabled));
+        item.textContent = option.label;
+        item.addEventListener('click', () => commit(index));
+        return item;
+      }));
+      if (next < 0) {
+        active = -1;
+        trigger.removeAttribute('aria-activedescendant');
+        search?.removeAttribute('aria-activedescendant');
+        return;
+      }
+      activate(next);
     }
 
     function sync() {
@@ -101,32 +186,30 @@ export function enhanceSelects(root = document, signal) {
         else trigger.setAttribute(attr, attribute);
       }
       trigger.setAttribute('aria-required', String(select.required));
-      if (!menu.hidden) close();
+      if (menu.hidden) return;
+      if (!searchable || select.disabled) close();
+      else {
+        paint('preserve');
+        position();
+        if (active >= 0) activate(active);
+      }
     }
 
-    function open() {
+    /** @param {string} [typed] */
+    function open(typed) {
       if (select.disabled) return;
       closeCurrent?.();
-      options = Array.from(select.options).filter((option) => !option.hidden);
-      menu.replaceChildren(...options.map((option, index) => {
-        const item = document.createElement('div');
-        item.id = `${menu.id}-${index}`;
-        item.className = 'select-control__option';
-        item.setAttribute('role', 'option');
-        item.setAttribute('aria-selected', String(option.selected));
-        item.setAttribute('aria-disabled', String(option.disabled));
-        item.textContent = option.label;
-        item.addEventListener('click', () => commit(index));
-        return item;
-      }));
-      active = -1;
+      if (search) search.value = typeof typed === 'string' ? typed : '';
+      paint('default');
       menu.hidden = false;
       trigger.setAttribute('aria-expanded', 'true');
       closeCurrent = close;
-      trigger.focus({ preventScroll: true });
+      if (search) {
+        search.focus({ preventScroll: true });
+        search.setSelectionRange(search.value.length, search.value.length);
+      } else trigger.focus({ preventScroll: true });
       position();
-      const selected = options.findIndex((option) => option.selected && !option.disabled);
-      activate(selected < 0 ? options.findIndex((option) => !option.disabled) : selected);
+      if (active >= 0) activate(active);
     }
 
     /** @param {number} index */
@@ -167,6 +250,17 @@ export function enhanceSelects(root = document, signal) {
         else commit(active);
       } else if (event.key.length === 1 && !event.altKey) {
         event.preventDefault();
+        if (searchable && search) {
+          if (menu.hidden) open(event.key);
+          else {
+            search.focus({ preventScroll: true });
+            search.value += event.key;
+            paint('default');
+            position();
+            if (active >= 0) activate(active);
+          }
+          return;
+        }
         if (menu.hidden) open();
         const now = Date.now();
         typed = now - typedAt > 700 ? event.key : typed + event.key;
@@ -181,12 +275,46 @@ export function enhanceSelects(root = document, signal) {
         }
       }
     });
-    menu.addEventListener('pointerdown', (event) => { if (event.pointerType === 'mouse') event.preventDefault(); });
-    document.addEventListener('pointerdown', (event) => { if (event.target instanceof Node && !wrapper.contains(event.target)) close(); }, { signal });
-    document.addEventListener('focusin', (event) => { if (event.target instanceof Node && !wrapper.contains(event.target)) close(); }, { signal });
-    window.addEventListener('resize', close, { signal });
+    search?.addEventListener('keydown', (event) => {
+      if (event.isComposing || event.key === 'Process' || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.key === 'Tab') { close(); return; }
+      if (event.key === 'Escape') { event.preventDefault(); close({ focusTrigger: true }); return; }
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Enter') return;
+      event.preventDefault();
+      if (event.key === 'Enter') { if (active >= 0) commit(active); return; }
+      const enabled = options.map((option, index) => option.disabled ? -1 : index).filter((index) => index >= 0);
+      if (!enabled.length) return;
+      let next = enabled.indexOf(active);
+      if (next < 0) next = event.key === 'ArrowDown' ? 0 : enabled.length - 1;
+      else next = Math.max(0, Math.min(next + (event.key === 'ArrowDown' ? 1 : -1), enabled.length - 1));
+      activate(enabled[next] ?? -1);
+    });
+    search?.addEventListener('input', () => {
+      if (menu.hidden) return;
+      paint('default');
+      position();
+      if (active >= 0) activate(active);
+    });
+    menu.addEventListener('pointerdown', (event) => {
+      if (search && event.target instanceof Node && search.contains(event.target)) return;
+      suppressClose = true;
+      if (event.pointerType === 'mouse') event.preventDefault();
+    });
+    menu.addEventListener('pointerup', () => { suppressClose = false; });
+    menu.addEventListener('pointercancel', () => { suppressClose = false; });
+    document.addEventListener('pointerdown', (event) => {
+      if (!(event.target instanceof Node) || wrapper.contains(event.target)) return;
+      const takesFocus = event.target instanceof Element && Boolean(event.target.closest('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'));
+      close({ focusTrigger: Boolean(search) && !takesFocus });
+    }, { signal });
+    document.addEventListener('focusin', (event) => {
+      if (suppressClose) return;
+      if (event.target instanceof Node && !wrapper.contains(event.target)) close();
+    }, { signal });
+    const onResize = () => { if (searchable && !menu.hidden) position(); else close(); };
+    window.addEventListener('resize', onResize, { signal });
     window.addEventListener('scroll', position, { capture: true, signal });
-    window.visualViewport?.addEventListener('resize', close, { signal });
+    window.visualViewport?.addEventListener('resize', onResize, { signal });
     window.visualViewport?.addEventListener('scroll', position, { signal });
     select.addEventListener('input', sync);
     select.addEventListener('change', sync);

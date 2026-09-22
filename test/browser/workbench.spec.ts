@@ -294,6 +294,40 @@ test('incomplete verification responses cannot produce a passing state', async (
   await expect(page.locator('#verification-details')).toBeHidden();
 });
 
+test('symbol search filters contracts until a result is confirmed', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 700 });
+  const menu = page.locator('#symbol-options');
+  const search = page.locator('#symbol-search');
+  await page.locator('#symbol-trigger').click();
+  await expect(search).toBeFocused();
+  await expect(search).toHaveAttribute('placeholder', '搜索币种');
+  await expect(menu.getByRole('option', { name: '仅查看账户', exact: true })).toBeVisible();
+  const box = await menu.boundingBox();
+  if (!box) throw new Error('币种菜单未定位');
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(320);
+  await search.fill('eth');
+  await expect(menu.getByRole('option', { name: 'ETHUSDT', exact: true })).toBeVisible();
+  await expect(menu.getByRole('option', { name: 'BTCUSDT', exact: true })).toHaveCount(0);
+  await expect(menu.getByRole('option', { name: '仅查看账户', exact: true })).toHaveCount(0);
+  await expect(page.locator('#symbol')).toHaveValue('');
+  await search.fill('zzzz');
+  await expect(menu.getByText('无匹配币种')).toBeVisible();
+  await search.press('Enter');
+  await expect(menu).toBeVisible();
+  await expect(page.locator('#symbol')).toHaveValue('');
+  await search.press('Escape');
+  await expect(menu).toBeHidden();
+  await page.locator('#symbol-trigger').press('b');
+  await expect(search).toHaveValue('b');
+  await expect(menu.getByRole('option', { name: 'BTCUSDT', exact: true })).toBeVisible();
+  await search.press('Enter');
+  await expect(page.locator('#symbol')).toHaveValue('BTCUSDT');
+  await expect(page.locator('#symbol-trigger')).toBeFocused();
+  await page.locator('#side-trigger').click();
+  await expect(page.locator('#side-search')).toHaveCount(0);
+});
+
 test('existing native select accessibility and interaction checks still pass', async ({ page }) => {
   for (const [path, file, contentType] of [
     ['/test/select.browser.html', '../select.browser.html', 'text/html'],

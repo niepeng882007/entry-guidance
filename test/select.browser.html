@@ -19,6 +19,13 @@
     <p id="help" class="help">保留原生字段和表单事件。</p>
     <label class="field-label" for="second">其他字段</label>
     <select id="second" class="field-control field-control--select"><option>A</option><option>B</option></select>
+    <label class="field-label" for="coin">USDT 永续币种</label>
+    <select id="coin" name="coin" data-search="搜索币种" class="field-control field-control--select">
+      <option value="">仅查看账户</option>
+      <option value="ETHUSDT">ETHUSDT</option>
+      <option value="BTCUSDT">BTCUSDT</option>
+      <option value="1000PEPEUSDT">1000PEPEUSDT</option>
+    </select>
   </form>
   <button id="run" class="button">运行检查</button>
   <pre id="results" role="status"></pre>
@@ -81,6 +88,56 @@
       assert(trigger.textContent === '恢复的模板', '模板替换与程序选值同步');
       select.focus();
       assert(document.activeElement === trigger, '原生字段的程序焦点转交可见控件');
+      const coin = document.getElementById('coin');
+      const coinTrigger = document.getElementById('coin-trigger');
+      const coinMenu = document.getElementById('coin-options');
+      const coinSearch = document.getElementById('coin-search');
+      const optionLabels = () => [...coinMenu.querySelectorAll('[role="option"]')].map((item) => item.textContent);
+      const activeLabel = () => document.getElementById(coinTrigger.getAttribute('aria-activedescendant'))?.textContent;
+      const typeQuery = (query) => { coinSearch.value = query; coinSearch.dispatchEvent(new Event('input', { bubbles: true })); };
+      assert(!document.getElementById('choice-search') && !document.getElementById('second-search'), '未标记的下拉框没有搜索框');
+      assert(coinSearch.getAttribute('aria-label') === '搜索币种' && coinSearch.placeholder === '搜索币种', '搜索框使用搜索币种作为名称');
+      assert(coinSearch.getAttribute('autocomplete') === 'off' && coinSearch.autocapitalize === 'none' && coinSearch.getAttribute('autocorrect') === 'off' && coinSearch.spellcheck === false, '关闭自动大写、纠错和拼写检查');
+      assert(coinSearch.getAttribute('name') === null, '搜索框不是表单字段');
+      coin.value = 'BTCUSDT'; sync();
+      coinTrigger.click();
+      assert(document.activeElement === coinSearch && coinSearch.value === '' && !coinMenu.hidden, '打开后聚焦空搜索框');
+      assert(optionLabels().join() === '仅查看账户,ETHUSDT,BTCUSDT,1000PEPEUSDT' && activeLabel() === 'BTCUSDT', '空搜索高亮当前合约并保持原顺序');
+      typeQuery('pepe');
+      assert(optionLabels().join() === '1000PEPEUSDT' && activeLabel() === '1000PEPEUSDT' && coin.value === 'BTCUSDT', '子串筛选不改变已选值');
+      typeQuery('Btc');
+      assert(optionLabels().join() === 'BTCUSDT', '匹配不区分大小写');
+      typeQuery('t');
+      assert(optionLabels().join() === 'ETHUSDT,BTCUSDT,1000PEPEUSDT', '多条命中保持原顺序');
+      coinSearch.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+      coinSearch.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+      coinSearch.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+      assert(activeLabel() === '1000PEPEUSDT', '方向键在结果末尾停下');
+      typeQuery('zzzz');
+      assert(coinMenu.querySelector('.select-control__empty')?.textContent === '无匹配币种' && !coinTrigger.hasAttribute('aria-activedescendant'), '无命中时显示不可选提示');
+      coinSearch.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      assert(!coinMenu.hidden && coin.value === 'BTCUSDT', '无命中时回车不改已选值');
+      typeQuery('');
+      assert(optionLabels()[0] === '仅查看账户' && activeLabel() === 'BTCUSDT', '删空搜索词后恢复完整列表');
+      coinSearch.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      assert(coinMenu.hidden && coinSearch.value === '' && coin.value === 'BTCUSDT' && document.activeElement === coinTrigger, 'Escape 关闭并丢掉搜索词');
+      coinTrigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', bubbles: true, cancelable: true }));
+      assert(!coinMenu.hidden && document.activeElement === coinSearch && coinSearch.value === 'p' && optionLabels().join() === '1000PEPEUSDT', '关闭时按字母打开并作为搜索词');
+      coin.add(new Option('PEPEUSDT', 'PEPEUSDT'));
+      await Promise.resolve();
+      assert(!coinMenu.hidden && optionLabels().join() === '1000PEPEUSDT,PEPEUSDT' && coin.value === 'BTCUSDT', '名单更新时保持打开并重新筛选');
+      coinSearch.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      assert(coin.value === '1000PEPEUSDT' && coinMenu.hidden && document.activeElement === coinTrigger, '回车确认高亮项并回到按钮');
+      assert(new FormData(document.getElementById('fixture')).get('coin') === '1000PEPEUSDT', '表单提交仍读取原生币种');
+      coinTrigger.click(); typeQuery('eth');
+      coinSearch.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+      assert(coinMenu.hidden && coin.value === '1000PEPEUSDT', 'Tab 关闭且不提交未确认的筛选');
+      coinTrigger.click();
+      window.dispatchEvent(new Event('resize'));
+      window.visualViewport?.dispatchEvent(new Event('resize'));
+      assert(!coinMenu.hidden, '视口高度变化不关闭币种菜单');
+      document.getElementById('second-trigger').click();
+      assert(coinMenu.hidden && !document.getElementById('second-options').hidden, '打开其他下拉框时关闭币种菜单');
       results.textContent += '\n全部通过';
     } catch (error) { results.textContent += `\n失败：${error.message}`; throw error; }
   });

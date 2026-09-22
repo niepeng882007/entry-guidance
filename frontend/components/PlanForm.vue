@@ -35,6 +35,7 @@ const {
             ><select
               id="symbol"
               name="symbol"
+              data-search="搜索币种"
               aria-describedby="symbol-help"
               class="field-control field-control--select"
               v-model="fields['symbol']"
