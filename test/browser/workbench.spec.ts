@@ -53,11 +53,11 @@ test('review navigation stays current when its section cannot reach the activati
     await expect(link('开仓卡')).not.toHaveAttribute('aria-current', 'location');
     await link('开仓卡').click();
     await expect(link('开仓卡')).toHaveAttribute('aria-current', 'location');
-    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'auto' }));
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await expect(link('本次计划')).toHaveAttribute('aria-current', 'location');
     await page.evaluate(() => {
       history.replaceState(null, '', location.pathname + location.search);
-      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'auto' });
+      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' });
     });
     await expect(link('成交核验')).toHaveAttribute('aria-current', 'location');
   }
@@ -71,15 +71,15 @@ test('a nav click keeps its module current until the user takes over scrolling',
   const traveling = await page.evaluate(() => {
     const currentHref = () =>
       document.querySelector('.module-nav__link[aria-current="location"]')?.getAttribute('href');
-    window.scrollTo({ top: 0, behavior: 'auto' });
+    window.scrollTo({ top: 0, behavior: 'instant' });
     document.querySelector<HTMLAnchorElement>('.module-nav__link[href="#review-module"]')?.click();
     const during = {
       current: currentHref(),
       top: document.getElementById('review-module')?.getBoundingClientRect().top ?? 0,
     };
     window.dispatchEvent(new WheelEvent('wheel', { deltaY: 80, bubbles: true, cancelable: true }));
-    window.scrollTo({ top: 80, behavior: 'auto' });
-    window.scrollTo({ top: 0, behavior: 'auto' });
+    window.scrollTo({ top: 80, behavior: 'instant' });
+    window.scrollTo({ top: 0, behavior: 'instant' });
     return { during, followed: currentHref(), y: window.scrollY };
   });
   expect(traveling.during.current).toBe('#review-module');
@@ -91,10 +91,42 @@ test('a nav click keeps its module current until the user takes over scrolling',
   await expect(link('账户快照')).toHaveAttribute('aria-current', 'location');
 });
 
+test('navigation animates scrolling and selection, respecting reduced motion', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const link = page.locator('.module-nav__link[href="#review-module"]');
+  for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+    await page.emulateMedia({ reducedMotion });
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+    await expect(page.locator('.module-nav__link[href="#plan-module"]')).toHaveAttribute(
+      'aria-current',
+      'location',
+    );
+    const animated = reducedMotion === 'no-preference';
+    await expect(page.locator('html')).toHaveCSS('scroll-behavior', 'auto');
+    await expect(link).toHaveCSS('transition-duration', animated ? '0.22s, 0.22s, 0.12s' : '0s');
+    const start = await link.evaluate((node) => {
+      (node as HTMLAnchorElement).click();
+      return { y: window.scrollY, current: node.getAttribute('aria-current') };
+    });
+    expect(start.current).toBe('location');
+    if (animated) expect(start.y).toBe(0);
+    else expect(start.y).toBeGreaterThan(0);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          Math.abs(document.documentElement.scrollHeight - innerHeight - scrollY),
+        ),
+      )
+      .toBeLessThanOrEqual(1);
+    await expect(link).toHaveAttribute('aria-current', 'location');
+    await expect(page.locator('#review-module')).toBeFocused();
+  }
+});
+
 test('responsive layout, navigation, keyboard select and initial hidden states', async ({
   page,
 }) => {
-  for (const width of [320, 390, 1280]) {
+  for (const width of [320, 375, 390, 414, 768, 1280]) {
     await page.setViewportSize({ width, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true,

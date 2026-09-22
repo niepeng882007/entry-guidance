@@ -68,9 +68,6 @@ onMounted(() => {
     .map((link) => document.getElementById(link.getAttribute('href')?.slice(1) ?? ''))
     .filter((target): target is HTMLElement => target instanceof HTMLElement);
   let lockedModuleId: string | null = null;
-  let ownHashClick = false;
-  let scrollEnds = 0;
-  let ignoreScrollEndsThrough = 0;
   const sync = () => {
     if (lockedModuleId) {
       markModuleLink(links, lockedModuleId);
@@ -84,17 +81,12 @@ onMounted(() => {
     sync();
   };
   const finishLockedScroll = () => {
-    scrollEnds += 1;
-    // The click's own fragment navigation can emit scrollend before the page moves.
-    if (ownHashClick) ignoreScrollEndsThrough = scrollEnds;
-    if (!lockedModuleId || scrollEnds <= ignoreScrollEndsThrough) return;
     releaseLock();
     sync();
   };
   const engageLock = (target: HTMLElement) => {
     const id = target.id;
     lockedModuleId = id;
-    ignoreScrollEndsThrough = scrollEnds;
     markModuleLink(links, id);
     requestAnimationFrame(() => {
       if (lockedModuleId !== id) return;
@@ -107,21 +99,29 @@ onMounted(() => {
   for (const link of document.querySelectorAll('a[href^="#"]'))
     link.addEventListener(
       'click',
-      () => {
+      (event) => {
+        if (
+          event instanceof MouseEvent &&
+          (event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey)
+        )
+          return;
         const target = document.getElementById(link.getAttribute('href')?.slice(1) ?? '');
         if (target instanceof HTMLDetailsElement) target.open = true;
         if (!(target instanceof HTMLElement) || !link.closest('.module-nav')) return;
         if (!modules.includes(target)) return;
-        ownHashClick = true;
-        queueMicrotask(() => {
-          ownHashClick = false;
-        });
+        event.preventDefault();
+        if (location.hash !== `#${target.id}`) history.pushState(null, '', `#${target.id}`);
+        target.focus({ preventScroll: true });
         if (Math.abs(moduleScrollTop(target) - window.scrollY) <= 1) {
           releaseLock();
           requestAnimationFrame(sync);
           return;
         }
         engageLock(target);
+        window.scrollTo({
+          top: moduleScrollTop(target),
+          behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
+        });
       },
       { signal: events.signal },
     );
@@ -144,8 +144,6 @@ onMounted(() => {
   window.addEventListener(
     'popstate',
     () => {
-      // A hash click also emits popstate. Back/forward leaves a different hash.
-      if (ownHashClick || (lockedModuleId && location.hash === `#${lockedModuleId}`)) return;
       releaseLock();
       sync();
     },
