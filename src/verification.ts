@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { AccountError, object, readAccount, readBinance, type AccountConfig } from './account.ts';
 import { readMarket } from './market.ts';
-import { generateEntryPlan, parseDecimal, formatDecimal, splitStopQuantity, type EntryInput, type Snapshot } from '../public/draft.js';
+import { generateEntryPlan, recheckEntryPlan, parseDecimal, formatDecimal, splitStopQuantity, type EntryInput, type Snapshot } from '../public/draft.js';
 
 type Config = AccountConfig & { mode?: 'real' | 'demo' };
 const SCALE = 100_000_000n;
@@ -22,6 +22,10 @@ export type Verification = {
   paidCommission?: string; paidFunding?: string; remainingFunding?: string; exitFee?: string; coverage?: string;
   nearQuantity?: string; nearActualPercent?: string; nearStatus?: string; realizedPnl?: string;
   account?: Snapshot['account'];
+  entryCheck?: {
+    status: 'ready' | 'needs-action' | 'incomplete'; queriedAt: string; issue: string;
+    liquidationPrice?: string; liquidationBuffer?: string; plannedLoss?: string; fundingRequired?: string;
+  };
 };
 
 function rows(value: unknown) {
@@ -123,7 +127,33 @@ export async function verifyPosition(config: Config, plan: Plan, demo = 'missing
   ]);
   const after = await readState(config, plan.symbol, signal);
   if (serialize(before) !== serialize(after)) throw new AccountError('inconsistent_snapshot', '查询期间持仓或挂单发生变化，本次快照不一致，请重新刷新核验。');
-  return { ...evaluate(plan, after, { trades: rows(tradeData), history: rows(historyData), algoHistory: rows(algoHistory), income: rows(incomeData), exchange: object(exchangeData), fee: object(feeData), mark: object(markData), start: period.startTime, end }), account };
+  return recheckBeforeEntry(config, plan, { ...evaluate(plan, after, { trades: rows(tradeData), history: rows(historyData), algoHistory: rows(algoHistory), income: rows(incomeData), exchange: object(exchangeData), fee: object(feeData), mark: object(markData), start: period.startTime, end }), account }, signal);
+}
+
+async function recheckBeforeEntry(config: Config, plan: Plan, result: Verification, signal = AbortSignal.timeout(10_000)): Promise<Verification> {
+  if (result.status !== 'waiting' || result.orderId || result.quantity !== '0' || result.pendingEntries?.length !== 0) return result;
+  let snapshot: Snapshot;
+  try {
+    snapshot = await readMarket(config, plan.symbol, signal);
+    if (config.mode !== 'demo') {
+      const state = await readState(config, plan.symbol, signal);
+      const end = await serverTime(config, signal);
+      const trades = rows(await readBinance(config, 'trades', signal, plan.symbol, { startTime: Date.parse(plan.startedAt), endTime: end }));
+      if (state.position.quantity !== 0n || !state.position.isolated || state.orders.length || state.algoOrders.length || trades.length)
+        throw new AccountError('inconsistent_snapshot', '原卡检查期间持仓、挂单或成交发生变化，请刷新核验；不能继续按未开仓处理。');
+    }
+  }
+  catch (error) {
+    return { ...result, entryCheck: { status: 'incomplete', queriedAt: new Date().toISOString(), issue: error instanceof Error ? error.message : '当前账户与行情查询失败。' } };
+  }
+  try {
+    const checked = recheckEntryPlan(plan, snapshot);
+    return { ...result, entryCheck: { status: checked.liquidationIssue ? 'needs-action' : 'ready', queriedAt: snapshot.queriedAt,
+      issue: checked.liquidationIssue, liquidationPrice: checked.liquidationPrice, liquidationBuffer: checked.liquidationBuffer,
+      plannedLoss: checked.plannedLoss, fundingRequired: checked.fundingRequired } };
+  } catch (error) {
+    return { ...result, entryCheck: { status: 'needs-action', queriedAt: snapshot.queriedAt, issue: error instanceof Error ? error.message : '原卡已不适用，请重新生成。' } };
+  }
 }
 
 async function verifyDemo(config: Config, plan: Plan, scenario: string): Promise<Verification> {
@@ -171,7 +201,7 @@ async function verifyDemo(config: Config, plan: Plan, scenario: string): Promise
     { filterType: 'LOT_SIZE', ...rules.lotSize }, { filterType: 'MARKET_LOT_SIZE', minQty: rules.minQty, maxQty: rules.maxQty, stepSize: rules.stepSize },
   ] }] };
   const algoHistory = plan.nearStop && protectedScenario ? [stop, ...(near && scenario !== 'final-only' ? [near] : [])] : [];
-  return { ...evaluate(plan, state, { trades, history, algoHistory, income, exchange, fee: { symbol: plan.symbol, takerCommissionRate: snapshot.takerRate }, mark: { symbol: plan.symbol, markPrice: snapshot.mark, time: now }, start: Date.parse(plan.startedAt), end: now }), account: snapshot.account };
+  return recheckBeforeEntry(config, plan, { ...evaluate(plan, state, { trades, history, algoHistory, income, exchange, fee: { symbol: plan.symbol, takerCommissionRate: snapshot.takerRate }, mark: { symbol: plan.symbol, markPrice: snapshot.mark, time: now }, start: Date.parse(plan.startedAt), end: now }), account: snapshot.account });
 }
 
 type State = Awaited<ReturnType<typeof readState>>;

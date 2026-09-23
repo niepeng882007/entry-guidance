@@ -181,6 +181,7 @@ test('leverage shows live liquidation estimates, unsafe buffers and missing data
   await expect(price).toContainText('USDT（模拟）');
   const original = await price.textContent();
   await page.locator('#leverage').fill('10');
+  await expect(price).toContainText('USDT（模拟）');
   await expect(price).not.toHaveText(original!);
   const updated = await price.textContent();
   await page.locator('#minimum-buffer').fill('99');
@@ -217,6 +218,108 @@ test('leverage shows live liquidation estimates, unsafe buffers and missing data
   await expect(price).toContainText('USDT');
   await select(page, 'symbol', '仅查看账户');
   await expect(price).toHaveText('—');
+});
+
+test('estimates debounce edits, poll fresh quotes and discard late responses', async ({ page }) => {
+  await fillPlan(page);
+  await page.clock.install();
+  await page.clock.setFixedTime(new Date());
+  const price = page.locator('#leverage-liquidation');
+  let quote = '100';
+  let requests = 0;
+  let holdNext = false;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route('**/api/market?*', async (route) => {
+    const response = await route.fetch();
+    const data = await response.json();
+    data.ask = data.mark = data.last = quote;
+    data.bid = String(Number(quote) - 1);
+    const hold = holdNext;
+    holdNext = false;
+    requests++;
+    if (hold) await gate;
+    await route.fulfill({ json: data });
+  });
+  await page.locator('#leverage').fill('6');
+  await page.locator('#leverage').fill('7');
+  await expect(price).toHaveText('—');
+  await expect(page.locator('#leverage-liquidation-note')).toContainText('更新中');
+  await page.clock.fastForward(500);
+  await expect(price).toHaveText(/^\d+\.\d{2} USDT（模拟）$/);
+  expect(requests).toBe(1);
+  await expect(page.locator('#leverage-help')).toHaveCount(0);
+  await expect(page.locator('#leverage-liquidation-help')).not.toContainText('快照估算');
+  const original = await price.textContent();
+  quote = '101';
+  await page.clock.fastForward(10_000);
+  await expect.poll(() => requests).toBe(2);
+  await expect(price).toContainText('USDT');
+  await expect(price).not.toHaveText(original!);
+  holdNext = true;
+  quote = '102';
+  await page.clock.fastForward(10_000);
+  await expect.poll(() => requests).toBe(3);
+  await expect(price).toHaveText('—');
+  quote = '103';
+  await page.locator('#leverage').fill('8');
+  await page.clock.fastForward(500);
+  await expect.poll(() => requests).toBe(4);
+  await expect(price).toContainText('USDT');
+  const latest = await price.textContent();
+  release();
+  await page.unrouteAll({ behavior: 'wait' });
+  await expect(price).toHaveText(latest!);
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide')));
+  await page.clock.fastForward(30_000);
+  await expect(price).toHaveText('—');
+  await expect(page.locator('#status')).not.toHaveText('正在查询');
+});
+
+test('original card checks refresh without changing its parameters and failures revoke readiness', async ({
+  page,
+}) => {
+  await fillPlan(page);
+  await generate(page);
+  const quantity = await page.locator('#card-quantity').textContent();
+  const stop = await page.locator('#card-stopPrice').textContent();
+  const budget = await page.locator('#card-budget').textContent();
+  await select(page, 'demo-scenario', '尚未成交 / 限价挂单中');
+  await page.locator('#verify').click();
+  await expect(page.locator('#card-check')).toHaveAttribute('data-state', 'ready');
+  await expect(page.locator('#verification')).toHaveAttribute('data-current', 'false');
+  await expect(page.locator('[data-copy="quantity"]')).toBeEnabled();
+  await page.clock.install();
+  await page.clock.setFixedTime(new Date());
+  await page.route('**/api/verification?*', async (route) => {
+    const response = await route.fetch();
+    const result = await response.json();
+    result.entryCheck = {
+      status: 'needs-action',
+      queriedAt: new Date().toISOString(),
+      issue: '原卡数量不再符合当前预算，请重新生成。',
+    };
+    await route.fulfill({ json: result });
+  });
+  // A manual refresh starts the next polling timer under the controlled clock.
+  await page.locator('#verify').click();
+  await expect(page.locator('#card-check')).toHaveAttribute('data-state', 'needs-action');
+  await expect(page.locator('[data-copy="quantity"]')).toBeDisabled();
+  await expect(page.locator('#card-quantity')).toHaveText(quantity!);
+  await expect(page.locator('#card-stopPrice')).toHaveText(stop!);
+  await expect(page.locator('#card-budget')).toHaveText(budget!);
+  await page.unrouteAll({ behavior: 'wait' });
+  await page.clock.fastForward(10_000);
+  await expect(page.locator('#card-check')).toHaveAttribute('data-state', 'ready');
+  await page.route('**/api/verification?*', (route) =>
+    route.fulfill({ status: 503, json: { error: '测试查询失败' } }),
+  );
+  await page.clock.fastForward(10_000);
+  await expect(page.locator('#verification')).toHaveAttribute('data-state', 'incomplete');
+  await expect(page.locator('#entry-card')).toHaveAttribute('data-current', 'false');
+  await expect(page.locator('#leverage-liquidation')).toHaveText('—');
 });
 
 test('a late generation response cannot publish a card after the input changed', async ({

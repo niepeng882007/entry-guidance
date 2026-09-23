@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { test, type TestContext } from 'node:test';
 import { createServer } from '../src/server.ts';
-import { generateDraft, generateEntryPlan, generateEntryPreview, createStopTemplate, applyStopTemplate } from '../public/draft.js';
+import { generateDraft, generateEntryPlan, generateEntryPreview, recheckEntryPlan, createStopTemplate, applyStopTemplate } from '../public/draft.js';
 
 const input = { symbol: 'BTCUSDT', side: 'long', budgetMode: 'amount', budget: '20', stopMode: 'price', stop: '98', slippage: '1', funding: '1' };
 const entryInput = { ...input, leverage: '10', minimumBuffer: '1', fundingCap: '' };
@@ -336,6 +336,35 @@ test('liquidation preview retains estimates for unsafe buffers without allowing 
   assert.throws(() => generateEntryPreview({ ...entryInput, budget: '' }, snapshot), /亏损预算/);
   assert.throws(() => generateEntryPreview({ ...entryInput, minimumBuffer: '' }, snapshot), /最低强平缓冲/);
   assert.throws(() => generateEntryPreview(entryInput, { ...snapshot, brackets: [] }), /档位/);
+});
+
+test('rechecking a frozen card preserves quantity, absolute stops and budget instead of resizing to new facts', async (t) => {
+  const app = await start(t);
+  const snapshot = await (await app.read()).json();
+  snapshot.account.availableBalance = '1000';
+  snapshot.takerRate = '0';
+  snapshot.bid = snapshot.ask = '100';
+  for (const side of ['long', 'short']) {
+    const parameters = { ...entryInput, side, budgetMode: 'percent', budget: '1', stopMode: 'percent', stop: '2', slippage: '0', funding: '0', leverage: '5', stopLevels: 'two', nearStopMode: 'percent', nearStop: '1', nearPercent: '70' };
+    const plan = generateEntryPlan(parameters, snapshot);
+    const saved = JSON.stringify(plan);
+    const favorable = side === 'long' ? '99.5' : '100.5';
+    const fresh = { ...snapshot, ask: favorable, bid: favorable, account: { ...snapshot.account, equity: '100000' } };
+    const checked = recheckEntryPlan(plan, fresh);
+    assert.equal(checked.quantity, plan.quantity);
+    assert.equal(checked.budget, '10');
+    assert.equal(checked.stopPrice, plan.stopPrice);
+    assert.deepEqual(checked.nearStop?.quantity, plan.nearStop?.quantity);
+    assert.notEqual(checked.liquidationPrice, plan.liquidationPrice);
+    const adverse = side === 'long' ? '101' : '99';
+    assert.throws(() => recheckEntryPlan(plan, { ...snapshot, ask: adverse, bid: adverse }), /原卡数量.*预算/);
+    assert.throws(() => recheckEntryPlan(plan, { ...fresh, account: { ...fresh.account, availableBalance: '1' } }), /原卡数量/);
+    assert.throws(() => recheckEntryPlan(plan, { ...snapshot, rules: { ...snapshot.rules, tickSize: '3' } }), /原卡|止损/);
+    assert.equal(JSON.stringify(plan), saved);
+  }
+  const limit = generateEntryPlan({ ...entryInput, entryType: 'LIMIT', limitPrice: '100' }, snapshot);
+  assert.equal(recheckEntryPlan(limit, { ...snapshot, ask: '101', bid: '100.5' }).referencePrice, '100');
+  assert.throws(() => recheckEntryPlan(limit, { ...snapshot, symbol: 'ETHUSDT' }), /币种/);
 });
 
 test('liquidation recalculates across tiers and changing leverage alone preserves price risk', async (t) => {

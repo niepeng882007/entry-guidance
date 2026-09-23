@@ -365,6 +365,7 @@ test('an unfilled GTC limit waits with its remaining amount, and a confirmed zer
   assert.equal(waiting.status, 'waiting');
   assert.equal(waiting.orderId, '10');
   assert.equal(waiting.filledQuantity, '0');
+  assert.equal(waiting.entryCheck, undefined);
   assert.deepEqual(waiting.pendingEntries, [{ orderId: '10', filledQuantity: '0', remainingQuantity: '0.495' }]);
   order.status = 'CANCELED';
   app.data['/fapi/v1/openOrders'] = [];
@@ -554,7 +555,32 @@ test('a frozen entry plan has a confirmed flat starting point; an empty position
   assert.equal(plan.startedAt, new Date(app.now).toISOString());
   const result = await app.read(`/api/verification?planId=${plan.id}`);
   assert.equal(result.status, 200);
-  assert.equal((await result.json()).status, 'waiting');
+  const waiting = await result.json();
+  assert.equal(waiting.status, 'waiting');
+  assert.equal(waiting.entryCheck.status, 'ready');
+  assert.equal(waiting.entryCheck.liquidationPrice, plan.liquidationPrice);
+});
+
+test('pre-entry checks reject changed funding or missing market data and never revive a traded card', async (t) => {
+  const app = await start(t);
+  const plan = await (await app.create()).json();
+  const path = `/api/verification?planId=${plan.id}`;
+  const account = app.data['/fapi/v2/account'];
+  app.data['/fapi/v2/account'] = { ...(account as object), assets: [{ asset: 'USDT', walletBalance: '1025', unrealizedProfit: '-25', marginBalance: '1000', availableBalance: '1' }] };
+  const insufficient = await (await app.read(path)).json();
+  assert.equal(insufficient.entryCheck.status, 'needs-action');
+  assert.match(insufficient.entryCheck.issue, /原卡数量/);
+  app.data['/fapi/v2/account'] = account;
+  const book = app.data['/fapi/v1/ticker/bookTicker'];
+  app.data['/fapi/v1/ticker/bookTicker'] = {};
+  assert.equal((await (await app.read(path)).json()).entryCheck.status, 'incomplete');
+  app.data['/fapi/v1/ticker/bookTicker'] = () => { fill(app); return book; };
+  const changedDuringCheck = await (await app.read(path)).json();
+  assert.equal(changedDuringCheck.entryCheck.status, 'incomplete');
+  assert.match(changedDuringCheck.entryCheck.issue, /检查期间.*变化/);
+  app.data['/fapi/v1/ticker/bookTicker'] = book;
+  fill(app);
+  assert.equal((await (await app.read(path)).json()).entryCheck, undefined);
 });
 
 test('refresh finds missing protection, then verifies a single stop with actual costs after manual correction', async (t) => {

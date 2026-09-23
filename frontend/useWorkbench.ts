@@ -73,7 +73,6 @@ export function useWorkbench(source: string) {
     'stop-unit': '%',
     'near-stop-unit': '%',
     'final-percent': '30%',
-    'leverage-help': '读取账户适用杠杆档位后校验。',
     'template-preview': '',
     'template-delete': '删除所选模板',
     'template-list-error': '',
@@ -114,6 +113,7 @@ export function useWorkbench(source: string) {
     'card-title': '本次开仓卡',
     'card-symbol': '—',
     'card-status': '',
+    'card-check': '尚未检查。',
     'card-entry-type': '',
     'card-direction': '',
     'card-quantity': '—',
@@ -204,6 +204,7 @@ export function useWorkbench(source: string) {
     verificationState: 'pending',
     verificationCurrent: false,
     cardCurrent: false,
+    entryCheckState: 'pending',
     refreshDisabled: false,
     generateDisabled: false,
     verifyDisabled: false,
@@ -254,6 +255,26 @@ export function useWorkbench(source: string) {
   let planInputs = '';
 
   let inputVersion = 0;
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let suspended = false;
+
+  function liquidationPrice(value: string) {
+    const scaled = parseDecimal(value, '强平价');
+    const cents = (scaled + 500_000n) / 1_000_000n;
+    if (scaled > 0n && cents === 0n) return '<0.01';
+    return `${cents / 100n}.${String(cents % 100n).padStart(2, '0')}`;
+  }
+
+  function scheduleRefresh(delay = 10_000) {
+    clearTimeout(refreshTimer);
+    refreshTimer = undefined;
+    if (suspended || document.hidden || !navigator.onLine || !hidden.relogin || !fields.symbol)
+      return;
+    refreshTimer = setTimeout(() => {
+      refreshTimer = undefined;
+      resume();
+    }, delay);
+  }
 
   const time = (value: string) => new Date(value).toLocaleString('zh-CN', { hour12: false });
   const show = (id: string, value: string) => {
@@ -383,6 +404,8 @@ export function useWorkbench(source: string) {
   }
 
   function cancelQuery(reason: string) {
+    clearTimeout(refreshTimer);
+    refreshTimer = undefined;
     requestId++;
     pending?.abort();
     pending = undefined;
@@ -515,10 +538,14 @@ export function useWorkbench(source: string) {
 
   function inputChanged(reason: string) {
     inputVersion++;
+    snapshot = null;
     cancelQuery(reason);
     saveSettings();
     saveTrade();
     renderDraft();
+    if (fields.symbol && navigator.onLine && !suspended)
+      show('leverage-liquidation-note', '更新中 · 等待输入完成后读取账户与行情。');
+    scheduleRefresh(500);
   }
 
   function saveTemplate() {
@@ -593,6 +620,8 @@ export function useWorkbench(source: string) {
   function invalidateCard(reason: string) {
     invalidateVerification(reason);
     ui.cardCurrent = false;
+    ui.entryCheckState = 'pending';
+    show('card-check', `待检查 · ${reason}。`);
     if (!entryPlan) return;
     show(
       'card-status',
@@ -672,7 +701,7 @@ export function useWorkbench(source: string) {
       excess: `${result.excess ?? '—'} USDT`,
       paid: `${result.paidCommission ?? '—'} / ${result.paidFunding ?? '—'} USDT`,
       reserved: `${result.remainingFunding ?? '—'} / ${result.exitFee ?? '—'} USDT`,
-      liquidation: `${result.liquidationPrice ?? '—'} USDT`,
+      liquidation: `${result.liquidationPrice ? liquidationPrice(result.liquidationPrice) : '—'} USDT`,
       buffer: `${result.liquidationBuffer ?? '—'}% / ${plan.minimumBuffer}%`,
       coverage: result.coverage ?? '未确认有效覆盖',
       near: `${result.nearStatus ?? '未确认'} / ${result.nearQuantity ?? '—'} ${plan.baseAsset}（按累计入场量分配的实际比例 ${result.nearActualPercent ?? '—'}%）`,
@@ -682,6 +711,56 @@ export function useWorkbench(source: string) {
     for (const [id, value] of Object.entries(outputs)) show(`verification-${id}`, value);
     hidden['verification-details'] = false;
     if (result.account) renderAccount(result.account);
+    const checked = result.entryCheck;
+    ui.entryCheckState = 'inactive';
+    show('card-check', '已进入成交核验或尚未确认空仓，不能据此继续开仓；请查看下方核验结果。');
+    show('leverage-liquidation-note', '原方案参数已固定；请查看原卡最新检查或成交后实际强平价。');
+    if (checked) {
+      if (
+        result.status !== 'waiting' ||
+        result.quantity !== '0' ||
+        result.orderId ||
+        result.pendingEntries?.length !== 0 ||
+        !['ready', 'needs-action', 'incomplete'].includes(checked.status) ||
+        typeof checked.issue !== 'string' ||
+        !Number.isFinite(Date.parse(checked.queriedAt)) ||
+        Math.abs(Date.now() - Date.parse(checked.queriedAt)) > 30_000 ||
+        Math.abs(Date.parse(checked.queriedAt) - Date.parse(result.queriedAt)) > 30_000
+      )
+        throw new Error('原卡检查响应不完整、过期或与成交状态不一致。');
+      if (
+        checked.status === 'ready' &&
+        (checked.issue ||
+          parseDecimal(checked.liquidationPrice, '预估强平价') <= 0n ||
+          parseDecimal(checked.plannedLoss, '当前计划亏损') > parseDecimal(plan.budget, '原预算') ||
+          parseDecimal(checked.liquidationBuffer, '当前强平缓冲') <
+            parseDecimal(plan.minimumBuffer, '最低强平缓冲') ||
+          parseDecimal(checked.fundingRequired, '当前资金需求') <= 0n)
+      )
+        throw new Error('原卡检查缺少有效的价格、风险或资金结果。');
+      ui.entryCheckState = checked.status;
+      ui.cardCurrent = checked.status === 'ready';
+      const label =
+        checked.status === 'ready'
+          ? '本次查询仍符合开仓约束'
+          : checked.status === 'needs-action'
+            ? '需重新生成'
+            : '无法确认，请刷新';
+      show(
+        'card-check',
+        `${plan.source === 'demo' ? '模拟 · ' : ''}${label} · ${checked.issue || `原数量、预算与止损保持不变；最新预计止损亏损 ${checked.plannedLoss} USDT。`}`,
+      );
+      show('card-status', `原方案 · 参数固定于 ${time(plan.queriedAt)}；适用性请看下方最新检查。`);
+      if (checked.liquidationPrice) {
+        const price = `${liquidationPrice(checked.liquidationPrice)} USDT${plan.source === 'demo' ? '（模拟）' : ''}`;
+        show('leverage-liquidation', price);
+        show('card-check', `${text['card-check']} 最新预估强平价 ${price}。`);
+      }
+      show(
+        'leverage-liquidation-note',
+        checked.issue || `按原卡固定数量估算；有方向缓冲 ${checked.liquidationBuffer}%。`,
+      );
+    }
     saveTrade();
   }
 
@@ -692,6 +771,7 @@ export function useWorkbench(source: string) {
       return;
     }
     let plan = entryPlan;
+    clearTimeout(refreshTimer);
     const version = inputVersion,
       id = ++requestId;
     pending?.abort();
@@ -738,6 +818,7 @@ export function useWorkbench(source: string) {
         !['waiting', 'ended', 'incomplete', 'needs-action', 'verified'].includes(result.status) ||
         !Array.isArray(result.issues) ||
         !Number.isFinite(Date.parse(result.queriedAt)) ||
+        Math.abs(Date.now() - Date.parse(result.queriedAt)) > 30_000 ||
         result.account?.source !== plan.source ||
         !Number.isFinite(Date.parse(result.account?.queriedAt ?? '')) ||
         Math.abs(Date.parse(result.queriedAt) - Date.parse(result.account?.queriedAt ?? '')) >
@@ -752,6 +833,9 @@ export function useWorkbench(source: string) {
     } catch (error) {
       if (id !== requestId || version !== inputVersion) return;
       showLogin(error);
+      invalidateCard('本次查询失败，原卡适用性未确认');
+      show('leverage-liquidation', '—');
+      show('leverage-liquidation-note', `查询失败 · ${message(error)}`);
       invalidateVerification('本次查询失败，上次结果已失效');
       ui.verificationState = 'incomplete';
       show(
@@ -777,6 +861,7 @@ export function useWorkbench(source: string) {
         ui.verifyDisabled = JSON.stringify(readInput()) !== planInputs;
         ui.verifyBusy = false;
         show('verify', '返回后刷新核验');
+        scheduleRefresh();
       }
     }
   }
@@ -824,12 +909,9 @@ export function useWorkbench(source: string) {
         const checked = generateEntryPreview(input, snapshot);
         show(
           'leverage-liquidation',
-          `${checked.liquidationPrice} USDT${snapshot.source === 'demo' ? '（模拟）' : ''}`,
+          `${liquidationPrice(checked.liquidationPrice)} USDT${snapshot.source === 'demo' ? '（模拟）' : ''}`,
         );
-        show(
-          'leverage-liquidation-note',
-          `按 ${time(snapshot.queriedAt)} 快照估算；有方向缓冲 ${checked.liquidationBuffer}%。`,
-        );
+        show('leverage-liquidation-note', `有方向缓冲 ${checked.liquidationBuffer}%。`);
         if (checked.liquidationIssue) throw new Error(checked.liquidationIssue);
         plan = checked;
         show('preview-funding', `${checked.fundingRequired} / ${checked.fundingLimit} USDT`);
@@ -839,7 +921,7 @@ export function useWorkbench(source: string) {
         );
         show(
           'preview-liquidation',
-          `${checked.liquidationPrice} USDT（假设逐仓本金 ${checked.isolatedWalletAssumption} USDT）`,
+          `${liquidationPrice(checked.liquidationPrice)} USDT（假设逐仓本金 ${checked.isolatedWalletAssumption} USDT）`,
         );
         show('preview-buffer', `${checked.liquidationBuffer}% / ${checked.minimumBuffer}%`);
         hidden['entry-checks'] = false;
@@ -904,7 +986,7 @@ export function useWorkbench(source: string) {
       funding: `${plan.fundingRequired} / ${plan.fundingLimit} USDT`,
       margin: `${plan.initialMargin} USDT`,
       'open-costs': `${plan.openLoss} / ${plan.openFeeReserve} USDT`,
-      liquidation: `${plan.liquidationPrice} USDT`,
+      liquidation: `${liquidationPrice(plan.liquidationPrice)} USDT`,
       buffer: `${plan.liquidationBuffer}% / ${plan.minimumBuffer}%`,
       assuming: `${plan.assumingPrice} USDT`,
       estimates: `${plan.entryEstimate} / ${plan.exitEstimate} USDT`,
@@ -930,6 +1012,8 @@ export function useWorkbench(source: string) {
     show('card-status', `${plan.notice} 数据截至 ${time(plan.queriedAt)}。`);
     show('copy-status', '数量和价格仅复制数值，请核对上方单位。');
     ui.cardCurrent = true;
+    ui.entryCheckState = 'ready';
+    show('card-check', '生成时检查通过；页面可见且联网时每 10 秒重新检查，原卡参数保持固定。');
     hidden['entry-card'] = false;
     hidden['verification'] = false;
     ui.verificationCurrent = false;
@@ -950,6 +1034,7 @@ export function useWorkbench(source: string) {
 
   async function generateCard() {
     if (ui.generateBusy) return;
+    clearTimeout(refreshTimer);
     const input = readInput(),
       version = inputVersion;
     const id = ++requestId;
@@ -982,6 +1067,14 @@ export function useWorkbench(source: string) {
       lastQueryAt = '';
       renderAccount(plan.account);
       renderCard();
+      show(
+        'leverage-liquidation',
+        `${liquidationPrice(plan.liquidationPrice)} USDT${plan.source === 'demo' ? '（模拟）' : ''}`,
+      );
+      show(
+        'leverage-liquidation-note',
+        `按原卡固定数量估算；有方向缓冲 ${plan.liquidationBuffer}%。`,
+      );
       saveTrade();
       renderTemplatePreview();
       show('draft-error', '');
@@ -1015,6 +1108,7 @@ export function useWorkbench(source: string) {
         ui.generateDisabled = !navigator.onLine;
         ui.refreshDisabled = false;
         ui.verifyDisabled = !entryPlan || JSON.stringify(readInput()) !== planInputs;
+        scheduleRefresh();
       }
     }
   }
@@ -1046,6 +1140,7 @@ export function useWorkbench(source: string) {
   }
 
   async function load() {
+    clearTimeout(refreshTimer);
     const id = ++requestId;
     pending?.abort();
     pending = new AbortController();
@@ -1056,6 +1151,7 @@ export function useWorkbench(source: string) {
     hidden['market-details'] = true;
     show('fee', '等待账户查询');
     renderDraft();
+    show('leverage-liquidation-note', '更新中 · 正在读取账户与行情。');
     ui.refreshDisabled = true;
     ui.generateDisabled = true;
     ui.status = 'loading';
@@ -1069,6 +1165,22 @@ export function useWorkbench(source: string) {
         ? await read<Snapshot>(`/api/market?symbol=${encodeURIComponent(selected)}`, signal)
         : await read<Account>('/api/account', signal);
       if (id !== requestId || fields.symbol !== selected) return;
+      if (
+        'account' in data &&
+        (data.symbol !== selected ||
+          [
+            data.queriedAt,
+            data.account.queriedAt,
+            data.bookTime,
+            data.markTime,
+            data.lastTime,
+          ].some(
+            (value) =>
+              !Number.isFinite(Date.parse(value)) ||
+              Math.abs(Date.now() - Date.parse(value)) > 30_000,
+          ))
+      )
+        throw new Error('账户或行情数据缺失、币种不一致或已过期，请刷新。');
       const account = 'account' in data ? data.account : data;
       renderAccount(account);
       show('attempted', time(data.queriedAt));
@@ -1118,10 +1230,6 @@ export function useWorkbench(source: string) {
             .map((tier) => `${tier.floor}–${tier.cap} USDT：最高 ${tier.maxLeverage} 倍`)
             .join('；'),
         );
-        show(
-          'leverage-help',
-          `此账户该币种最高 ${Math.max(...snapshot.brackets.map((tier) => tier.maxLeverage))} 倍；实际名义价值还受各档位约束。`,
-        );
         hidden['market-details'] = false;
       }
       renderDraft();
@@ -1148,6 +1256,7 @@ export function useWorkbench(source: string) {
       );
       hidden['account-only'] = !marginConflict;
       show('draft-error', message(error));
+      show('leverage-liquidation-note', `查询失败 · ${message(error)}`);
       ui.draftState = 'error';
       show(
         'entry-error',
@@ -1163,6 +1272,7 @@ export function useWorkbench(source: string) {
         pending = undefined;
         ui.refreshDisabled = false;
         ui.generateDisabled = ui.generateBusy || !navigator.onLine;
+        scheduleRefresh();
       }
     }
   }
@@ -1188,6 +1298,7 @@ export function useWorkbench(source: string) {
     inputVersion++;
     cancelQuery('模拟场景已变化，请刷新');
     saveTrade();
+    scheduleRefresh(500);
   }
   async function copyValue(key: string) {
     if (!entryPlan || !ui.cardCurrent) return;
@@ -1221,7 +1332,7 @@ export function useWorkbench(source: string) {
     }
   }
   function resume() {
-    if (document.hidden || pending) return;
+    if (suspended || document.hidden || pending) return;
     if (!navigator.onLine) {
       suspend('网络已断开，请联网后重试');
       return;
@@ -1230,6 +1341,7 @@ export function useWorkbench(source: string) {
   }
 
   function suspend(reason: string) {
+    suspended = true;
     snapshot = null;
     cancelQuery(reason);
     saveTrade();
@@ -1292,7 +1404,10 @@ export function useWorkbench(source: string) {
       'visibilitychange',
       () => {
         if (document.hidden) suspend('页面已离开；返回后重新查询，离开期间不监控');
-        else resume();
+        else {
+          suspended = false;
+          resume();
+        }
       },
       options,
     );
@@ -1302,15 +1417,24 @@ export function useWorkbench(source: string) {
       (event) => {
         if (event.persisted) {
           suspend('已返回页面；原查询已失效');
+          suspended = false;
           resume();
         }
       },
       options,
     );
     window.addEventListener('offline', () => suspend('网络已断开，请联网后重试'), options);
-    window.addEventListener('online', resume, options);
+    window.addEventListener(
+      'online',
+      () => {
+        suspended = false;
+        resume();
+      },
+      options,
+    );
     cleanup = () => {
       events.abort();
+      clearTimeout(refreshTimer);
       requestId++;
       pending?.abort();
     };

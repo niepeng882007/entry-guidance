@@ -19,6 +19,15 @@ const { text, hidden, ui, cardElement, copyValue } = workbench;
       <span class="tag" id="card-symbol">{{ text['card-symbol'] }}</span>
     </div>
     <p id="card-status" role="status" aria-live="polite">{{ text['card-status'] }}</p>
+    <p
+      id="card-check"
+      class="help"
+      :data-state="ui.entryCheckState"
+      role="status"
+      aria-live="polite"
+    >
+      <strong>原卡最新检查：</strong>{{ text['card-check'] }}
+    </p>
     <p id="card-entry-type" class="muted">{{ text['card-entry-type'] }}</p>
     <div class="copy-row">
       <div class="copy-row__content">
@@ -174,7 +183,7 @@ const { text, hidden, ui, cardElement, copyValue } = workbench;
         <dd id="card-loss" class="details__value">{{ text['card-loss'] }}</dd>
       </div>
       <div class="details__row">
-        <dt class="details__term">预估强平价</dt>
+        <dt class="details__term">生成时预估强平价</dt>
         <dd id="card-liquidation" class="details__value">{{ text['card-liquidation'] }}</dd>
       </div>
       <div class="details__row">

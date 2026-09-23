@@ -97,10 +97,25 @@ export function generateEntryPlan(input, snapshot) {
   return { ...plan, status: snapshot.source === 'demo' ? 'simulation' : 'ready',
     notice: snapshot.source === 'demo' ? '模拟开仓卡 · 不可用于真实交易。' : '开仓前检查通过 · 尚未下单或核验止损。',
     symbol: snapshot.symbol, baseAsset: snapshot.baseAsset, side: input.side,
-    leverage: input.leverage, exitMode: '整仓退出',
+    leverage: input.leverage, fundingCap: input.fundingCap, exitMode: '整仓退出',
     execution: { entrySide: input.side === 'long' ? 'BUY' : 'SELL', stopSide: input.side === 'long' ? 'SELL' : 'BUY', marginMode: 'ISOLATED', positionMode: 'BOTH', entryType: input.entryType ?? 'MARKET', ...(input.entryType === 'LIMIT' ? { timeInForce: 'GTC' } : {}), stopType: 'STOP_MARKET', workingType: 'MARK_PRICE', priceProtect: 'FALSE', closePosition: 'true' },
     accountTime: snapshot.account.queriedAt, bookTime: snapshot.bookTime, markTime: snapshot.markTime, lastTime: snapshot.lastTime,
   };
+}
+
+/** @param {ReturnType<typeof generateEntryPlan>} original @param {Snapshot} snapshot */
+export function recheckEntryPlan(original, snapshot) {
+  if (snapshot.source !== original.source) throw new Error('原卡与当前数据来源不一致。');
+  const input = { symbol: original.symbol, side: original.side, budgetMode: 'amount', budget: original.budget,
+    stopMode: 'price', stop: original.stopPrice, slippage: original.slippagePercent, funding: original.funding,
+    leverage: original.leverage, minimumBuffer: original.minimumBuffer, fundingCap: original.fundingCap ?? original.fundingLimit,
+    entryType: original.execution.entryType, limitPrice: original.limitPrice, stopLevels: original.nearStop ? 'two' : 'single',
+    nearStopMode: 'price', nearStop: original.nearStop?.price, nearPercent: original.nearStop?.percent };
+  const plan = calculatePlan(input, snapshot, input, parseDecimal(original.quantity, '原卡数量'));
+  if (!plan.checks) throw new Error('原卡资金与强平检查未完成。');
+  if (plan.stopPrice !== original.stopPrice || plan.nearStop?.price !== original.nearStop?.price || plan.nearStop?.quantity !== original.nearStop?.quantity)
+    throw new Error('交易规则变化，原卡止损价格或分层数量不再适用；请重新生成。');
+  return { ...plan, ...plan.checks };
 }
 
 /** @param {bigint} numerator @param {bigint} denominator */
@@ -132,8 +147,8 @@ export function splitStopQuantity(quantity, percent, rules) {
   return { near, remaining: quantity - near, actualPercent: formatDecimal(actual), finalPercent: formatDecimal(PERCENT - actual) };
 }
 
-/** @param {DraftInput} input @param {Snapshot} snapshot @param {EntryInput} [entryInput] */
-function calculatePlan(input, snapshot, entryInput) {
+/** @param {DraftInput} input @param {Snapshot} snapshot @param {EntryInput} [entryInput] @param {bigint} [fixedQuantity] */
+function calculatePlan(input, snapshot, entryInput, fixedQuantity) {
   if (input.symbol !== snapshot.symbol) throw new Error('币种已变化，请刷新行情。');
   if (!['long', 'short'].includes(input.side)) throw new Error('请选择做多或做空方向。');
   if (!['amount', 'percent'].includes(input.budgetMode)) throw new Error('预算方式无效。');
@@ -205,8 +220,10 @@ function calculatePlan(input, snapshot, entryInput) {
     maxQty = combined.max;
   }
   const allowedQuantity = constraints ? min(riskQuantity, maxQty, constraints.quantityLimit) : min(riskQuantity, maxQty);
+  if (fixedQuantity !== undefined && (fixedQuantity > allowedQuantity || fixedQuantity < minQty || (fixedQuantity - minQty) % step !== 0n))
+    throw new Error('原卡数量不再符合当前预算、资金、账户档位或数量规则；请重新生成，不会自动缩量。');
   if (allowedQuantity < minQty) throw new Error(`预算${constraints ? '、可用资金或账户档位' : ''}允许数量 ${formatDecimal(allowedQuantity)} ${snapshot.baseAsset} 低于最小开仓数量 ${formatDecimal(minQty)}；请自行调整输入。`);
-  const quantity = minQty + (allowedQuantity - minQty) / step * step;
+  const quantity = fixedQuantity ?? minQty + (allowedQuantity - minQty) / step * step;
   if (quantity <= 0n) throw new Error('预算允许数量低于最小数量步长；请自行调整输入。');
   if (quantity * (limit ? entry : mark) < parseDecimal(snapshot.rules.minNotional, '最小名义价值') * SCALE) throw new Error('数量取整后低于最小名义价值；不会自动增加仓位。');
   const loss = quantity * unitLoss + funding * 10n ** 26n;
