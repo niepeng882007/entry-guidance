@@ -171,6 +171,54 @@ test('editing invalidates the card, copy and verification; original inputs recov
   await expect(page.locator('[data-copy="quantity"]')).toBeDisabled();
 });
 
+test('leverage shows live liquidation estimates, unsafe buffers and missing data without stale prices', async ({
+  page,
+  context,
+}) => {
+  await fillPlan(page);
+  const price = page.locator('#leverage-liquidation');
+  const note = page.locator('#leverage-liquidation-note');
+  await expect(price).toContainText('USDT（模拟）');
+  const original = await price.textContent();
+  await page.locator('#leverage').fill('10');
+  await expect(price).not.toHaveText(original!);
+  const updated = await price.textContent();
+  await page.locator('#minimum-buffer').fill('99');
+  await expect(price).toHaveText(updated!);
+  await expect(note).toContainText('低于要求');
+  await expect(page.locator('#entry-checks')).toBeHidden();
+  await page.locator('#generate').click();
+  await expect(page.locator('#entry-error')).toContainText('低于要求');
+  await expect(page.locator('#entry-card')).toBeHidden();
+  await page.locator('#refresh').click();
+  await expect(price).toContainText('USDT');
+  await page.locator('#minimum-buffer').fill('1');
+  await page.locator('#leverage').fill('50');
+  await expect(price).toContainText('USDT');
+  await expect(note).toContainText('先强平、后止损');
+  await select(page, 'side', '做空');
+  await expect(price).toContainText('USDT');
+  await expect(note).toContainText('先强平、后止损');
+  for (const width of [320, 390, 1280]) {
+    await page.setViewportSize({ width, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+  }
+  await page.locator('#budget').fill('');
+  await expect(price).toHaveText('—');
+  await expect(note).toContainText('亏损预算');
+  await page.locator('#budget').fill('10');
+  await expect(price).toContainText('USDT');
+  await context.setOffline(true);
+  await expect(price).toHaveText('—');
+  await expect(note).toContainText('快照');
+  await context.setOffline(false);
+  await expect(price).toContainText('USDT');
+  await select(page, 'symbol', '仅查看账户');
+  await expect(price).toHaveText('—');
+});
+
 test('a late generation response cannot publish a card after the input changed', async ({
   page,
 }) => {

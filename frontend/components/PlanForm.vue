@@ -255,12 +255,21 @@ const {
             name="leverage"
             inputmode="numeric"
             autocomplete="off"
-            aria-describedby="leverage-help entry-error"
+            aria-describedby="leverage-help leverage-liquidation-help entry-error"
             maxlength="3"
             class="field-control"
             v-model="fields['leverage']"
             @input="inputChanged('输入已修改')"
           />
+          <p class="help" id="leverage-liquidation-help" aria-live="polite">
+            预估强平价：<output id="leverage-liquidation">{{
+              text['leverage-liquidation']
+            }}</output>
+            <br />
+            <span id="leverage-liquidation-note">{{ text['leverage-liquidation-note'] }}</span>
+            <br />
+            成交前逐仓估算，不含额外或自动追加保证金及未来资金费变化。
+          </p>
           <p class="help" id="leverage-help">{{ text['leverage-help'] }}</p>
         </div>
         <div class="field">

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { test, type TestContext } from 'node:test';
 import { createServer } from '../src/server.ts';
-import { generateDraft, generateEntryPlan, createStopTemplate, applyStopTemplate } from '../public/draft.js';
+import { generateDraft, generateEntryPlan, generateEntryPreview, createStopTemplate, applyStopTemplate } from '../public/draft.js';
 
 const input = { symbol: 'BTCUSDT', side: 'long', budgetMode: 'amount', budget: '20', stopMode: 'price', stop: '98', slippage: '1', funding: '1' };
 const entryInput = { ...input, leverage: '10', minimumBuffer: '1', fundingCap: '' };
@@ -316,6 +316,28 @@ test('short liquidation uses a signed buffer and both sides reject missing or in
   assert.throws(() => generateEntryPlan(short, { ...snapshot, brackets: [] }), /档位/);
 });
 
+test('liquidation preview retains estimates for unsafe buffers without allowing a formal plan', async (t) => {
+  const app = await start(t);
+  const snapshot = await (await app.read()).json();
+  for (const side of ['long', 'short']) {
+    const parameters = { ...entryInput, side, stop: side === 'long' ? '98' : '102' };
+    const preview = generateEntryPreview(parameters, snapshot);
+    assert.equal(preview.status, 'draft');
+    assert.equal(preview.liquidationIssue, '');
+    assert.equal(preview.liquidationPrice, generateEntryPlan(parameters, snapshot).liquidationPrice);
+    for (const unsafe of [{ ...parameters, minimumBuffer: '99' }, { ...parameters, leverage: '50' }]) {
+      const estimate = generateEntryPreview(unsafe, snapshot);
+      assert.ok(Number(estimate.liquidationPrice) > 0);
+      assert.match(estimate.liquidationIssue, /低于要求|先强平、后止损/);
+      assert.throws(() => generateEntryPlan(unsafe, snapshot), { message: estimate.liquidationIssue });
+    }
+    assert.notEqual(generateEntryPreview({ ...parameters, leverage: '5' }, snapshot).liquidationPrice, preview.liquidationPrice);
+  }
+  assert.throws(() => generateEntryPreview({ ...entryInput, budget: '' }, snapshot), /亏损预算/);
+  assert.throws(() => generateEntryPreview({ ...entryInput, minimumBuffer: '' }, snapshot), /最低强平缓冲/);
+  assert.throws(() => generateEntryPreview(entryInput, { ...snapshot, brackets: [] }), /档位/);
+});
+
 test('liquidation recalculates across tiers and changing leverage alone preserves price risk', async (t) => {
   const data = responses();
   data['/fapi/v1/commissionRate'] = { symbol: 'BTCUSDT', takerCommissionRate: '0' };
@@ -558,4 +580,38 @@ test('symbol discovery and market reads stay protected and demo never contacts B
   assert.equal(snapshot.source, 'demo');
   assert.equal(generateDraft(input, snapshot).source, 'demo');
   assert.equal(demo.requests.length, 0);
+});
+
+test('TradFi perpetual contracts are supported in symbols discovery', async (t) => {
+  const data = responses();
+  const soxl = {
+    symbol: 'SOXLUSDT',
+    baseAsset: 'SOXL',
+    quoteAsset: 'USDT',
+    marginAsset: 'USDT',
+    status: 'TRADING',
+    contractType: 'TRADIFI_PERPETUAL',
+    orderTypes: ['MARKET', 'LIMIT', 'STOP_MARKET'],
+    timeInForce: ['GTC'],
+    marketTakeBound: '0.03',
+    pricePrecision: 2,
+    quantityPrecision: 2,
+    filters: [
+      { filterType: 'PRICE_FILTER', minPrice: '0.01', maxPrice: '100000', tickSize: '0.01' },
+      { filterType: 'LOT_SIZE', minQty: '0.01', maxQty: '10000', stepSize: '0.01' },
+      { filterType: 'MARKET_LOT_SIZE', minQty: '0.01', maxQty: '1000', stepSize: '0.01' },
+      { filterType: 'MIN_NOTIONAL', notional: '5' },
+      { filterType: 'PERCENT_PRICE', multiplierUp: '1.2', multiplierDown: '0.8' },
+    ],
+  };
+  (data['/fapi/v1/exchangeInfo'] as { symbols: unknown[] }).symbols.push(soxl);
+  const app = await start(t, data);
+  const symbols = await app.read('/api/symbols');
+  assert.equal(symbols.status, 200);
+  assert.deepEqual((await symbols.json()).symbols, ['BTCUSDT', 'SOXLUSDT']);
+
+  const badContract = { ...soxl, symbol: 'BADUSDT', contractType: 'CURRENT_QUARTER' };
+  (data['/fapi/v1/exchangeInfo'] as { symbols: unknown[] }).symbols.push(badContract);
+  const symbolsAfter = await app.read('/api/symbols');
+  assert.deepEqual((await symbolsAfter.json()).symbols, ['BTCUSDT', 'SOXLUSDT']);
 });

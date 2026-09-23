@@ -836,3 +836,19 @@ test('a verification timeout returns no passing status and retains the server-si
   app.data['/fapi/v1/openAlgoOrders'] = [stop];
   assert.equal((await (await app.read(path)).json()).status, 'verified');
 });
+
+test('TradFi perpetual contract can be verified when contractType is TRADIFI_PERPETUAL', async (t) => {
+  const app = await start(t);
+  const plan = await (await app.create()).json();
+  const stop = fill(app);
+  app.data['/fapi/v1/openAlgoOrders'] = [stop];
+  const exchange = app.data['/fapi/v1/exchangeInfo'] as { symbols: { contractType: string }[] };
+  exchange.symbols[0]!.contractType = 'TRADIFI_PERPETUAL';
+  const path = `/api/verification?planId=${plan.id}`;
+  assert.equal((await (await app.read(path)).json()).status, 'verified');
+
+  exchange.symbols[0]!.contractType = 'CURRENT_QUARTER';
+  const invalid = await (await app.read(path)).json();
+  assert.equal(invalid.status, 'incomplete');
+  assert.match(invalid.issues.join(' '), /当前合约状态或规则无法确认/);
+});

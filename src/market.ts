@@ -10,7 +10,7 @@ export function demoAccount() {
 
 function supported(contract: Record<string, unknown>) {
   return typeof contract.symbol === 'string' && /^[\p{L}\p{N}_]{1,30}USDT$/u.test(contract.symbol)
-    && contract.status === 'TRADING' && contract.contractType === 'PERPETUAL'
+    && contract.status === 'TRADING' && (contract.contractType === 'PERPETUAL' || contract.contractType === 'TRADIFI_PERPETUAL')
     && contract.quoteAsset === 'USDT' && contract.marginAsset === 'USDT'
     && typeof contract.baseAsset === 'string' && contract.baseAsset.length > 0
     && Array.isArray(contract.orderTypes) && contract.orderTypes.includes('MARKET') && contract.orderTypes.includes('STOP_MARKET');

@@ -1,7 +1,7 @@
 import { nextTick, onMounted, onUnmounted, reactive, ref } from 'vue';
 import {
   generateDraft,
-  generateEntryPlan,
+  generateEntryPreview,
   formatDecimal,
   parseDecimal,
   createStopTemplate,
@@ -99,6 +99,8 @@ export function useWorkbench(source: string) {
     'preview-funding': '—',
     'preview-costs': '—',
     'preview-liquidation': '—',
+    'leverage-liquidation': '—',
+    'leverage-liquidation-note': '请先选择币种并刷新账户与行情。',
     'preview-buffer': '—',
     'entry-error': '',
     generate: '刷新并生成开仓卡',
@@ -799,6 +801,8 @@ export function useWorkbench(source: string) {
     ui.limit = limit;
     hidden['draft-result'] = true;
     hidden['entry-checks'] = true;
+    show('leverage-liquidation', '—');
+    show('leverage-liquidation-note', '等待当前币种的完整账户与行情快照，请选择币种或刷新。');
     show('entry-error', '');
     show('budget-unit', fields['budget-mode'] === 'percent' ? '%' : 'USDT');
     show('stop-unit', fields['stop-mode'] === 'percent' ? '%' : 'USDT');
@@ -817,7 +821,16 @@ export function useWorkbench(source: string) {
       const input = readInput();
       let plan = generateDraft(input, snapshot);
       try {
-        const checked = generateEntryPlan(input, snapshot);
+        const checked = generateEntryPreview(input, snapshot);
+        show(
+          'leverage-liquidation',
+          `${checked.liquidationPrice} USDT${snapshot.source === 'demo' ? '（模拟）' : ''}`,
+        );
+        show(
+          'leverage-liquidation-note',
+          `按 ${time(snapshot.queriedAt)} 快照估算；有方向缓冲 ${checked.liquidationBuffer}%。`,
+        );
+        if (checked.liquidationIssue) throw new Error(checked.liquidationIssue);
         plan = checked;
         show('preview-funding', `${checked.fundingRequired} / ${checked.fundingLimit} USDT`);
         show(
@@ -831,6 +844,7 @@ export function useWorkbench(source: string) {
         show('preview-buffer', `${checked.liquidationBuffer}% / ${checked.minimumBuffer}%`);
         hidden['entry-checks'] = false;
       } catch (error) {
+        show('leverage-liquidation-note', `需处理 · ${message(error)}`);
         show('entry-error', `需处理 · ${message(error)} 当前试算仅包含价格风险约束。`);
       }
       const outputs = {
@@ -858,6 +872,7 @@ export function useWorkbench(source: string) {
       hidden['draft-result'] = false;
     } catch (error) {
       show('draft-error', message(error));
+      show('leverage-liquidation-note', `待计算 · ${message(error)}`);
     }
   }
 

@@ -386,7 +386,7 @@ function evaluate(plan: Plan, state: State, data: Records): Verification {
   if (gap <= 0n || gap * PERCENT * total < minimum * cost) result.issues.push(`当前强平缓冲 ${result.liquidationBuffer}% 低于要求 ${plan.minimumBuffer}%，差 ${formatDecimal(ceil(minimum * cost - gap * PERCENT * total, cost))} 个百分点；请在 Binance 降低杠杆或增加逐仓保证金后刷新，不改动原止损。`);
   if (direction * (mark - stop) <= 0n) result.issues.push('当前标记价已达到原止损条件，尚有持仓；请立即在 Binance 检查实际执行状态。');
   const contracts = rows(data.exchange.symbols).filter((contract) => contract.symbol === plan.symbol);
-  if (contracts.length !== 1 || contracts[0]!.status !== 'TRADING' || contracts[0]!.contractType !== 'PERPETUAL' || contracts[0]!.marginAsset !== 'USDT') return incomplete('当前合约状态或规则无法确认。');
+  if (contracts.length !== 1 || contracts[0]!.status !== 'TRADING' || (contracts[0]!.contractType !== 'PERPETUAL' && contracts[0]!.contractType !== 'TRADIFI_PERPETUAL') || contracts[0]!.marginAsset !== 'USDT') return incomplete('当前合约状态或规则无法确认。');
   const filters = rows(contracts[0]!.filters);
   const filter = (name: string) => {
     const matches = filters.filter((item) => item.filterType === name);

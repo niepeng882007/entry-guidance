@@ -84,10 +84,17 @@ export function generateDraft(input, snapshot) {
 }
 
 /** @param {EntryInput} input @param {Snapshot} snapshot */
-export function generateEntryPlan(input, snapshot) {
+export function generateEntryPreview(input, snapshot) {
   const plan = calculatePlan(input, snapshot, input);
   if (!plan.checks) throw new Error('资金与强平检查未完成。');
-  return { ...plan, ...plan.checks, status: snapshot.source === 'demo' ? 'simulation' : 'ready',
+  return { ...plan, ...plan.checks };
+}
+
+/** @param {EntryInput} input @param {Snapshot} snapshot */
+export function generateEntryPlan(input, snapshot) {
+  const plan = generateEntryPreview(input, snapshot);
+  if (plan.liquidationIssue) throw new Error(plan.liquidationIssue);
+  return { ...plan, status: snapshot.source === 'demo' ? 'simulation' : 'ready',
     notice: snapshot.source === 'demo' ? '模拟开仓卡 · 不可用于真实交易。' : '开仓前检查通过 · 尚未下单或核验止损。',
     symbol: snapshot.symbol, baseAsset: snapshot.baseAsset, side: input.side,
     leverage: input.leverage, exitMode: '整仓退出',
@@ -275,9 +282,11 @@ function checkEntry(quantity, stop, entry, entryEstimate, direction, fee, limits
     const liquidationPrice = direction === 1n ? ceil(numerator, denominator) : numerator / denominator;
     const gap = direction * (stop - liquidationPrice);
     const buffer = gap * PERCENT / entry;
-    if (gap <= 0n) throw new Error(`先强平、后止损：预估强平价 ${formatDecimal(liquidationPrice)}，有方向缓冲 ${formatDecimal(buffer)}%；请降低杠杆后重算，不会拉近止损。`);
-    if (gap * PERCENT < limits.minimumBuffer * entry) throw new Error(`强平缓冲 ${formatDecimal(buffer)}% 低于要求 ${formatDecimal(limits.minimumBuffer)}%，差 ${formatDecimal(ceil(limits.minimumBuffer * entry - gap * PERCENT, entry))} 个百分点；请降低杠杆后重算。`);
+    let liquidationIssue = '';
+    if (gap <= 0n) liquidationIssue = `先强平、后止损：预估强平价 ${formatDecimal(liquidationPrice)}，有方向缓冲 ${formatDecimal(buffer)}%；请降低杠杆后重算，不会拉近止损。`;
+    else if (gap * PERCENT < limits.minimumBuffer * entry) liquidationIssue = `强平缓冲 ${formatDecimal(buffer)}% 低于要求 ${formatDecimal(limits.minimumBuffer)}%，差 ${formatDecimal(ceil(limits.minimumBuffer * entry - gap * PERCENT, entry))} 个百分点；请降低杠杆后重算。`;
     return {
+      liquidationIssue,
       initialMargin: formatDecimal(ceil(quantity * limits.assumingPrice * SCALE, costDenominator)),
       openLoss: formatDecimal(ceil(quantity * limits.openLoss, 10n ** 18n)),
       openFeeReserve: formatDecimal(ceil(quantity * limits.feeReserve, 10n ** 26n)),
