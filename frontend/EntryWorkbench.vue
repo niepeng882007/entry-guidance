@@ -357,8 +357,11 @@ onUnmounted(() => cleanup());
       >
         <div class="section-heading">
           <h2 id="account-title" class="section-title">账户快照</h2>
-          <span class="muted section-heading__note">查询时点数据</span>
+          <span class="muted section-heading__note">前台每 3 秒刷新</span>
         </div>
+        <p id="account-error" class="error" role="status" :hidden="!text['account-error']">
+          {{ text['account-error'] }}
+        </p>
         <div class="balances balances--compact">
           <section class="balance">
             <h3 class="section-title">账户权益 <span class="balance__unit">USDT</span></h3>

@@ -220,6 +220,188 @@ test('leverage shows live liquidation estimates, unsafe buffers and missing data
   await expect(price).toHaveText('—');
 });
 
+test('account snapshots use fixed three-second ticks, skip busy requests and cancel on leaving', async ({
+  page,
+}) => {
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  await page.clock.setFixedTime(new Date());
+  let requests = 0;
+  let release!: () => void;
+  let hold = false;
+  await page.route('**/api/account', async (route) => {
+    const count = ++requests;
+    const response = await route.fetch();
+    const data = await response.json();
+    data.walletBalance = data.equity = String(1250 + count);
+    data.unrealizedProfit = '0';
+    if (hold) await new Promise<void>((resolve) => (release = resolve));
+    await route.fulfill({ json: data });
+  });
+  await page.reload();
+  await expect(page.locator('#equity')).toHaveText('1251');
+  await page.clock.runFor(2999);
+  expect(requests).toBe(1);
+  hold = true;
+  await page.clock.runFor(1);
+  await expect.poll(() => requests).toBe(2);
+  await expect.poll(() => typeof release).toBe('function');
+  await page.clock.runFor(6500);
+  expect(requests).toBe(2);
+  hold = false;
+  release();
+  await expect(page.locator('#equity')).toHaveText('1252');
+  await page.clock.runFor(2499);
+  expect(requests).toBe(2);
+  await page.clock.runFor(1);
+  await expect(page.locator('#equity')).toHaveText('1253');
+  hold = true;
+  release = undefined!;
+  await page.clock.runFor(3000);
+  await expect.poll(() => requests).toBe(4);
+  await expect.poll(() => typeof release).toBe('function');
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide')));
+  release();
+  await page.unrouteAll({ behavior: 'wait' });
+  await expect(page.locator('#equity')).toHaveText('1253');
+  await page.clock.runFor(12_000);
+  expect(requests).toBe(4);
+});
+
+test('account polling does not accelerate market quotes or verification or change their results', async ({
+  page,
+}) => {
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  await page.clock.setFixedTime(new Date());
+  let accounts = 0;
+  let markets = 0;
+  let verifications = 0;
+  let changeBalance = false;
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path === '/api/market') markets++;
+    if (path === '/api/verification') verifications++;
+  });
+  await page.route('**/api/account', async (route) => {
+    const response = await route.fetch();
+    const data = await response.json();
+    if (changeBalance) data.availableBalance = '1';
+    await route.fulfill({ json: data });
+    accounts++;
+  });
+  await page.reload();
+  await expect(page.locator('#status')).toHaveText('模拟查询成功');
+  await select(page, 'symbol', 'BTCUSDT');
+  await expect(page.locator('#fee')).toContainText('模拟费率');
+  await select(page, 'side', '做多');
+  for (const [id, value] of Object.entries({
+    budget: '10',
+    stop: '2',
+    leverage: '5',
+    slippage: '0.1',
+    'minimum-buffer': '1',
+  }))
+    await page.locator(`#${id}`).fill(value);
+  await page.clock.runFor(500);
+  await expect(page.locator('#draft-result')).toBeVisible();
+  const marketCount = markets;
+  const draftTime = await page.locator('#draft-time').textContent();
+  const price = await page.locator('#leverage-liquidation').textContent();
+  await page.clock.runFor(2500);
+  await expect.poll(() => accounts).toBe(2);
+  expect(markets).toBe(marketCount);
+  expect(verifications).toBe(0);
+  await expect(page.locator('#draft-time')).toHaveText(draftTime!);
+  await expect(page.locator('#leverage-liquidation')).toHaveText(price!);
+  await page.clock.runFor(7500);
+  await expect.poll(() => markets).toBe(marketCount + 1);
+  await expect(page.locator('#draft-result')).toBeVisible();
+  await generate(page);
+  await select(page, 'demo-scenario', '全部成交，已补齐止损');
+  await page.locator('#verify').click();
+  await expect(page.locator('#verification')).toHaveAttribute('data-current', 'true');
+  const verificationCount = verifications;
+  const verificationTime = await page.locator('#verification-time').textContent();
+  const accountCount = accounts;
+  await page.clock.runFor(3000);
+  await expect.poll(() => accounts).toBeGreaterThan(accountCount);
+  await expect(page.locator('#account-error')).toBeHidden();
+  expect(verifications).toBe(verificationCount);
+  await expect(page.locator('#verification-time')).toHaveText(verificationTime!);
+  await expect(page.locator('#verification')).toHaveAttribute('data-current', 'true');
+  await page.clock.runFor(7000);
+  await expect.poll(() => verifications).toBe(verificationCount + 1);
+  await expect(page.locator('#verification')).toHaveAttribute('data-current', 'true');
+  changeBalance = true;
+  await page.clock.runFor(3000);
+  await expect(page.locator('#available')).toHaveText('1');
+  expect(verifications).toBe(verificationCount + 1);
+  await expect(page.locator('#verification')).toHaveAttribute('data-current', 'false');
+  await expect(page.locator('#verification-status')).toContainText('账户余额已变化');
+});
+
+test('account failures keep stale balances, revoke readiness and stop polling when login expires', async ({
+  page,
+  context,
+}) => {
+  await fillPlan(page);
+  await generate(page);
+  await select(page, 'demo-scenario', '全部成交，已补齐止损');
+  await page.locator('#verify').click();
+  await expect(page.locator('#verification')).toHaveAttribute('data-current', 'true');
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  await page.clock.setFixedTime(new Date());
+  await page.reload();
+  await expect(page.locator('#verification')).toHaveAttribute('data-current', 'true');
+  const equity = await page.locator('#equity').textContent();
+  const queried = await page.locator('#queried').textContent();
+  let requests = 0;
+  let response: 'failure' | 'success' | 'stale' | 'expired' = 'failure';
+  await page.route('**/api/account', async (route) => {
+    requests++;
+    if (response === 'failure' || response === 'expired') {
+      await route.fulfill({
+        status: response === 'expired' ? 401 : 503,
+        json: { error: '测试账户查询失败' },
+      });
+    } else {
+      const result = await route.fetch();
+      const data = await result.json();
+      if (response === 'stale') data.queriedAt = '2000-01-01T00:00:00.000Z';
+      await route.fulfill({ json: data });
+    }
+  });
+  await page.clock.runFor(3000);
+  await expect(page.locator('#account-error')).toContainText('上次快照已过期');
+  await expect(page.locator('#equity')).toHaveText(equity!);
+  await expect(page.locator('#queried')).toHaveText(queried!);
+  await expect(page.locator('#verification')).toHaveAttribute('data-current', 'false');
+  await expect(page.locator('#entry-card')).toHaveAttribute('data-current', 'false');
+  response = 'success';
+  await page.clock.runFor(3000);
+  await expect(page.locator('#account-error')).toBeHidden();
+  await expect(page.locator('#verification')).toHaveAttribute('data-current', 'false');
+  response = 'stale';
+  await page.clock.runFor(3000);
+  await expect(page.locator('#account-error')).toContainText('查询时间无效');
+  await context.setOffline(true);
+  const beforeOffline = requests;
+  await page.clock.runFor(6000);
+  expect(requests).toBe(beforeOffline);
+  response = 'success';
+  await context.setOffline(false);
+  await expect(page.locator('#verification')).toHaveAttribute('data-current', 'true');
+  response = 'expired';
+  await page.clock.runFor(3000);
+  await expect(page.locator('#relogin')).toBeVisible();
+  const beforeExpiry = requests;
+  await page.clock.runFor(30_000);
+  expect(requests).toBe(beforeExpiry);
+  await expect(page.locator('#verification')).toHaveAttribute('data-current', 'false');
+});
+
 test('estimates debounce edits, poll fresh quotes and discard late responses', async ({ page }) => {
   await fillPlan(page);
   await page.clock.install();

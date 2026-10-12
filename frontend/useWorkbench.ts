@@ -109,6 +109,7 @@ export function useWorkbench(source: string) {
     pnl: '—',
     queried: '尚无成功查询',
     attempted: '—',
+    'account-error': '',
     refresh: '刷新账户与行情',
     'card-title': '本次开仓卡',
     'card-symbol': '—',
@@ -250,6 +251,7 @@ export function useWorkbench(source: string) {
   let hasAccount = false;
   let requestId = 0;
   let pending: AbortController | undefined;
+  let accountPending: AbortController | undefined;
   let snapshot: Snapshot | null = null;
   let entryPlan: SavedPlan | null = null;
   let planInputs = '';
@@ -408,6 +410,7 @@ export function useWorkbench(source: string) {
     refreshTimer = undefined;
     requestId++;
     pending?.abort();
+    accountPending?.abort();
     pending = undefined;
     ui.generateBusy = false;
     ui.verifyBusy = false;
@@ -650,7 +653,61 @@ export function useWorkbench(source: string) {
     show('wallet', `${account.walletBalance} USDT`);
     show('pnl', `${account.unrealizedProfit} USDT`);
     show('queried', time(account.queriedAt));
+    show('account-error', '');
     hasAccount = true;
+  }
+
+  async function refreshAccountSnapshot() {
+    if (
+      suspended ||
+      document.hidden ||
+      !navigator.onLine ||
+      !hidden.relogin ||
+      pending ||
+      accountPending
+    )
+      return;
+    const id = requestId;
+    const controller = new AbortController();
+    accountPending = controller;
+    try {
+      const account = await read<Account>(
+        '/api/account',
+        AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+      );
+      if (id !== requestId || controller.signal.aborted) return;
+      if (
+        !['binance', 'demo'].includes(account.source) ||
+        (snapshot && account.source !== snapshot.source) ||
+        (entryPlan && account.source !== entryPlan.source) ||
+        !Number.isFinite(Date.parse(account.queriedAt)) ||
+        Math.abs(Date.now() - Date.parse(account.queriedAt)) > 30_000
+      )
+        throw new Error('账户快照来源或查询时间无效，请刷新。');
+      const changed =
+        hasAccount &&
+        (account.equity !== text.equity || account.availableBalance !== text.available);
+      renderAccount(account);
+      show('attempted', time(account.queriedAt));
+      if (changed && (snapshot || ui.cardCurrent || ui.verificationCurrent)) {
+        snapshot = null;
+        invalidateCard('账户余额已变化，需完整查询后重新确认');
+        renderDraft();
+      }
+    } catch (error) {
+      if (id !== requestId || controller.signal.aborted) return;
+      showLogin(error);
+      show(
+        'account-error',
+        `账户刷新失败 · ${message(error)}${hasAccount ? ' 上次快照已过期，原数值与查询时间保留。' : ''}`,
+      );
+      show('attempted', time(new Date().toISOString()));
+      snapshot = null;
+      invalidateCard('账户刷新失败，当前结果已失效');
+      renderDraft();
+    } finally {
+      if (accountPending === controller) accountPending = undefined;
+    }
   }
 
   function renderVerification(result: Verification, plan: Plan) {
@@ -775,6 +832,7 @@ export function useWorkbench(source: string) {
     const version = inputVersion,
       id = ++requestId;
     pending?.abort();
+    accountPending?.abort();
     pending = new AbortController();
     const signal = AbortSignal.any([pending.signal, AbortSignal.timeout(15_000)]);
     snapshot = null;
@@ -1039,6 +1097,7 @@ export function useWorkbench(source: string) {
       version = inputVersion;
     const id = ++requestId;
     pending?.abort();
+    accountPending?.abort();
     pending = new AbortController();
     ui.generateBusy = true;
     ui.generateDisabled = true;
@@ -1143,6 +1202,7 @@ export function useWorkbench(source: string) {
     clearTimeout(refreshTimer);
     const id = ++requestId;
     pending?.abort();
+    accountPending?.abort();
     pending = new AbortController();
     const signal = AbortSignal.any([pending.signal, AbortSignal.timeout(15_000)]);
     snapshot = null;
@@ -1332,7 +1392,7 @@ export function useWorkbench(source: string) {
     }
   }
   function resume() {
-    if (suspended || document.hidden || pending) return;
+    if (suspended || document.hidden || !hidden.relogin || pending) return;
     if (!navigator.onLine) {
       suspend('网络已断开，请联网后重试');
       return;
@@ -1432,11 +1492,14 @@ export function useWorkbench(source: string) {
       },
       options,
     );
+    const accountTimer = setInterval(() => void refreshAccountSnapshot(), 3_000);
     cleanup = () => {
       events.abort();
       clearTimeout(refreshTimer);
+      clearInterval(accountTimer);
       requestId++;
       pending?.abort();
+      accountPending?.abort();
     };
     restoreTrade();
     ui.costsOpen = !fields.slippage || !fields['minimum-buffer'];
