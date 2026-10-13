@@ -5,9 +5,12 @@
 | 任务 | 权威来源 |
 | --- | --- |
 | 确认产品范围、输入与风险规则 | [产品决策](product-spec.md)；[实现规格与验收要求](issue-spec.md) |
+| 实施交易记录、历史归并与复盘分析 | [交易复盘规格](trade-review-spec.md)（设计与拆分已确认；[本地任务 01–12](../.scratch/trade-review/issues/)，待实现） |
 | 修改领域用语或界面文案 | [领域词汇表](../CONTEXT.md) |
 | 修改仓位算法 | [ADR 0002：按最终止损确定仓位](adr/0002-size-to-final-stop.md) |
 | 修改账户接入或执行边界 | [ADR 0003：只读账户核验](adr/0003-readonly-account-verification.md) |
+| 确定复盘交易单位与加减仓、反手归属 | [ADR 0004：交易周期归并](adr/0004-trade-cycle-grouping.md)；[交易复盘规格](trade-review-spec.md) |
+| 修改复盘数据留存、同步或备份恢复 | [ADR 0005：服务端复盘账本](adr/0005-server-trade-ledger.md)；[交易复盘规格](trade-review-spec.md) |
 | 修改代码、选择检查方式 | [开发与验证](development.md) |
 | 修改页面结构、样式或渲染 | [前端规则](../public/AGENTS.md) |
 | 启动、连接手机、查验已实现行为及验收记录 | [README](../README.md) 中对应章节；[任务 01–08](../.scratch/entry-guidance/issues/) |

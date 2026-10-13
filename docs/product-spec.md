@@ -24,6 +24,8 @@
 
 当前账户接入与执行边界见 [ADR 0003](adr/0003-readonly-account-verification.md)，其取代原先不接账户的 [ADR 0001](adr/0001-manual-execution.md)。领域术语见 [CONTEXT.md](../CONTEXT.md)。
 
+新增交易历史与分析属于独立的 [复盘规格](trade-review-spec.md)，设计与 12 项任务拆分已确认，本地任务已生成，尚未实现。复盘覆盖全仓、双向等历史交易；本页的逐仓、单向等范围约束继续适用于生成开仓方案与成交后止损核验。
+
 ## 已确认输入与订单规则（第二轮）
 
 | 决策 | 确认结果 |
