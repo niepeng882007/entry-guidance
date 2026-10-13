@@ -29,6 +29,7 @@ function time(value: string | undefined) {
   <main class="page account-page">
     <nav class="account-page__nav" aria-label="账户页面">
       <a class="button button--text button--link" href="/">返回工作台</a>
+      <a class="button button--text button--link" href="/review">交易复盘</a>
       <form action="/logout" method="post">
         <button class="button button--text" type="submit">退出登录</button>
       </form>

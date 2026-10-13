@@ -1,3 +1,4 @@
+import { resolve, join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { createServer } from './server.ts';
 
@@ -22,7 +23,9 @@ try {
   }) : undefined;
   const server = createServer({
     password: process.env.APP_PASSWORD ?? '', origin: origin.origin, tls, mode, frontend,
-    apiKey: process.env.BINANCE_API_KEY, apiSecret: process.env.BINANCE_API_SECRET,
+    apiKey: mode === 'real' ? process.env.BINANCE_API_KEY : undefined,
+    apiSecret: mode === 'real' ? process.env.BINANCE_API_SECRET : undefined,
+    reviewLedgerPath: join(resolve(process.env.REVIEW_DATA_DIR ?? '.local/review'), `${mode}.sqlite`),
   });
   server.on('close', () => { void frontend?.close(); });
   server.on('error', () => { console.error('服务启动失败，请检查访问地址、端口及 HTTPS 配置。'); void frontend?.close(); process.exitCode = 1; });

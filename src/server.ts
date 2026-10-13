@@ -5,6 +5,7 @@ import { createServer as createHttpsServer } from 'node:https';
 import { AccountError, readAccount, readAccountAssets, type AccountConfig } from './account.ts';
 import { demoAccount, demoAccountAssets, readMarket, readSymbols } from './market.ts';
 import { createPlan, verifyPosition, type Plan } from './verification.ts';
+import { ReviewLedger, demoTrade, type ReviewList } from './review-ledger.ts';
 import type { EntryInput } from '../public/draft.js';
 import type { ViteDevServer } from 'vite';
 
@@ -16,6 +17,7 @@ type Config = AccountConfig & {
   origin?: string;
   tls?: { cert: Buffer; key: Buffer };
   frontend?: ViteDevServer;
+  reviewLedgerPath?: string;
 };
 
 const digest = (value: string) => createHash('sha256').update(value).digest();
@@ -25,7 +27,7 @@ export function createServer(config: Config) {
   const passwordHash = digest(config.password);
   const source = config.mode === 'demo' ? 'demo' : 'binance';
   // Bind restored plans to this installation's password, data mode and account credentials.
-  const recoveryKey = scryptSync(config.password, JSON.stringify(['entry-guidance.recovery.v1', source, config.apiKey ?? '', config.apiSecret ?? '']), 32);
+  const recoveryKey = scryptSync(config.password, JSON.stringify(['entry-guidance.recovery.v1', source, source === 'demo' ? '' : config.apiKey ?? '', source === 'demo' ? '' : config.apiSecret ?? '']), 32);
   const signature = (payload: string) => createHmac('sha256', recoveryKey).update(payload).digest('base64url');
   const loginPage = readFileSync(new URL('../public/login.html', import.meta.url), 'utf8');
   const frontendPage = config.frontend ? '' : readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8');
@@ -38,6 +40,16 @@ export function createServer(config: Config) {
       if (!/^[\w-]+\.(js|css)$/.test(name)) continue;
       assets.set(`/assets/${name}`, { body: readFileSync(new URL(name, directory)), type: name.endsWith('.css') ? 'text/css' : 'text/javascript' });
     }
+  }
+  let reviewLedger: ReviewLedger | undefined;
+  function getReviewLedger() {
+    if (!reviewLedger) {
+      const ledger = new ReviewLedger(config.reviewLedgerPath ?? ':memory:', { source: 'demo', accountId: 'demo-account' });
+      try { ledger.archive(demoTrade()); }
+      catch (error) { ledger.close(); throw error; }
+      reviewLedger = ledger;
+    }
+    return reviewLedger;
   }
   const sessions = new Map<string, { expiresAt: number; generation: number; plans: Map<string, Plan> }>();
   // ponytail: 单人应用共用登录限流；扩展多用户时改为分用户限流。
@@ -95,7 +107,7 @@ export function createServer(config: Config) {
       return redirect('/');
     }
     if (!loggedIn) {
-      if (path === '/' || path === '/account') return redirect('/login');
+      if (path === '/' || path === '/account' || path === '/review') return redirect('/login');
       return send(401, { error: '请先登录。' });
     }
     if (path === '/logout' && req.method === 'POST') {
@@ -154,13 +166,32 @@ export function createServer(config: Config) {
         return send(error.status, { error: error.message, code: error.code, source: plan.source, attemptedAt: new Date().toISOString() });
       }
     }
-    if (path === '/' || path === '/account') {
+    if (path === '/api/review/trades' || path?.startsWith('/api/review/trades/')) {
+      try {
+        if (path === '/api/review/trades') {
+          return send(200, {
+            source, accountId: source === 'demo' ? 'demo-account' : null,
+            syncStatus: source === 'demo' ? 'demo' : 'not-synced',
+            trades: source === 'demo' ? getReviewLedger().list() : [],
+          } satisfies ReviewList);
+        }
+        const id = path.slice('/api/review/trades/'.length);
+        if (!/^[A-Za-z0-9-]{1,160}$/.test(id)) return send(400, { error: '交易身份无效。' });
+        const trade = source === 'demo' ? getReviewLedger().get(id) : null;
+        return trade ? send(200, trade) : send(404, { error: '未找到该来源的归档交易。' });
+      } catch { return send(503, { error: '复盘账本暂不可用，已有归档保留，请重试。' }); }
+    }
+    if (path === '/' || path === '/account' || path === '/review') {
+      let pageKind = 'workbench';
+      let pageTitle = '开仓卡 · 开仓前';
+      if (path === '/account') { pageKind = 'account'; pageTitle = '账户快照 · USDT'; }
+      else if (path === '/review') { pageKind = 'review'; pageTitle = '交易复盘'; }
       const page = config.frontend
         ? await config.frontend.transformIndexHtml(path, readFileSync(new URL('../frontend/index.html', import.meta.url), 'utf8'))
         : frontendPage;
       return html(200, page.replace('{{source}}', config.mode === 'demo' ? '模拟数据 · 仅用于界面与流程验证' : '真实模式 · 数据由 Binance 只读接口查询')
-        .replace('{{page}}', path === '/account' ? 'account' : 'workbench').replace('{{mode}}', source)
-        .replace('开仓卡 · 开仓前', path === '/account' ? '账户快照 · USDT' : '开仓卡 · 开仓前'));
+        .replace('{{page}}', pageKind).replace('{{mode}}', source)
+        .replace('开仓卡 · 开仓前', pageTitle));
     }
     const asset = assets.get(path ?? '');
     if (asset) return res.writeHead(200, { 'Content-Type': `${asset.type}; charset=utf-8` }).end(asset.body);
@@ -211,6 +242,7 @@ export function createServer(config: Config) {
     });
   };
   const server = config.tls ? createHttpsServer(config.tls, handler) : createHttpServer(handler);
+  server.on('close', () => reviewLedger?.close());
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
   server.setTimeout(15_000, (socket) => socket.destroy());

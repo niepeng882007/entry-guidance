@@ -179,6 +179,7 @@ onUnmounted(() => cleanup());
     <main class="workspace__main">
       <header class="workspace__header">
         <p class="workspace__context">个人工作台 / USDT 永续</p>
+        <a class="button button--text button--link" href="/review">交易复盘</a>
         <form action="/logout" method="post">
           <button class="button button--text">退出登录</button>
         </form>

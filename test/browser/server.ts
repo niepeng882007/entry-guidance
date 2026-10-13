@@ -1,4 +1,13 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createServer } from '../../src/server.ts';
 
-// Tests never load .env or Binance credentials.
-createServer({ password: 'browser-test-only', mode: 'demo' }).listen(4179, '127.0.0.1');
+// Tests never load .env, credentials or the user's persistent ledger.
+const directory = mkdtempSync(join(tmpdir(), 'browser-review-'));
+process.on('exit', () => rmSync(directory, { recursive: true, force: true }));
+createServer({
+  password: 'browser-test-only',
+  mode: 'demo',
+  reviewLedgerPath: join(directory, 'demo.sqlite'),
+}).listen(4179, '127.0.0.1');
