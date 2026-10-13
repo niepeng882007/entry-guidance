@@ -171,7 +171,7 @@ TLS_KEY_FILE=.local/key.pem
 
 固定 GET `/api/account/positions` 需要登录且不接受参数，沿用只读权限及普通 USDT 单资产检查，不复用要求空仓、逐仓、单向的开仓检查。持仓主览来自全账户 `positionRisk` V2；合约身份按 `exchangeInfo` 的 USDT 永续口径确认，暂停交易不遗漏已有持仓。辅助字段使用批量 `premiumIndex` 与价格 V2；字段已于 2026-10-13 核对 [Binance 持仓文档](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/trade)与[行情文档](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data)。持仓查询失败保留原列表和时间，首次失败不能视为空仓；核心字段无效使持仓分项失败。资产与持仓各自更新，前台正常每 3 秒查询、忙时跳过、离开取消、回来立即读取；跨页面合并与限流退避留在任务 05。原开仓、止损核验和方案冻结规则保持。
 
-模拟 HTTP 与生产页面已覆盖多标的、双向、保证金模式、正负盈亏、可选字段缺失、辅助行情失败、空仓、数量与列表变化、筛选、刷新焦点、请求取消及 320px / 390px / 1280px 和减少动态效果。实体手机、真实账户仍待验收。
+模拟 HTTP 与生产页面已覆盖多标的、双向、保证金模式、正负盈亏、可选字段缺失、辅助行情失败、空仓、数量与列表变化、筛选、刷新焦点、请求取消及 320px / 390px / 1280px 和减少动态效果。最终 `pnpm check` 通过（188 个 Node 测试、68 个 Chromium / WebKit 用例），双轴审查修复后复核通过。实体手机、真实账户仍待验收。
 
 ### 本单恢复（任务 08）
 
