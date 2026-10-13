@@ -117,7 +117,7 @@ function format(value: bigint): string {
   return `${whole}.${fraction.padEnd(8, '0')}`;
 }
 
-async function readAccountData(config: AccountConfig, signal: AbortSignal) {
+export async function readAccountScope(config: AccountConfig, signal: AbortSignal) {
   if (!config.apiKey || !config.apiSecret) throw new AccountError('missing_credentials', '未连接：请在后端配置 BINANCE_API_KEY 和 BINANCE_API_SECRET。', 503);
   const read = async (operation: keyof typeof endpoints) => object(await readBinance(config, operation, signal));
   try {
@@ -132,17 +132,22 @@ async function readAccountData(config: AccountConfig, signal: AbortSignal) {
     const assets = account.assets.map(object).filter((asset) => asset.asset === 'USDT');
     if (assets.length !== 1) throw new AccountError('unsupported_account', '无法确认唯一的 USDT 合约资产口径。');
     const asset = assets[0]!;
-    const wallet = decimal(asset.walletBalance);
-    const pnl = decimal(asset.unrealizedProfit);
-    const available = decimal(asset.availableBalance);
-    if (wallet + pnl !== decimal(asset.marginBalance)) throw new AccountError('invalid_response', 'USDT 权益与钱包余额、未实现盈亏不一致，请重新查询。');
-    const snapshot = { source: 'binance' as const, queriedAt: new Date().toISOString(), walletBalance: format(wallet), unrealizedProfit: format(pnl), equity: format(wallet + pnl), availableBalance: format(available) };
-    return { account, asset, snapshot };
+    return { account, asset };
   } catch (error) {
     if (signal.aborted) throw new AccountError('timeout', '账户查询超时，请检查网络后重试。', 504);
     if (error instanceof AccountError) throw error;
     throw new AccountError('connection_failed', '账户连接失败，请检查网络或后端代理设置。');
   }
+}
+
+async function readAccountData(config: AccountConfig, signal: AbortSignal) {
+  const { account, asset } = await readAccountScope(config, signal);
+  const wallet = decimal(asset.walletBalance);
+  const pnl = decimal(asset.unrealizedProfit);
+  const available = decimal(asset.availableBalance);
+  if (wallet + pnl !== decimal(asset.marginBalance)) throw new AccountError('invalid_response', 'USDT 权益与钱包余额、未实现盈亏不一致，请重新查询。');
+  const snapshot = { source: 'binance' as const, queriedAt: new Date().toISOString(), walletBalance: format(wallet), unrealizedProfit: format(pnl), equity: format(wallet + pnl), availableBalance: format(available) };
+  return { account, asset, snapshot };
 }
 
 export async function readAccount(config: AccountConfig, symbol?: string, signal = AbortSignal.timeout(10_000)) {

@@ -464,3 +464,34 @@ test('position session expiry marks retained data stale and stops all subsequent
   expect(requests).toBe(2);
   await expect(page.getByRole('button', { name: '手动刷新' })).toBeDisabled();
 });
+
+for (const expiredPart of ['assets', 'positions']) {
+  test(`a ${expiredPart} 401 immediately expires all facts and cancels a blocked sibling read`, async ({
+    page,
+  }) => {
+    await login(page);
+    await page.clock.install();
+    await page.clock.pauseAt(new Date());
+    await page.goto('/account');
+    const positions = page.getByRole('region', { name: '当前持仓' });
+    await expect(positions).toContainText('显示 3 / 全账户 3 份持仓');
+    let release!: () => void;
+    const sibling = expiredPart === 'assets' ? 'positions' : 'assets';
+    await page.route(`**/api/account/${sibling}`, async (route) => {
+      const data = await (await route.fetch()).json();
+      await new Promise<void>((resolve) => (release = resolve));
+      await route.fulfill({ json: data });
+    });
+    await page.route(`**/api/account/${expiredPart}`, async (route) => {
+      await expect.poll(() => typeof release).toBe('function');
+      await route.fulfill({ status: 401, json: { error: '登录已过期' } });
+    });
+    await page.getByRole('button', { name: '手动刷新' }).click();
+    await expect(page.getByRole('link', { name: '重新登录' })).toBeVisible();
+    await expect(positions).toContainText('上次持仓已过期');
+    await expect(page.getByRole('status')).toContainText('上次快照已过期');
+    release();
+    await page.unrouteAll({ behavior: 'wait' });
+    await expect(positions).toContainText('上次持仓已过期');
+  });
+}

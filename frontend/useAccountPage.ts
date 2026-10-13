@@ -164,6 +164,7 @@ export function useAccountPage(expectedSource: Assets['source']) {
       if (!current()) throw new Error('查询已取消。');
       if (response.status === 401) {
         relogin.value = true;
+        pause('登录已过期，请重新登录。');
         throw new Error('登录已过期，请重新登录。');
       }
       const data: unknown = await response.json();
@@ -240,13 +241,6 @@ export function useAccountPage(expectedSource: Assets['source']) {
       if (pending === controller) {
         pending = undefined;
         busy.value = false;
-        if (relogin.value) {
-          stale.value = positionsStale.value = true;
-          last.value = { ...last.value, stale: true };
-          funding.value = { ...funding.value, stale: true };
-          status.value = '登录已过期，请重新登录。';
-          positionsStatus.value = '登录已过期，持仓已过期，请重新登录。';
-        }
       }
     }
   }

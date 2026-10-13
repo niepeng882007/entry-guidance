@@ -417,7 +417,7 @@ test('position observation excludes delivery contracts and keeps facts when auxi
   const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
     if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
     if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
-    if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
+    if (url.pathname.endsWith('/account')) return { status: 200, body: phase === 'asset-invalid' ? { ...accountResponse, assets: [{ ...accountResponse.assets[0], walletBalance: 'NaN' }] } : accountResponse };
     if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: [
       { symbol: 'BTCUSDT', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'PERPETUAL' },
       { symbol: 'ETHUSDT_261225', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'CURRENT_QUARTER' },
@@ -441,6 +441,9 @@ test('position observation excludes delivery contracts and keeps facts when auxi
     assert.equal(failed.status, 502);
     assert.equal((await failed.json()).positions, undefined);
   }
+  phase = 'asset-invalid';
+  assert.equal((await read()).status, 200);
+  assert.equal((await fetch(`${base}/api/account/assets`, { headers: { Cookie: cookie } })).status, 502);
   phase = 'empty';
   assert.deepEqual((await (await read()).json()).positions, []);
   assert.equal((await fetch(`${base}/api/account/positions`)).status, 401);

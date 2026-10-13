@@ -1,4 +1,4 @@
-import { AccountError, object, readAccount, readBinance, type AccountConfig } from './account.ts';
+import { AccountError, object, readAccountScope, readBinance, type AccountConfig } from './account.ts';
 import { parseDecimal, formatDecimal } from '../public/draft.js';
 
 export type Position = {
@@ -35,7 +35,7 @@ function list(value: unknown) {
 
 export async function readAccountPositions(config: AccountConfig, signal = AbortSignal.timeout(10_000)): Promise<PositionsSnapshot> {
   // Account observation checks permissions and scope without the entry-plan empty-position checks.
-  await readAccount(config, undefined, signal);
+  await readAccountScope(config, signal);
   const [positionRead, exchange] = await Promise.all([
     readBinance(config, 'positions', signal).then((raw) => ({ raw, queriedAt: new Date().toISOString() })),
     readBinance(config, 'exchange', signal),
