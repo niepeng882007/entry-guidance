@@ -1,13 +1,14 @@
 import { readAccountOrders, demoAccountOrders } from './orders.ts';
 import { readAccountPositions, demoAccountPositions } from './positions.ts';
 import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
-import { AccountError, readAccount, readAccountAssets, type AccountConfig } from './account.ts';
+import { AccountError, readAccount, readAccountAssets, readReviewIdentity, type AccountConfig } from './account.ts';
 import { demoAccount, demoAccountAssets, readMarket, readSymbols } from './market.ts';
 import { createPlan, verifyPosition, type Plan } from './verification.ts';
 import { ReviewLedger, demoTrade, type ReviewList } from './review-ledger.ts';
+import { HistorySync } from './history-sync.ts';
 import type { EntryInput } from '../public/draft.js';
 import type { ViteDevServer } from 'vite';
 
@@ -44,6 +45,9 @@ export function createServer(config: Config) {
     }
   }
   let reviewLedger: ReviewLedger | undefined;
+  let history: HistorySync | undefined;
+  let reviewAccountId: string | undefined;
+  let closing = false;
   function getReviewLedger() {
     if (!reviewLedger) {
       const ledger = new ReviewLedger(config.reviewLedgerPath ?? ':memory:', { source: 'demo', accountId: 'demo-account' });
@@ -52,6 +56,19 @@ export function createServer(config: Config) {
       reviewLedger = ledger;
     }
     return reviewLedger;
+  }
+  async function getHistory(accountId?: string) {
+    if (!accountId && history) return history;
+    if (!accountId && (!config.reviewLedgerPath || !existsSync(config.reviewLedgerPath))) return null;
+    const uid = accountId ?? await readReviewIdentity(config, AbortSignal.timeout(10_000));
+    if (closing) throw new AccountError('interrupted', '服务已停止，已有账本保留。', 503);
+    if (history && reviewAccountId === uid) return history;
+    if (history) await history.stop();
+    reviewLedger?.close();
+    reviewLedger = new ReviewLedger(config.reviewLedgerPath ?? ':memory:', { source: 'binance', accountId: uid });
+    reviewAccountId = uid;
+    history = new HistorySync(config, reviewLedger, { source: 'binance', accountId: uid });
+    return history;
   }
   const sessions = new Map<string, { expiresAt: number; generation: number; plans: Map<string, Plan> }>();
   // ponytail: 单人应用共用登录限流；扩展多用户时改为分用户限流。
@@ -156,7 +173,7 @@ export function createServer(config: Config) {
         return send(error.status, { error: error.message, code: error.code, attemptedAt: new Date().toISOString() });
       }
     }
-    if (req.method !== 'GET') return send(405, { error: '仅支持读取。' });
+    if (req.method !== 'GET' && !(path === '/api/review/sync' && req.method === 'POST')) return send(405, { error: '仅支持读取。' });
     if (path?.startsWith('/api/verification?')) {
       const query = new URL(path, origin).searchParams;
       const plan = sessions.get(cookie!)?.plans.get(query.get('planId') ?? '');
@@ -168,20 +185,60 @@ export function createServer(config: Config) {
         return send(error.status, { error: error.message, code: error.code, source: plan.source, attemptedAt: new Date().toISOString() });
       }
     }
+    if (path === '/api/review/sync' && req.method === 'POST') {
+      if (source === 'demo') return send(409, { error: '演示模式仅展示模拟归档；请在真实模式主动同步。' });
+      if (req.headers['content-type'] !== 'application/json') return send(415, { error: '同步输入格式不支持。' });
+      let body = '';
+      for await (const chunk of req) {
+        body += chunk.toString();
+        if (Buffer.byteLength(body) > 1024) return send(413, { error: '同步输入过大。' });
+      }
+      let input: unknown;
+      try { input = JSON.parse(body); } catch { return send(400, { error: '同步输入格式无效。' }); }
+      const symbol = input && typeof input === 'object' && 'symbol' in input ? input.symbol : undefined;
+      if (typeof symbol !== 'string' || !/^[\p{L}\p{N}_]{1,30}USDT$/u.test(symbol) || Object.keys(input!).some((key) => key !== 'symbol')) return send(400, { error: '请选择一个 USDT 永续合约。' });
+      try {
+        const uid = await readReviewIdentity(config, AbortSignal.timeout(10_000));
+        const currentSession = sessions.get(cookie!);
+        if (!currentSession || currentSession.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
+        const sync = await getHistory(uid);
+        return send(202, await sync!.start(symbol));
+      } catch (error) {
+        if (error instanceof AccountError) return send(error.status, { error: error.message, code: error.code });
+        return send(503, { error: '复盘同步暂不可用，已有账本保留。' });
+      }
+    }
     if (path === '/api/review/trades' || path?.startsWith('/api/review/trades/')) {
       try {
+        const sync = source === 'binance' ? await getHistory() : null;
+        const currentSession = sessions.get(cookie!);
+        if (!currentSession || currentSession.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
         if (path === '/api/review/trades') {
           return send(200, {
-            source, accountId: source === 'demo' ? 'demo-account' : null,
-            syncStatus: source === 'demo' ? 'demo' : 'not-synced',
-            trades: source === 'demo' ? getReviewLedger().list() : [],
+            source, accountId: source === 'demo' ? 'demo-account' : reviewAccountId ?? null,
+            syncStatus: source === 'demo' ? 'demo' : sync ? 'synced' : 'not-synced',
+            trades: source === 'demo' ? getReviewLedger().list() : reviewLedger?.list() ?? [],
+            ...(sync ? { sync: sync.state() } : {}),
           } satisfies ReviewList);
         }
         const id = path.slice('/api/review/trades/'.length);
         if (!/^[A-Za-z0-9-]{1,160}$/.test(id)) return send(400, { error: '交易身份无效。' });
-        const trade = source === 'demo' ? getReviewLedger().get(id) : null;
+        const trade = source === 'demo' ? getReviewLedger().get(id) : reviewLedger?.get(id);
         return trade ? send(200, trade) : send(404, { error: '未找到该来源的归档交易。' });
       } catch { return send(503, { error: '复盘账本暂不可用，已有归档保留，请重试。' }); }
+    }
+    if (path?.startsWith('/api/review/evidence?')) {
+      const query = new URL(path, origin).searchParams;
+      const symbol = query.get('symbol') ?? '';
+      const offset = Number(query.get('offset') ?? '0');
+      if (!/^[\p{L}\p{N}_]{1,30}USDT$/u.test(symbol) || !Number.isSafeInteger(offset) || offset < 0 || query.getAll('symbol').length !== 1 || query.getAll('offset').length > 1 || [...query.keys()].some((key) => !['symbol', 'offset'].includes(key))) return send(400, { error: '原始证据查询参数无效。' });
+      try {
+        if (source !== 'binance' || !await getHistory()) return send(404, { error: '尚无真实原始证据。' });
+        const currentSession = sessions.get(cookie!);
+        if (!currentSession || currentSession.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
+        const records = reviewLedger!.raw(symbol).sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
+        return send(200, { source, accountId: reviewAccountId, symbol, records: records.slice(offset, offset + 100), nextOffset: offset + 100 < records.length ? offset + 100 : null });
+      } catch { return send(503, { error: '原始证据读取失败，已有账本保留。' }); }
     }
     if (path === '/' || path === '/account' || path === '/review') {
       let pageKind = 'workbench';
@@ -248,7 +305,12 @@ export function createServer(config: Config) {
     });
   };
   const server = config.tls ? createHttpsServer(config.tls, handler) : createHttpServer(handler);
-  server.on('close', () => reviewLedger?.close());
+  server.on('close', () => {
+    closing = true;
+    sessions.clear();
+    if (history) void history.stop().finally(() => reviewLedger?.close());
+    else reviewLedger?.close();
+  });
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
   server.setTimeout(15_000, (socket) => socket.destroy());

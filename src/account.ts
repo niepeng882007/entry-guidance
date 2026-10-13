@@ -20,6 +20,8 @@ export function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+const integerIdPaths = ['/api/v3/account', '/fapi/v1/openOrders', '/fapi/v1/userTrades', '/fapi/v1/allOrders', '/fapi/v1/allAlgoOrders', '/fapi/v1/income', '/fapi/v1/forceOrders'];
+
 const transport: Transport = (url, headers, signal) => new Promise((resolve, reject) => {
   const request = get(url, { headers, signal }, (response) => {
     const chunks: Buffer[] = [];
@@ -34,8 +36,8 @@ const transport: Transport = (url, headers, signal) => new Promise((resolve, rej
       let data: unknown;
       try {
         const text = Buffer.concat(chunks).toString('utf8');
-        // Preserve raw order IDs until the orders boundary can parse their integer tokens.
-        data = url.pathname === '/fapi/v1/openOrders' && response.statusCode === 200 ? text : JSON.parse(text);
+        // Signed source IDs are int64; keep their JSON tokens until the read boundary.
+        data = integerIdPaths.includes(url.pathname) && response.statusCode === 200 ? text : JSON.parse(text);
       }
       catch { reject(new AccountError('upstream_error', 'Binance 返回异常响应，请稍后重试。')); return; }
       resolve({ status: response.statusCode ?? 502, body: data });
@@ -46,6 +48,7 @@ const transport: Transport = (url, headers, signal) => new Promise((resolve, rej
 
 const endpoints = {
   permissions: 'https://api.binance.com/sapi/v1/account/apiRestrictions',
+  identity: 'https://api.binance.com/api/v3/account',
   portfolio: 'https://api.binance.com/sapi/v1/portfolio/account',
   account: 'https://fapi.binance.com/fapi/v2/account',
   exchange: 'https://fapi.binance.com/fapi/v1/exchangeInfo',
@@ -63,20 +66,29 @@ const endpoints = {
   history: 'https://fapi.binance.com/fapi/v1/allOrders',
   algoHistory: 'https://fapi.binance.com/fapi/v1/allAlgoOrders',
   income: 'https://fapi.binance.com/fapi/v1/income',
+  forceOrders: 'https://fapi.binance.com/fapi/v1/forceOrders',
 } as const;
 
-export async function readBinance(config: AccountConfig, operation: keyof typeof endpoints, signal: AbortSignal, symbol?: string, period?: { startTime: number; endTime: number }): Promise<unknown> {
+export async function readBinance(config: AccountConfig, operation: keyof typeof endpoints, signal: AbortSignal, symbol?: string, period?: { startTime: number; endTime: number; page?: number; autoCloseType?: 'LIQUIDATION' | 'ADL' }): Promise<unknown> {
   const url = new URL(endpoints[operation]);
   const isPublic = operation === 'exchange' || operation === 'book' || operation === 'mark' || operation === 'last' || operation === 'time';
   if (symbol !== undefined) {
-    if (!/^[\p{L}\p{N}_]{1,30}USDT$/u.test(symbol) || !['book', 'mark', 'last', 'brackets', 'fee', 'orders', 'algoOrders', 'positions', 'trades', 'history', 'algoHistory', 'income'].includes(operation)) throw new AccountError('invalid_symbol', '币种参数无效。', 400);
+    if (!/^[\p{L}\p{N}_]{1,30}USDT$/u.test(symbol) || !['book', 'mark', 'last', 'brackets', 'fee', 'orders', 'algoOrders', 'positions', 'trades', 'history', 'algoHistory', 'income', 'forceOrders'].includes(operation)) throw new AccountError('invalid_symbol', '币种参数无效。', 400);
     url.searchParams.set('symbol', symbol);
   }
   if (period) {
-    if (!symbol || !['trades', 'history', 'algoHistory', 'income'].includes(operation) || !Number.isSafeInteger(period.startTime) || !Number.isSafeInteger(period.endTime) || period.startTime <= 0 || period.endTime < period.startTime || period.endTime - period.startTime >= 7 * 86_400_000) throw new AccountError('invalid_period', '成交查询区间无效或超过支持范围。', 400);
+    if (!symbol || !['trades', 'history', 'algoHistory', 'income', 'forceOrders'].includes(operation) || !Number.isSafeInteger(period.startTime) || !Number.isSafeInteger(period.endTime) || period.startTime <= 0 || period.endTime < period.startTime || period.endTime - period.startTime >= 7 * 86_400_000) throw new AccountError('invalid_period', '成交查询区间无效或超过支持范围。', 400);
     url.searchParams.set('startTime', String(period.startTime));
     url.searchParams.set('endTime', String(period.endTime));
-    url.searchParams.set('limit', '1000');
+    url.searchParams.set('limit', operation === 'forceOrders' ? '100' : '1000');
+    if (period.page !== undefined) {
+      if (operation !== 'income' || !Number.isSafeInteger(period.page) || period.page < 1) throw new AccountError('invalid_period', '分页参数无效。', 400);
+      url.searchParams.set('page', String(period.page));
+    }
+    if (period.autoCloseType !== undefined) {
+      if (operation !== 'forceOrders' || !['LIQUIDATION', 'ADL'].includes(period.autoCloseType)) throw new AccountError('invalid_period', '强制订单类型无效。', 400);
+      url.searchParams.set('autoCloseType', period.autoCloseType);
+    }
   }
   const headers: Record<string, string> = {};
   if (!isPublic) {
@@ -97,11 +109,11 @@ export async function readBinance(config: AccountConfig, operation: keyof typeof
       throw new AccountError('upstream_error', 'Binance 读取失败，请稍后重试或检查账户模式。');
     }
     if (operation === 'portfolio') throw new AccountError('unsupported_account', '组合保证金账户（含 Pro / SPAN）暂不支持普通 USDT 账户口径。');
-    if (operation === 'orders' && typeof response.body === 'string') {
+    if (integerIdPaths.includes(url.pathname) && typeof response.body === 'string') {
       try {
         return JSON.parse(response.body, (key: string, value: unknown, context?: { source?: string }) =>
-          key === 'orderId' && typeof value === 'number' ? context?.source ?? value : value);
-      } catch { throw new AccountError('invalid_response', '普通委托响应格式无效，本次列表不可用。'); }
+          ['uid', 'id', 'orderId', 'actualOrderId', 'algoId', 'tranId', 'tradeId'].includes(key) && typeof value === 'number' ? context?.source ?? value : value);
+      } catch { throw new AccountError('invalid_response', operation === 'orders' ? '普通委托响应格式无效，本次列表不可用。' : '账户或委托响应格式无效，本次读取不可用。'); }
     }
     return response.body;
   } catch (error) {
@@ -131,10 +143,7 @@ export async function readAccountScope(config: AccountConfig, signal: AbortSigna
   if (!config.apiKey || !config.apiSecret) throw new AccountError('missing_credentials', '未连接：请在后端配置 BINANCE_API_KEY 和 BINANCE_API_SECRET。', 503);
   const read = async (operation: keyof typeof endpoints) => object(await readBinance(config, operation, signal));
   try {
-    const permissions = await read('permissions');
-    if (permissions.enableReading !== true) throw new AccountError('reading_disabled', '凭据没有可验证的读取权限。');
-    if (writePermissions.some((field) => permissions[field] === true)) throw new AccountError('unsafe_permissions', '凭据包含交易、提现或划转权限，请更换专用只读凭据。');
-    if (writePermissions.some((field) => permissions[field] !== false)) throw new AccountError('unverified_permissions', '无法完整确认凭据的只读权限，已停止读取。');
+    await verifyReadPermissions(config, signal);
     await read('portfolio');
     const account = await read('account');
     if (account.multiAssetsMargin !== false) throw new AccountError('unsupported_account', '仅支持普通 USDT 单资产口径；多资产或无法确认的账户模式暂不支持。');
@@ -148,6 +157,20 @@ export async function readAccountScope(config: AccountConfig, signal: AbortSigna
     if (error instanceof AccountError) throw error;
     throw new AccountError('connection_failed', '账户连接失败，请检查网络或后端代理设置。');
   }
+}
+
+async function verifyReadPermissions(config: AccountConfig, signal: AbortSignal) {
+  const permissions = object(await readBinance(config, 'permissions', signal));
+  if (permissions.enableReading !== true) throw new AccountError('reading_disabled', '凭据没有可验证的读取权限。');
+  if (writePermissions.some((field) => permissions[field] === true)) throw new AccountError('unsafe_permissions', '凭据包含交易、提现或划转权限，请更换专用只读凭据。');
+  if (writePermissions.some((field) => permissions[field] !== false)) throw new AccountError('unverified_permissions', '无法完整确认凭据的只读权限，已停止读取。');
+}
+
+export async function readReviewIdentity(config: AccountConfig, signal: AbortSignal) {
+  await verifyReadPermissions(config, signal);
+  const { uid } = object(await readBinance(config, 'identity', signal));
+  if (!(typeof uid === 'number' && Number.isSafeInteger(uid) && uid > 0) && !(typeof uid === 'string' && /^[1-9]\d{0,23}$/.test(uid))) throw new AccountError('unverified_identity', '账户身份无法确认，已暂停新增归档；已有账本保留。');
+  return String(uid);
 }
 
 async function readAccountData(config: AccountConfig, signal: AbortSignal) {

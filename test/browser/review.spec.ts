@@ -162,3 +162,147 @@ test('the real-mode page clearly displays an unsynced empty ledger', async ({ pa
   await expect(page.getByRole('button', { name: '查看 BTCUSDT 交易详情' })).toHaveCount(0);
   await expect(page.getByText('模拟数据 · 仅用于界面与流程验证')).toHaveCount(0);
 });
+
+test('real history sync shows progress, gaps and retry without claiming old results are current', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.getByLabel('个人访问密码').fill('browser-test-only');
+  await page.getByRole('button', { name: '进入账户' }).click();
+  await page.route('**/review', async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      body: (await response.text())
+        .replace('data-mode="demo"', 'data-mode="binance"')
+        .replace('模拟数据 · 仅用于界面与流程验证', '真实模式 · 数据由 Binance 只读接口查询'),
+    });
+  });
+  await page.route('**/api/symbols', (route) =>
+    route.fulfill({ json: { source: 'binance', symbols: ['BTCUSDT', 'ETHUSDT'] } }),
+  );
+  const range = {
+    source: 'history',
+    startTime: Date.parse('2026-10-01'),
+    endTime: Date.parse('2026-10-07'),
+    page: 1,
+  };
+  const sync = {
+    symbol: 'BTCUSDT',
+    startTime: range.startTime,
+    endTime: range.endTime,
+    status: 'running',
+    pages: 1,
+    records: 2,
+    pending: [range],
+    completed: [],
+    missing: [],
+    lastSuccessAt: null,
+  };
+  let started = false;
+  let failed = true;
+  await page.route('**/api/review/trades', (route) =>
+    route.fulfill({
+      json: started
+        ? {
+            source: 'binance',
+            accountId: '12345',
+            syncStatus: 'synced',
+            trades: [],
+            sync: {
+              ...sync,
+              status: failed ? 'failed' : 'complete',
+              pending: failed ? [range] : [],
+              missing: failed ? ['Binance 限流，请稍后再试。'] : [],
+              lastSuccessAt: failed ? null : '2026-10-07T00:00:00Z',
+            },
+          }
+        : { source: 'binance', accountId: null, syncStatus: 'not-synced', trades: [] },
+    }),
+  );
+  await page.route('**/api/review/sync', async (route) => {
+    expect(route.request().method()).toBe('POST');
+    expect(route.request().postDataJSON()).toEqual({ symbol: 'BTCUSDT' });
+    started = true;
+    await route.fulfill({ status: 202, json: sync });
+  });
+  await page.goto('/review');
+  await expect(page.getByLabel('USDT 永续合约')).toBeVisible();
+  await page.getByRole('button', { name: '开始同步' }).click();
+  await expect(page.getByRole('status')).toContainText('正在同步真实历史');
+  await expect(page.getByRole('button', { name: '开始同步' })).toBeDisabled();
+  await expect(page.getByRole('status')).toContainText('同步失败');
+  await expect(page.getByText('同步缺口：Binance 限流，请稍后再试。')).toBeVisible();
+  await page.getByText('待补查区间', { exact: true }).click();
+  await expect(page.getByText(/history ·/)).toBeVisible();
+  failed = false;
+  await page.getByRole('button', { name: '开始同步' }).click();
+  await expect(page.getByRole('status')).toContainText('历史读取结束');
+  await expect(page.getByText('同步缺口：Binance 限流，请稍后再试。')).toHaveCount(0);
+  for (const width of [320, 390, 1280]) {
+    await page.setViewportSize({ width, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await page.screenshot({
+      path: test.info().outputPath(`history-sync-${width}.png`),
+      fullPage: true,
+    });
+  }
+  await page.route('**/api/review/sync', (route) =>
+    route.fulfill({ status: 401, json: { error: '登录过期' } }),
+  );
+  await page.getByRole('button', { name: '开始同步' }).click();
+  await expect(page.getByRole('link', { name: '重新登录', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '开始同步' })).toBeDisabled();
+});
+
+test('a late sync response after leaving the page cannot restore current progress', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.getByLabel('个人访问密码').fill('browser-test-only');
+  await page.getByRole('button', { name: '进入账户' }).click();
+  await page.route('**/review', async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      body: (await response.text()).replace('data-mode="demo"', 'data-mode="binance"'),
+    });
+  });
+  await page.route('**/api/symbols', (route) => route.fulfill({ json: { symbols: ['BTCUSDT'] } }));
+  await page.route('**/api/review/trades', (route) =>
+    route.fulfill({
+      json: { source: 'binance', accountId: null, syncStatus: 'not-synced', trades: [] },
+    }),
+  );
+  let release!: () => void;
+  await page.route('**/api/review/sync', async (route) => {
+    await new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await route.fulfill({
+      status: 202,
+      json: {
+        symbol: 'BTCUSDT',
+        startTime: Date.parse('2026-10-01'),
+        endTime: Date.parse('2026-10-07'),
+        status: 'running',
+        pages: 0,
+        records: 0,
+        pending: [],
+        completed: [],
+        missing: [],
+        lastSuccessAt: null,
+      },
+    });
+  });
+  await page.goto('/review');
+  await page.getByRole('button', { name: '开始同步' }).click();
+  await expect.poll(() => typeof release).toBe('function');
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide')));
+  release();
+  await page.unrouteAll({ behavior: 'wait' });
+  await expect(page.getByRole('status')).toContainText('页面已离开');
+  await expect(page.getByText(/已读取 \d+ 页/)).toHaveCount(0);
+});

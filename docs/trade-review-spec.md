@@ -1,6 +1,6 @@
 # 交易复盘规格
 
-状态：设计决策及 12 项任务拆分已确认；2026-10-13 已生成本地任务，任务 01 已实现演示归档与复盘入口，任务 02–12 待实现。
+状态：设计决策及 12 项任务拆分已确认；2026-10-13 已生成本地任务，任务 01–02 已实现演示归档、复盘入口与单币种真实历史同步，任务 03–12 待实现；真实账户联调未验收。
 
 ## 已确认范围
 
@@ -72,10 +72,10 @@
 
 ## 当前实现事实
 
-- 现有交易所成交、订单历史和收入流水读取仍服务于当前方案核验，没有全账户历史列表或分页同步。任务 01 新增独立演示账本与单笔复盘入口，真实历史尚未同步。
+- 当前方案核验保留原读取契约；任务 01–02 提供独立演示账本、单笔复盘入口和主动单币种历史分片/分页同步，尚无全账户历史发现或每五分钟持续归档。
 - 浏览器仅保存当前一笔方案；后端方案仍使用会话内存，复盘归档独立保存到 SQLite。当前行情是最新快照，没有历史 K 线。
 - 历史账户数据不能自动补出当时的亏损预算、计划止损、交易理由或历史核验结果。
-- 正式启动的复盘数据目录默认 `.local/review`，可通过 `REVIEW_DATA_DIR` 指定；目前只有演示数据归档。备份导出、LLM 集成与后台历史同步尚未实现。现有前端查询在隐藏或关闭时停止。
+- 正式启动的复盘数据目录默认 `.local/review`，可通过 `REVIEW_DATA_DIR` 指定；真实和演示分别使用 `real.sqlite` 与 `demo.sqlite`，真实账户按服务端读取的 UID 隔离。单币种同步保留原始证据、完整区间、缺口及分页进度；失败和服务中断后由用户再次主动同步续查。浏览器隐藏或关闭停止页面轮询，已启动同步继续至完成或失败。备份导出、LLM 集成和定时全账户同步尚未实现。
 
 这些事实用于界定新增工作，不代表复盘已实现或真实账户联调已通过。现有实现与验收状态见 [README](../README.md)。
 
@@ -87,7 +87,7 @@
 - [普通订单](https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/All-Orders)和[条件单](https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Query-All-Algo-Orders)创建超过 90 天不可查；未成交取消或过期订单在创建超过 3 天后也不可查。订单元数据缺失不能被解释为未下单。
 - [收入流水](https://developers.binance.com/docs/derivatives/usds-margined-futures/account/rest-api/Get-Income-History)仅保留最近 3 个月，资金费流水没有保证提供持仓方向。推论：双向仓位的资金费无法总是精确归属各笔交易，需要明确归属或缺失规则。
 - 官方另提供成交、订单和收入的[历史下载入口](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/account)，单次窗口最多 1 年，每类文档列出每月 5 次请求且与网页导出共享额度。窗口长度不等于承诺的历史保留期限；较早历史的获取方式仍待选择与验证。
-- 当前仓库没有稳定账户身份入口。官方[现货账户查询](https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/rest-api/account)包含 `uid`，但子账户兼容性及账户身份校验仍待实连；API Key 不作为稳定账户身份。
+- 任务 02 使用官方[现货账户查询](https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/rest-api/account)返回的 `uid` 作为稳定账户身份，身份或只读权限无法确认时停写保留旧账本；子账户兼容性及真实账户联调仍待实连，API Key 不作为稳定账户身份。2026-10-13 再次核对 UID、各历史接口窗口/上限、收入页码以及强制订单类型；成交 `fromId` 不与时间范围混用。
 - 官方[强制订单查询](https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Users-Force-Orders)区分强平与 ADL，可按币种和订单关联；缺少证据时，普通市价或限价类型不能确定退出原因。
 - 成交费用包含实际资产，可能不是 USDT；[官方成交接口](https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Account-Trade-List)未提供历史 USDT 换算价格。使用历史行情折算只能表达为估算。
 - DeepSeek [模型元数据](https://api-docs.deepseek.com/api/list-models/)描述当前模型上下文与输出容量；[Responses 兼容性说明](https://api-docs.deepseek.com/guides/responses_api/)明确超出上下文窗口会报错，不支持自动截断参数。后续调用不会自动保留之前的原始证据；分段覆盖与最终综合报告必须分别说明依据。
@@ -111,7 +111,7 @@
 | [11 筛选范围批量 LLM 分析](../.scratch/trade-review/issues/11-batch-trade-analysis.md) | 10 |
 | [12 CSV 导出与完整备份恢复](../.scratch/trade-review/issues/12-export-backup-restore.md) | 10 |
 
-01 已实现演示归档与复盘入口，02 可开始；04 与 03 可在 02 完成后分支推进，05 与 06、08 与 09、11 与 12 也按各自直接阻塞独立推进。复盘任务没有账户快照功能的前置依赖，共享入口的变更仍须保持兼容。没有修改或关闭原有任务，也没有创建远程 issue。
+01–02 已实现演示归档、复盘入口和单币种真实同步；03 与 04 可开始，05 与 06、08 与 09、11 与 12 也按各自直接阻塞独立推进。复盘任务没有账户快照功能的前置依赖，共享入口的变更仍须保持兼容。没有修改或关闭原有开仓任务，也没有创建远程 issue。
 
 | 验收场景 | 通过条件 |
 | --- | --- |
@@ -132,4 +132,4 @@
 
 ## 实施状态
 
-用户已确认上述 12 项拆分与阻塞关系，并要求生成本地任务、提交本轮文档。任务 01 已实现演示单笔归档、SQLite 留存与受保护复盘页面；真实模式显示尚未同步。任务 02–12 待实现，真实账户及模型实连仍待单独验收。任务 01 的实际验证状态见 README 与对应任务记录。此前已确认的开仓算法、固定预算与绝对止损规则继续适用。
+用户已确认上述 12 项拆分与阻塞关系。任务 01–02 已实现演示单笔归档、SQLite 留存、受保护复盘页面及按稳定 UID 隔离的主动单币种历史同步；身份或权限不可靠时暂停新增归档，不自动改用模拟数据。任务 03–12 待实现，真实账户及模型实连仍待单独验收。实际验证状态见 README 与对应任务记录。此前已确认的开仓算法、固定预算与绝对止损规则继续适用。

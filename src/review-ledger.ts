@@ -5,28 +5,40 @@ import { formatDecimal, parseDecimal } from '../public/draft.js';
 
 export type ReviewIdentity = { source: 'demo' | 'binance'; accountId: string };
 export type ReviewOrder = {
-  id: string; symbol: string; side: 'BUY' | 'SELL'; type: 'LIMIT' | 'MARKET' | null;
+  id: string; symbol: string; side: 'BUY' | 'SELL'; type: string | null;
   quantity: string; time: string;
 };
 export type ReviewFill = {
   id: string; orderId: string; symbol: string; side: 'BUY' | 'SELL';
-  positionSide: 'BOTH'; quantity: string; price: string; time: string;
+  positionSide: 'BOTH' | 'LONG' | 'SHORT'; quantity: string; price: string; time: string;
   realizedPnl: string | null; commission: string | null; commissionAsset: string | null;
 };
 export type ReviewFunding = { id: string; symbol: string; time: string; amount: string | null; asset: string | null };
 export type TradeEvidence = {
-  symbol: string; baseAsset: string; startPosition: '0'; endPosition: '0';
+  symbol: string; baseAsset: string; startPosition: string | null; endPosition: string | null;
   fillsComplete: boolean; fundingComplete: boolean;
   orders: ReviewOrder[]; fills: ReviewFill[]; funding: ReviewFunding[];
+  raw?: RawRecord[];
 };
 export type ReviewTrade = ReviewIdentity & {
   id: string; groupingVersion: number; symbol: string; baseAsset: string;
-  side: 'long' | 'short'; status: 'closed' | 'incomplete'; openedAt: string; closedAt: string;
+  side: 'long' | 'short' | null; status: 'closed' | 'incomplete'; openedAt: string | null; closedAt: string | null;
   realizedPnl: string | null; commission: string | null; fundingNet: string | null;
   netPnl: string | null; missing: string[]; evidence: TradeEvidence;
+  exitReason?: 'LIQUIDATION' | 'ADL' | 'unknown';
 };
 export type ReviewSummary = Omit<ReviewTrade, 'evidence'>;
-export type ReviewList = { source: ReviewIdentity['source']; accountId: string | null; syncStatus: 'demo' | 'not-synced'; trades: ReviewSummary[] };
+export type HistorySource = 'trades' | 'history' | 'algoHistory' | 'income' | 'forceOrders';
+export type HistoryPage = { source: HistorySource; startTime: number; endTime: number; page: number; autoCloseType?: 'LIQUIDATION' | 'ADL'; fingerprint?: string };
+export type RawRecord = { kind: HistorySource | 'position'; id: string; time: number; payload: Record<string, unknown> };
+export type SyncState = {
+  symbol: string; startTime: number; endTime: number; status: 'running' | 'complete' | 'failed' | 'interrupted';
+  pages: number; records: number; pending: HistoryPage[]; completed: HistoryPage[];
+  unavailable?: HistoryPage[];
+  attemptedAt?: string;
+  missing: string[]; lastSuccessAt: string | null;
+};
+export type ReviewList = { source: ReviewIdentity['source']; accountId: string | null; syncStatus: 'demo' | 'not-synced' | 'synced'; trades: ReviewSummary[]; sync?: SyncState | null };
 
 function signed(value: string, label: string) {
   return parseDecimal(value.startsWith('-') ? value.slice(1) : value, label) * (value.startsWith('-') ? -1n : 1n);
@@ -112,6 +124,15 @@ export class ReviewLedger {
           opened_at TEXT NOT NULL, payload TEXT NOT NULL,
           PRIMARY KEY (source, account, id)
         ) STRICT;
+        CREATE TABLE IF NOT EXISTS history_raw (
+          source TEXT NOT NULL, account TEXT NOT NULL, symbol TEXT NOT NULL,
+          kind TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL,
+          PRIMARY KEY (source, account, symbol, kind, id)
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS history_sync (
+          source TEXT NOT NULL, account TEXT NOT NULL, symbol TEXT NOT NULL, payload TEXT NOT NULL,
+          PRIMARY KEY (source, account, symbol)
+        ) STRICT;
       `);
     } catch (error) { this.db.close(); throw error; }
   }
@@ -132,7 +153,7 @@ export class ReviewLedger {
       const payload = JSON.stringify(trade);
       const existing = this.db.prepare('SELECT payload FROM trades WHERE source=? AND account=? AND id=?').get(source, accountId, trade.id);
       if (existing && existing.payload !== payload) throw new Error('交易归并冲突，保留已有账本。');
-      this.db.prepare('INSERT OR IGNORE INTO trades VALUES (?, ?, ?, ?, ?)').run(source, accountId, trade.id, trade.openedAt, payload);
+      this.db.prepare('INSERT OR IGNORE INTO trades VALUES (?, ?, ?, ?, ?)').run(source, accountId, trade.id, trade.openedAt!, payload);
       this.db.exec('COMMIT');
       return trade.id;
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
@@ -148,6 +169,52 @@ export class ReviewLedger {
   get(id: string): ReviewTrade | null {
     const row = this.db.prepare('SELECT payload FROM trades WHERE source=? AND account=? AND id=?').get(this.identity.source, this.identity.accountId, id);
     return row ? JSON.parse(String(row.payload)) as ReviewTrade : null;
+  }
+
+  sync(symbol?: string): SyncState | null {
+    const rows = this.db.prepare('SELECT payload FROM history_sync WHERE source=? AND account=?').all(this.identity.source, this.identity.accountId);
+    const states = rows.map((row) => JSON.parse(String(row.payload)) as SyncState).filter((state) => !symbol || state.symbol === symbol);
+    return states.sort((a, b) => (b.attemptedAt ? Date.parse(b.attemptedAt) : b.endTime) - (a.attemptedAt ? Date.parse(a.attemptedAt) : a.endTime))[0] ?? null;
+  }
+
+  raw(symbol: string): RawRecord[] {
+    return this.db.prepare('SELECT payload FROM history_raw WHERE source=? AND account=? AND symbol=?').all(this.identity.source, this.identity.accountId, symbol).map((row) => JSON.parse(String(row.payload)) as RawRecord);
+  }
+
+  saveSync(state: SyncState, records: RawRecord[] = []) {
+    const { source, accountId } = this.identity;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const record of records) {
+        const existing = this.db.prepare('SELECT payload FROM history_raw WHERE source=? AND account=? AND symbol=? AND kind=? AND id=?').get(source, accountId, state.symbol, record.kind, record.id);
+        if (existing && ['trades', 'income'].includes(record.kind)) {
+          const previous = JSON.parse(String(existing.payload)) as RawRecord;
+          const fields = record.kind === 'trades' ? ['symbol', 'id', 'orderId', 'side', 'positionSide', 'qty', 'price', 'time', 'realizedPnl', 'commission', 'commissionAsset'] : ['symbol', 'tranId', 'incomeType', 'time', 'income', 'asset', 'tradeId'];
+          const enrichable = record.kind === 'trades' ? ['realizedPnl', 'commission', 'commissionAsset'] : ['income', 'asset', 'tradeId'];
+          if (fields.some((field) => {
+            const before = previous.payload[field], after = record.payload[field];
+            if (enrichable.includes(field) && (before === null || before === undefined || (field === 'tradeId' && before === ''))) return false;
+            return ['id', 'orderId', 'tranId', 'tradeId'].includes(field) ? String(before) !== String(after) : before !== after;
+          })) throw new Error('来源事实冲突，保留已有账本。');
+        }
+        this.db.prepare('INSERT INTO history_raw VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(source, account, symbol, kind, id) DO UPDATE SET payload=excluded.payload').run(source, accountId, state.symbol, record.kind, record.id, JSON.stringify(record));
+      }
+      this.db.prepare('INSERT INTO history_sync VALUES (?, ?, ?, ?) ON CONFLICT(source, account, symbol) DO UPDATE SET payload=excluded.payload').run(source, accountId, state.symbol, JSON.stringify(state));
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
+  project(symbol: string, trades: ReviewTrade[]) {
+    const { source, accountId } = this.identity;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const row of this.list().filter((trade) => trade.symbol === symbol)) this.db.prepare('DELETE FROM trades WHERE source=? AND account=? AND id=?').run(source, accountId, row.id);
+      for (const trade of trades) {
+        if (trade.source !== source || trade.accountId !== accountId || trade.symbol !== symbol) throw new Error('交易投影身份不一致。');
+        this.db.prepare('INSERT INTO trades VALUES (?, ?, ?, ?, ?)').run(source, accountId, trade.id, trade.openedAt ?? trade.evidence.fills[0]?.time ?? '', JSON.stringify(trade));
+      }
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
   close() { this.db.close(); }
