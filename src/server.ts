@@ -27,7 +27,7 @@ export function createServer(config: Config) {
   const passwordHash = digest(config.password);
   const source = config.mode === 'demo' ? 'demo' : 'binance';
   // Bind restored plans to this installation's password, data mode and account credentials.
-  const recoveryKey = scryptSync(config.password, JSON.stringify(['entry-guidance.recovery.v1', source, source === 'demo' ? '' : config.apiKey ?? '', source === 'demo' ? '' : config.apiSecret ?? '']), 32);
+  const recoveryKey = scryptSync(config.password, JSON.stringify(['entry-guidance.recovery.v1', source, config.apiKey ?? '', config.apiSecret ?? '']), 32);
   const signature = (payload: string) => createHmac('sha256', recoveryKey).update(payload).digest('base64url');
   const loginPage = readFileSync(new URL('../public/login.html', import.meta.url), 'utf8');
   const frontendPage = config.frontend ? '' : readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8');

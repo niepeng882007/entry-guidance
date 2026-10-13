@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { createHmac, scryptSync } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -77,4 +78,23 @@ test('a filesystem write failure gives a bounded error without disclosing paths 
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), { error: '复盘账本暂不可用，已有归档保留，请重试。' });
   assert.equal((await app.get('/review')).status, 200);
+});
+
+
+test('review addition preserves existing demo recovery.v1 signatures with configured credentials', async (t) => {
+  const app = await start(t, { mode: 'demo', apiKey: 'legacy-demo-test-key', apiSecret: 'legacy-demo-test-secret' });
+  const post = (path: string, value: unknown) => fetch(`${app.base}${path}`, {
+    method: 'POST', headers: { Cookie: app.cookie, Origin: app.base, 'Content-Type': 'application/json' }, body: JSON.stringify(value),
+  });
+  const response = await post('/api/plan', {
+    symbol: 'BTCUSDT', side: 'long', budgetMode: 'amount', budget: '10',
+    stopMode: 'percent', stop: '2', slippage: '0.1', funding: '0', leverage: '5', minimumBuffer: '1', fundingCap: '',
+  });
+  assert.equal(response.status, 200);
+  const plan = await response.json();
+  const payload = plan.recovery.split('.')[0];
+  // This is the published v1 contract before the review ledger was introduced.
+  const key = scryptSync('review-test-only', JSON.stringify(['entry-guidance.recovery.v1', 'demo', 'legacy-demo-test-key', 'legacy-demo-test-secret']), 32);
+  const recovery = `${payload}.${createHmac('sha256', key).update(payload).digest('base64url')}`;
+  assert.equal((await post('/api/plan/recover', { recovery })).status, 200);
 });

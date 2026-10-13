@@ -23,8 +23,7 @@ try {
   }) : undefined;
   const server = createServer({
     password: process.env.APP_PASSWORD ?? '', origin: origin.origin, tls, mode, frontend,
-    apiKey: mode === 'real' ? process.env.BINANCE_API_KEY : undefined,
-    apiSecret: mode === 'real' ? process.env.BINANCE_API_SECRET : undefined,
+    apiKey: process.env.BINANCE_API_KEY, apiSecret: process.env.BINANCE_API_SECRET,
     reviewLedgerPath: join(resolve(process.env.REVIEW_DATA_DIR ?? '.local/review'), `${mode}.sqlite`),
   });
   server.on('close', () => { void frontend?.close(); });
