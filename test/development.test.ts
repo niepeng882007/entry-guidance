@@ -5,7 +5,8 @@ import { createServer as createViteServer } from 'vite';
 import { createServer } from '../src/server.ts';
 
 test('development serves Vue through the authenticated origin and denies backend source files', async (t) => {
-  const frontend = await createViteServer({ server: { middlewareMode: true, hmr: false }, logLevel: 'silent' });
+  // This HTTP fixture checks module delivery, without background dependency scans during teardown.
+  const frontend = await createViteServer({ optimizeDeps: { noDiscovery: true }, server: { middlewareMode: true, hmr: false }, logLevel: 'silent' });
   const server = createServer({ password: 'development-test-only', mode: 'demo', frontend });
   t.after(async () => { server.closeAllConnections(); server.close(); await frontend.close(); });
   server.listen(0, '127.0.0.1');

@@ -27,11 +27,11 @@
 - HTTP 与生产页面覆盖多标的、全仓/逐仓、单向/双向、正负盈亏、精度与缺失字段、辅助失败、资产分项失败、首次失败、空仓和列表变化、筛选、展开/焦点保留、3 秒节拍、忙时跳过、取消与迟到响应、任一分项 401 即时撤销整批状态。只替换 Binance 外部响应和现有浏览器受控响应，不读取真实凭据或真实账户。
 - 320px、390px、1280px 和减少动态效果验证通过；实体手机和真实账户仍待验收。
 - Standards 与 Spec 双轴审查各发现一项并已修复，复核均通过。跨页面合并和限流退避属于任务 05。
-- 最终 `pnpm check` 通过：类型、lint、格式、生产构建、188 个 Node 测试与 68 个 Chromium / WebKit 浏览器用例全部通过。过程中的旧资产断言范围已修正；既有 Vite 开发测试进程曾间歇挂起，独立/有界复验及最终标准检查通过，未为该间歇现象改动应用或测试代码。截图经目视检查。
+- 最终 `pnpm check` 通过：类型、lint、格式、生产构建、188 个 Node 测试与 68 个 Chromium / WebKit 浏览器用例全部通过。过程中的旧资产断言范围已修正；既有 Vite 开发测试进程曾间歇挂起，独立/有界复验及最终标准检查通过，随后在合并后的 main 再次复现，已在 HTTP 测试夹具关闭无需验证的后台依赖扫描，实际开发服务配置保持；三次有界复验均在一秒内正常退出。截图经目视检查。
 
 ## 变更文件
 
 - 后端：`src/account.ts`、`src/positions.ts`、`src/server.ts`。
 - 前端：`frontend/AccountPage.vue`、`frontend/useAccountPage.ts`、`frontend/components/CurrentPositions.vue`、`public/style.css`。
-- 验证：`test/account.test.ts`、`test/browser/account-page.spec.ts`。
+- 验证：`test/account.test.ts`、`test/browser/account-page.spec.ts`、`test/development.test.ts`。
 - 记录：`README.md`、本任务文件。
