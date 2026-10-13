@@ -1,3 +1,4 @@
+import type { OrdersSnapshot } from '../src/orders.ts';
 import { onMounted, onUnmounted, ref, shallowRef, type ShallowRef } from 'vue';
 import { parseDecimal } from '../public/draft.js';
 import type { readAccountAssets } from '../src/account.ts';
@@ -51,7 +52,7 @@ function queryTime(value: unknown): asserts value is string {
     !Number.isFinite(Date.parse(value)) ||
     Math.abs(Date.now() - Date.parse(value)) > 30_000
   )
-    throw new Error('持仓来源或查询时间无效。');
+    throw new Error('分项来源或查询时间无效。');
 }
 
 function validatePositions(value: unknown, expectedSource: Assets['source']): PositionsSnapshot {
@@ -91,6 +92,58 @@ function validatePositions(value: unknown, expectedSource: Assets['source']): Po
       throw new Error('持仓更新时间无效。');
   }
   return data as PositionsSnapshot;
+}
+
+function validateOrders(value: unknown, expectedSource: Assets['source']): OrdersSnapshot {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new Error('普通委托响应无效。');
+  const data = value as Record<string, unknown>;
+  if (data.source !== expectedSource || !Array.isArray(data.orders))
+    throw new Error('普通委托来源或列表无效。');
+  queryTime(data.queriedAt);
+  const keys = new Set<string>();
+  for (const item of data.orders) {
+    if (!item || typeof item !== 'object' || Array.isArray(item))
+      throw new Error('普通委托记录无效。');
+    const o = item as Record<string, unknown>;
+    if (
+      typeof o.symbol !== 'string' ||
+      !/^[\p{L}\p{N}_]{1,30}USDT$/u.test(o.symbol) ||
+      typeof o.orderId !== 'string' ||
+      !/^\d{1,20}$/.test(o.orderId) ||
+      BigInt(o.orderId) <= 0n ||
+      (o.side !== 'BUY' && o.side !== 'SELL') ||
+      (o.positionSide !== 'BOTH' && o.positionSide !== 'LONG' && o.positionSide !== 'SHORT') ||
+      (o.type !== 'LIMIT' && o.type !== 'MARKET') ||
+      (o.status !== 'NEW' && o.status !== 'PARTIALLY_FILLED')
+    )
+      throw new Error('普通委托标识、类型或状态无效。');
+    const key = `${o.symbol}:${o.orderId}`;
+    if (keys.has(key)) throw new Error('普通委托记录重复。');
+    keys.add(key);
+    const original = decimal(o.origQty),
+      executed = decimal(o.executedQty),
+      remaining = decimal(o.remainingQty);
+    if (original <= 0n || executed < 0n || executed > original || remaining !== original - executed)
+      throw new Error('普通委托数量或余量无效。');
+    for (const field of ['price', 'avgPrice'])
+      if (o[field] !== null && decimal(o[field]) < 0n) throw new Error('普通委托价格无效。');
+    if (o.reduceOnly !== null && typeof o.reduceOnly !== 'boolean')
+      throw new Error('普通委托只减仓设置无效。');
+    if (
+      o.timeInForce !== null &&
+      (typeof o.timeInForce !== 'string' ||
+        !['GTC', 'IOC', 'FOK', 'GTX', 'GTD', 'RPI'].includes(o.timeInForce))
+    )
+      throw new Error('普通委托有效方式无效。');
+    for (const field of ['createdAt', 'updatedAt'])
+      if (
+        o[field] !== null &&
+        (typeof o[field] !== 'string' || !Number.isFinite(Date.parse(o[field])))
+      )
+        throw new Error('普通委托时间无效。');
+  }
+  return data as OrdersSnapshot;
 }
 
 function validateMarket<T extends LastPrice | Funding>(
@@ -139,6 +192,9 @@ export function useAccountPage(expectedSource: Assets['source']) {
   const positionsStatus = ref('等待首次持仓查询');
   const last = shallowRef<MarketState<LastPrice>>({ snapshot: null, stale: true, error: '' });
   const funding = shallowRef<MarketState<Funding>>({ snapshot: null, stale: true, error: '' });
+  const orders = shallowRef<OrdersSnapshot | null>(null);
+  const ordersStale = ref(true);
+  const ordersStatus = ref('等待首次普通委托查询');
   const attemptedAt = ref('');
   const busy = ref(false);
   const stale = ref(true);
@@ -235,8 +291,24 @@ export function useAccountPage(expectedSource: Assets['source']) {
         funding.value = { ...funding.value, stale: true };
       }
     }
+    async function ordersRead() {
+      try {
+        const data = await request('/api/account/orders');
+        if (!current()) return;
+        const next = validateOrders(data, expectedSource);
+        if (orders.value && Date.parse(next.queriedAt) < Date.parse(orders.value.queriedAt))
+          throw new Error('普通委托响应早于上次成功查询。');
+        orders.value = next;
+        ordersStale.value = false;
+        ordersStatus.value = `${expectedSource === 'demo' ? '模拟' : 'Binance '}普通委托查询成功 · 仅代表查询时点`;
+      } catch (error) {
+        if (!current()) return;
+        ordersStale.value = true;
+        ordersStatus.value = `${error instanceof Error ? error.message : '普通委托读取失败。'} ${orders.value ? '上次普通委托已过期，原列表与成功时间保留。' : '尚无成功普通委托数据。'}`;
+      }
+    }
     try {
-      await Promise.all([assetsRead(), positionsRead()]);
+      await Promise.all([assetsRead(), positionsRead(), ordersRead()]);
     } finally {
       if (pending === controller) {
         pending = undefined;
@@ -253,6 +325,8 @@ export function useAccountPage(expectedSource: Assets['source']) {
     busy.value = false;
     stale.value = true;
     positionsStale.value = true;
+    ordersStale.value = true;
+    ordersStatus.value = `${reason} ${orders.value ? '上次普通委托已过期。' : '尚无成功普通委托数据。'}`;
     last.value = { ...last.value, stale: true };
     funding.value = { ...funding.value, stale: true };
     positionsStatus.value = `${reason} ${positions.value ? '上次持仓已过期。' : '尚无成功持仓数据。'}`;
@@ -304,6 +378,9 @@ export function useAccountPage(expectedSource: Assets['source']) {
     positions,
     positionsStale,
     positionsStatus,
+    orders,
+    ordersStale,
+    ordersStatus,
     last,
     funding,
   };

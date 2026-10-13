@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ref } from 'vue';
+import OrdinaryOrders from './components/OrdinaryOrders.vue';
 import CurrentPositions from './components/CurrentPositions.vue';
 import { useAccountPage } from './useAccountPage.ts';
 
@@ -17,9 +19,13 @@ const {
   positions,
   positionsStale,
   positionsStatus,
+  orders,
+  ordersStale,
+  ordersStatus,
   last,
   funding,
 } = useAccountPage(expectedSource);
+const view = ref<'positions' | 'orders'>('positions');
 const detailFields = [
   ['walletBalance', '钱包余额'],
   ['positionInitialMargin', '持仓初始保证金'],
@@ -103,13 +109,43 @@ function time(value: string | undefined) {
         </div>
       </dl>
     </details>
+    <nav class="account-page__views" aria-label="账户记录">
+      <button
+        class="button button--secondary"
+        type="button"
+        :aria-pressed="view === 'positions'"
+        aria-controls="account-positions"
+        @click="view = 'positions'"
+      >
+        持仓
+      </button>
+      <button
+        class="button button--secondary"
+        type="button"
+        :aria-pressed="view === 'orders'"
+        aria-controls="account-orders"
+        @click="view = 'orders'"
+      >
+        活跃委托
+      </button>
+    </nav>
     <CurrentPositions
+      id="account-positions"
+      v-show="view === 'positions'"
       :positions="positions"
       :stale="positionsStale"
       :status="positionsStatus"
       :attempted-at="attemptedAt"
       :last="last"
       :funding="funding"
+    />
+    <OrdinaryOrders
+      id="account-orders"
+      v-show="view === 'orders'"
+      :orders="orders"
+      :stale="ordersStale"
+      :status="ordersStatus"
+      :attempted-at="attemptedAt"
     />
     <p class="footnote">账户快照不代表后续状态，也不表示止损核验通过。交易由你在 Binance 执行。</p>
   </main>

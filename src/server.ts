@@ -1,3 +1,4 @@
+import { readAccountOrders, demoAccountOrders } from './orders.ts';
 import { readAccountPositions, demoAccountPositions } from './positions.ts';
 import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -223,9 +224,11 @@ export function createServer(config: Config) {
         return send(error.status, { source: 'binance', code: error.code, error: error.message, attemptedAt: new Date().toISOString() });
       }
     }
-    if (path === '/api/account/assets' || path === '/api/account/positions') {
+    if (path === '/api/account/assets' || path === '/api/account/positions' || path === '/api/account/orders') {
       try {
-        const data = path === '/api/account/positions'
+        const data = path === '/api/account/orders'
+          ? config.mode === 'demo' ? demoAccountOrders() : await readAccountOrders(config)
+          : path === '/api/account/positions'
           ? config.mode === 'demo' ? demoAccountPositions() : await readAccountPositions(config)
           : config.mode === 'demo' ? demoAccountAssets() : await readAccountAssets(config);
         const session = sessions.get(cookie!);

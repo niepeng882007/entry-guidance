@@ -32,7 +32,11 @@ const transport: Transport = (url, headers, signal) => new Promise((resolve, rej
     response.on('error', reject);
     response.on('end', () => {
       let data: unknown;
-      try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+      try {
+        const text = Buffer.concat(chunks).toString('utf8');
+        // Preserve raw order IDs until the orders boundary can parse their integer tokens.
+        data = url.pathname === '/fapi/v1/openOrders' && response.statusCode === 200 ? text : JSON.parse(text);
+      }
       catch { reject(new AccountError('upstream_error', 'Binance 返回异常响应，请稍后重试。')); return; }
       resolve({ status: response.statusCode ?? 502, body: data });
     });
@@ -93,6 +97,12 @@ export async function readBinance(config: AccountConfig, operation: keyof typeof
       throw new AccountError('upstream_error', 'Binance 读取失败，请稍后重试或检查账户模式。');
     }
     if (operation === 'portfolio') throw new AccountError('unsupported_account', '组合保证金账户（含 Pro / SPAN）暂不支持普通 USDT 账户口径。');
+    if (operation === 'orders' && typeof response.body === 'string') {
+      try {
+        return JSON.parse(response.body, (key: string, value: unknown, context?: { source?: string }) =>
+          key === 'orderId' && typeof value === 'number' ? context?.source ?? value : value);
+      } catch { throw new AccountError('invalid_response', '普通委托响应格式无效，本次列表不可用。'); }
+    }
     return response.body;
   } catch (error) {
     if (signal.aborted) throw new AccountError('timeout', '查询超时，请检查网络后重试。', 504);

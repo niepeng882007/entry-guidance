@@ -276,7 +276,7 @@ test('read-only failures are explicit and never expose a balance or upstream sec
       },
     });
     const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-    for (const path of ['/api/account', '/api/account/assets', '/api/account/positions']) {
+    for (const path of ['/api/account', '/api/account/assets', '/api/account/positions', '/api/account/orders']) {
       const result = await fetch(base + path, { headers: { Cookie: cookie } });
       assert.equal(result.status, 502);
       const body = await result.json();
@@ -302,7 +302,7 @@ test('unknown routes, methods and URLs never become signed requests', async (t) 
     assert.equal((await fetch(base + path, { headers: { Cookie: cookie } })).status, 404);
   }
   for (const method of ['POST', 'PUT', 'DELETE']) {
-    for (const path of ['/api/account', '/api/account/assets', '/api/account/positions', '/account']) {
+    for (const path of ['/api/account', '/api/account/assets', '/api/account/positions', '/api/account/orders', '/account']) {
       assert.equal((await fetch(base + path, { method, headers: { Cookie: cookie, Origin: base } })).status, 405);
     }
   }
@@ -448,4 +448,98 @@ test('position observation excludes delivery contracts and keeps facts when auxi
   assert.deepEqual((await (await read()).json()).positions, []);
   assert.equal((await fetch(`${base}/api/account/positions`)).status, 401);
   assert.equal((await fetch(`${base}/api/account/positions?symbol=BTCUSDT`, { headers: { Cookie: cookie } })).status, 404);
+});
+
+test('ordinary active orders read the whole account and preserve exact quantities and long IDs', async (t) => {
+  const order = { symbol: 'ETHUSDT', orderId: '9007199254740993123', side: 'SELL', positionSide: 'SHORT', type: 'LIMIT', status: 'PARTIALLY_FILLED', price: '2000.12345678', origQty: '0.12345678', executedQty: '0.00000001', avgPrice: '1999.00000001', reduceOnly: false, timeInForce: 'GTC', time: 1700000000000, updateTime: 1700000000100 };
+  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
+    if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+    if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
+    if (url.pathname === '/fapi/v2/account') return { status: 200, body: { ...accountResponse, positions: [{ symbol: 'ETHUSDT', positionSide: 'SHORT', isolated: false, positionAmt: '-1' }] } };
+    if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: ['BTCUSDT', 'ETHUSDT'].map((symbol) => ({ symbol, quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'PERPETUAL' })) } };
+    assert.equal(url.pathname, '/fapi/v1/openOrders');
+    assert.equal(url.searchParams.has('symbol'), false);
+    return { status: 200, body: [order, { ...order, symbol: 'BTCUSDT', orderId: 12, side: 'BUY', positionSide: 'LONG', status: 'NEW', executedQty: '0' }] };
+  } });
+  const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+  const response = await fetch(`${base}/api/account/orders`, { headers: { Cookie: cookie } });
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.source, 'binance');
+  assert.deepEqual(data.orders.map((o: { symbol: string }) => o.symbol), ['BTCUSDT', 'ETHUSDT']);
+  assert.equal(data.orders[1].orderId, '9007199254740993123');
+  assert.equal(data.orders[1].remainingQty, '0.12345677');
+  assert.equal(data.orders[1].avgPrice, '1999.00000001');
+  assert.equal(data.orders[0].orderId, '12');
+  assert.equal((await fetch(`${base}/api/account/orders`)).status, 401);
+  assert.equal((await fetch(`${base}/api/account/orders?symbol=BTCUSDT`, { headers: { Cookie: cookie } })).status, 404);
+});
+
+test('ordinary orders preserve raw JSON integer IDs and reject bad quantities without becoming empty', async (t) => {
+  let row: Record<string, unknown> = { symbol: 'BTCUSDT', orderId: '9007199254740993123', side: 'BUY', positionSide: 'BOTH', type: 'LIMIT', status: 'PARTIALLY_FILLED', origQty: '1.00000001', executedQty: '1' };
+  let raw = true;
+  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
+    if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+    if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
+    if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
+    if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: [{ symbol: 'BTCUSDT', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'PERPETUAL' }] } };
+    assert.equal(url.pathname, '/fapi/v1/openOrders');
+    return { status: 200, body: raw ? JSON.stringify([row]).replace('"9007199254740993123"', '9007199254740993123') : [row] };
+  } });
+  const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+  const read = () => fetch(`${base}/api/account/orders`, { headers: { Cookie: cookie } });
+  let response = await read();
+  assert.equal(response.status, 200);
+  let data = await response.json();
+  assert.equal(data.orders[0].orderId, '9007199254740993123');
+  assert.equal(data.orders[0].remainingQty, '0.00000001');
+  for (const field of ['price', 'avgPrice', 'reduceOnly', 'timeInForce', 'createdAt', 'updatedAt']) assert.equal(data.orders[0][field], null);
+  raw = false;
+  const valid = { ...row };
+  for (const patch of [{ origQty: '-1' }, { origQty: '0' }, { executedQty: '1.00000002' }, { executedQty: '0.000000001' }, { orderId: 9007199254740992 }, { status: 'FILLED' }, { reduceOnly: 'false' }, { timeInForce: ['GTC'] }, { time: -1 }]) {
+    row = { ...valid, ...patch };
+    response = await read();
+    assert.equal(response.status, 502, JSON.stringify(patch));
+    data = await response.json();
+    assert.equal(data.code, 'invalid_response');
+    assert.equal(data.orders, undefined);
+    assert.doesNotMatch(JSON.stringify(data), /controlled-test|signature/);
+  }
+  row = { ...valid, timeInForce: 'RPI' };
+  response = await read();
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).orders[0].timeInForce, 'RPI');
+  row = { ...valid, type: 'MARKET', price: '0', timeInForce: 'GTC' };
+  data = await (await read()).json();
+  assert.equal(data.orders[0].price, null);
+  assert.equal(data.orders[0].timeInForce, null);
+});
+
+test('ordinary orders exclude known contracts outside USDT perpetual scope without losing valid orders', async (t) => {
+  let unexpected = false;
+  let missingMetadata = false;
+  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
+    if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+    if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
+    if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
+    if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: [
+      missingMetadata ? { symbol: 'BTCUSDT' } : { symbol: 'BTCUSDT', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'PERPETUAL' },
+      { symbol: 'BTCUSDT_261225', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'CURRENT_QUARTER' },
+      { symbol: 'ETHUSDC', quoteAsset: 'USDC', marginAsset: 'USDC', contractType: 'PERPETUAL' },
+    ] } };
+    return { status: 200, body: [
+      { symbol: unexpected ? 'UNKNOWNUSDT' : 'BTCUSDT', orderId: 10, side: 'BUY', positionSide: 'BOTH', type: 'LIMIT', status: 'NEW', origQty: '1', executedQty: '0' },
+      { symbol: 'BTCUSDT_261225' }, { symbol: 'ETHUSDC' },
+    ] };
+  } });
+  const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+  const read = () => fetch(`${base}/api/account/orders`, { headers: { Cookie: cookie } });
+  const response = await read();
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).orders.map((o: { symbol: string }) => o.symbol), ['BTCUSDT']);
+  unexpected = true;
+  assert.equal((await read()).status, 502);
+  unexpected = false;
+  missingMetadata = true;
+  assert.equal((await read()).status, 502);
 });
