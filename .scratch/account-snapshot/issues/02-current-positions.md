@@ -35,3 +35,5 @@
 - 前端：`frontend/AccountPage.vue`、`frontend/useAccountPage.ts`、`frontend/components/CurrentPositions.vue`、`public/style.css`。
 - 验证：`test/account.test.ts`、`test/browser/account-page.spec.ts`、`test/development.test.ts`。
 - 记录：`README.md`、本任务文件。
+
+- 合并最新 main 的交易复盘账本运行代码后，再次通过标准 `pnpm check`：全部 Node 测试及 78 个 Chromium / WebKit 浏览器用例通过。开发 HTTP 夹具仅禁用无需验证的后台依赖扫描，三次有界复验在 0.53 / 0.39 / 0.41 秒退出；该补丁 Standards / Spec 复核均无剩余问题。
