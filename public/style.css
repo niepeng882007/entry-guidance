@@ -218,6 +218,22 @@ p { margin: 0 0 var(--space-12); }
 .account-page__nav { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-16); margin-bottom: var(--space-24); }
 .account-page__details { margin-top: var(--space-24); }
 
+/* Current positions: preserve keyed records during polling. */
+.positions { margin-top: var(--space-28); border-top: 1px solid var(--color-border); padding-top: var(--space-24); }
+.positions__status[data-stale="true"] { color: var(--color-error); }
+.positions__filter { display: block; margin: var(--space-20) 0; }
+.position { border-top: 1px solid var(--color-border); padding: var(--space-20) 0; }
+.position__heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-12); }
+.position__pnl-label { color: var(--color-muted); margin-bottom: 0; }
+.position__pnl { margin-top: var(--space-8); }
+.position__pnl[data-pnl="profit"] { color: var(--color-success); }
+.position__pnl[data-pnl="loss"] { color: var(--color-error); }
+.position__details { margin-bottom: 0; }
+@media (max-width: 560px) {
+  .position .details__row { flex-wrap: wrap; }
+  .position .details__value { margin-left: auto; }
+}
+
 /* Amount：上下文差异由显式变体表达。 */
 .amount { margin: var(--space-16) 0 var(--space-10); font-family: var(--font-data); font-size: 22px; font-weight: 550; letter-spacing: -.04em; line-height: 1.3; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .amount--draft { margin: var(--space-8) 0 var(--space-24); }

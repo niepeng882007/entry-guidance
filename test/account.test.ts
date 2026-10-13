@@ -276,7 +276,7 @@ test('read-only failures are explicit and never expose a balance or upstream sec
       },
     });
     const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-    for (const path of ['/api/account', '/api/account/assets']) {
+    for (const path of ['/api/account', '/api/account/assets', '/api/account/positions']) {
       const result = await fetch(base + path, { headers: { Cookie: cookie } });
       assert.equal(result.status, 502);
       const body = await result.json();
@@ -302,7 +302,7 @@ test('unknown routes, methods and URLs never become signed requests', async (t) 
     assert.equal((await fetch(base + path, { headers: { Cookie: cookie } })).status, 404);
   }
   for (const method of ['POST', 'PUT', 'DELETE']) {
-    for (const path of ['/api/account', '/api/account/assets', '/account']) {
+    for (const path of ['/api/account', '/api/account/assets', '/api/account/positions', '/account']) {
       assert.equal((await fetch(base + path, { method, headers: { Cookie: cookie, Origin: base } })).status, 405);
     }
   }
@@ -380,4 +380,69 @@ test('Portfolio Margin Pro must not be reported as an ordinary USDT account', as
   const result = await fetch(`${base}/api/account`, { headers: { Cookie: cookie } });
   assert.equal(result.status, 502);
   assert.equal((await result.json()).code, 'unsupported_account');
+});
+
+test('all current positions remain separate across symbols, hedge sides and margin modes', async (t) => {
+  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
+    const body = url.pathname.endsWith('apiRestrictions') ? permissions
+      : url.pathname.endsWith('portfolio/account') ? { code: -21001 }
+      : url.pathname.endsWith('/account') ? accountResponse
+      : url.pathname.endsWith('exchangeInfo') ? { symbols: ['BTCUSDT', 'ETHUSDT'].map((symbol) => ({ symbol, contractType: 'PERPETUAL', quoteAsset: 'USDT', marginAsset: 'USDT', status: 'BREAK' })) }
+      : url.pathname.endsWith('positionRisk') ? [
+        { symbol: 'ETHUSDT', positionSide: 'BOTH', positionAmt: '-0.12345678', marginType: 'cross', leverage: '10', entryPrice: '2000', markPrice: '1990', unRealizedProfit: '1.23456789' },
+        { symbol: 'BTCUSDT', positionSide: 'SHORT', positionAmt: '-0.01', marginType: 'isolated', leverage: '5', entryPrice: '60000', markPrice: '60100', unRealizedProfit: '-1', liquidationPrice: '70000', breakEvenPrice: '59990', isolatedWallet: '120', notional: '-601', updateTime: 1234567890000 },
+        { symbol: 'BTCUSDT', positionSide: 'LONG', positionAmt: '0.02', marginType: 'cross', leverage: '3', entryPrice: '60000', markPrice: '60100', unRealizedProfit: '2' },
+        { symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0' },
+      ] : url.pathname.endsWith('premiumIndex') ? [{ symbol: 'BTCUSDT', lastFundingRate: '0.0001', nextFundingTime: 1900000000000, time: 1234567890001 }]
+      : [{ symbol: 'BTCUSDT', price: '60101', time: 1234567890002 }];
+    return { status: url.pathname.endsWith('portfolio/account') ? 400 : 200, body };
+  } });
+  const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+  const response = await fetch(`${base}/api/account/positions`, { headers: { Cookie: cookie } });
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.deepEqual(data.positions.map((p: { symbol: string; direction: string }) => [p.symbol, p.direction]), [['BTCUSDT', 'LONG'], ['BTCUSDT', 'SHORT'], ['ETHUSDT', 'SHORT']]);
+  assert.equal(data.positions[2].quantity, '0.12345678');
+  assert.equal(data.positions[2].unrealizedProfit, '1.23456789');
+  assert.equal(data.positions[2].liquidationPrice, null);
+  assert.equal(data.positions[1].isolatedWallet, '120.00000000');
+  assert.equal(data.last.data[0].price, '60101.00000000');
+  assert.equal(data.funding.data[0].rate, '0.00010000');
+  assert.doesNotMatch(JSON.stringify(data), /controlled-test|signature/);
+});
+
+test('position observation excludes delivery contracts and keeps facts when auxiliary reads fail', async (t) => {
+  let phase = 'mixed';
+  const row = { symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0.12345678', marginType: 'cross', leverage: '10', entryPrice: '60000', markPrice: '60100', unRealizedProfit: '-9.12345678' };
+  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
+    if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+    if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
+    if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
+    if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: [
+      { symbol: 'BTCUSDT', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'PERPETUAL' },
+      { symbol: 'ETHUSDT_261225', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'CURRENT_QUARTER' },
+    ] } };
+    if (url.pathname.endsWith('positionRisk')) return { status: 200, body: phase === 'empty' ? [] : phase === 'invalid' ? [{ ...row, markPrice: 'NaN' }] : phase === 'missing' ? {} : [row, ...(phase === 'mixed' ? [{ ...row, symbol: 'ETHUSDT_261225' }, { ...row, symbol: 'BTCUSD_PERP' }] : [])] };
+    return { status: 429, body: { code: -1003, msg: 'controlled-test-secret' } };
+  } });
+  const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+  const read = () => fetch(`${base}/api/account/positions`, { headers: { Cookie: cookie } });
+  const response = await read();
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.positions.length, 1);
+  assert.equal(data.positions[0].unrealizedProfit, '-9.12345678');
+  assert.equal(data.last.status, 'error');
+  assert.equal(data.funding.status, 'error');
+  assert.doesNotMatch(JSON.stringify(data), /controlled-test-secret/);
+  for (const fail of ['invalid', 'missing']) {
+    phase = fail;
+    const failed = await read();
+    assert.equal(failed.status, 502);
+    assert.equal((await failed.json()).positions, undefined);
+  }
+  phase = 'empty';
+  assert.deepEqual((await (await read()).json()).positions, []);
+  assert.equal((await fetch(`${base}/api/account/positions`)).status, 401);
+  assert.equal((await fetch(`${base}/api/account/positions?symbol=BTCUSDT`, { headers: { Cookie: cookie } })).status, 404);
 });

@@ -1,3 +1,4 @@
+import { readAccountPositions, demoAccountPositions } from './positions.ts';
 import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -222,9 +223,11 @@ export function createServer(config: Config) {
         return send(error.status, { source: 'binance', code: error.code, error: error.message, attemptedAt: new Date().toISOString() });
       }
     }
-    if (path === '/api/account/assets') {
+    if (path === '/api/account/assets' || path === '/api/account/positions') {
       try {
-        const data = config.mode === 'demo' ? demoAccountAssets() : await readAccountAssets(config);
+        const data = path === '/api/account/positions'
+          ? config.mode === 'demo' ? demoAccountPositions() : await readAccountPositions(config)
+          : config.mode === 'demo' ? demoAccountAssets() : await readAccountAssets(config);
         const session = sessions.get(cookie!);
         if (!session || session.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
         return send(200, data);

@@ -1,12 +1,25 @@
 <script setup lang="ts">
+import CurrentPositions from './components/CurrentPositions.vue';
 import { useAccountPage } from './useAccountPage.ts';
 
 const { source, expectedSource } = defineProps<{
   source: string;
   expectedSource: 'binance' | 'demo';
 }>();
-const { snapshot, attemptedAt, busy, stale, relogin, status, refresh } =
-  useAccountPage(expectedSource);
+const {
+  snapshot,
+  attemptedAt,
+  busy,
+  stale,
+  relogin,
+  status,
+  refresh,
+  positions,
+  positionsStale,
+  positionsStatus,
+  last,
+  funding,
+} = useAccountPage(expectedSource);
 const detailFields = [
   ['walletBalance', '钱包余额'],
   ['positionInitialMargin', '持仓初始保证金'],
@@ -90,6 +103,14 @@ function time(value: string | undefined) {
         </div>
       </dl>
     </details>
+    <CurrentPositions
+      :positions="positions"
+      :stale="positionsStale"
+      :status="positionsStatus"
+      :attempted-at="attemptedAt"
+      :last="last"
+      :funding="funding"
+    />
     <p class="footnote">账户快照不代表后续状态，也不表示止损核验通过。交易由你在 Binance 执行。</p>
   </main>
 </template>
