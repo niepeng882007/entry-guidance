@@ -2,8 +2,8 @@ import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from
 import { readFileSync, readdirSync } from 'node:fs';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
-import { AccountError, readAccount, type AccountConfig } from './account.ts';
-import { demoAccount, readMarket, readSymbols } from './market.ts';
+import { AccountError, readAccount, readAccountAssets, type AccountConfig } from './account.ts';
+import { demoAccount, demoAccountAssets, readMarket, readSymbols } from './market.ts';
 import { createPlan, verifyPosition, type Plan } from './verification.ts';
 import type { EntryInput } from '../public/draft.js';
 import type { ViteDevServer } from 'vite';
@@ -28,7 +28,7 @@ export function createServer(config: Config) {
   const recoveryKey = scryptSync(config.password, JSON.stringify(['entry-guidance.recovery.v1', source, config.apiKey ?? '', config.apiSecret ?? '']), 32);
   const signature = (payload: string) => createHmac('sha256', recoveryKey).update(payload).digest('base64url');
   const loginPage = readFileSync(new URL('../public/login.html', import.meta.url), 'utf8');
-  const accountPage = config.frontend ? '' : readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8');
+  const frontendPage = config.frontend ? '' : readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8');
   const style = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   // Only built JS/CSS filenames are published; request paths never reach the filesystem.
   const assets = new Map<string, { body: Buffer; type: string }>();
@@ -95,7 +95,7 @@ export function createServer(config: Config) {
       return redirect('/');
     }
     if (!loggedIn) {
-      if (path === '/') return redirect('/login');
+      if (path === '/' || path === '/account') return redirect('/login');
       return send(401, { error: '请先登录。' });
     }
     if (path === '/logout' && req.method === 'POST') {
@@ -154,11 +154,13 @@ export function createServer(config: Config) {
         return send(error.status, { error: error.message, code: error.code, source: plan.source, attemptedAt: new Date().toISOString() });
       }
     }
-    if (path === '/') {
+    if (path === '/' || path === '/account') {
       const page = config.frontend
-        ? await config.frontend.transformIndexHtml('/', readFileSync(new URL('../frontend/index.html', import.meta.url), 'utf8'))
-        : accountPage;
-      return html(200, page.replace('{{source}}', config.mode === 'demo' ? '模拟数据 · 仅用于界面与流程验证' : '真实模式 · 数据由 Binance 只读接口查询'));
+        ? await config.frontend.transformIndexHtml(path, readFileSync(new URL('../frontend/index.html', import.meta.url), 'utf8'))
+        : frontendPage;
+      return html(200, page.replace('{{source}}', config.mode === 'demo' ? '模拟数据 · 仅用于界面与流程验证' : '真实模式 · 数据由 Binance 只读接口查询')
+        .replace('{{page}}', path === '/account' ? 'account' : 'workbench').replace('{{mode}}', source)
+        .replace('开仓卡 · 开仓前', path === '/account' ? '账户快照 · USDT' : '开仓卡 · 开仓前'));
     }
     const asset = assets.get(path ?? '');
     if (asset) return res.writeHead(200, { 'Content-Type': `${asset.type}; charset=utf-8` }).end(asset.body);
@@ -187,6 +189,17 @@ export function createServer(config: Config) {
       catch (error) {
         if (!(error instanceof AccountError)) throw error;
         return send(error.status, { source: 'binance', code: error.code, error: error.message, attemptedAt: new Date().toISOString() });
+      }
+    }
+    if (path === '/api/account/assets') {
+      try {
+        const data = config.mode === 'demo' ? demoAccountAssets() : await readAccountAssets(config);
+        const session = sessions.get(cookie!);
+        if (!session || session.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
+        return send(200, data);
+      } catch (error) {
+        if (!(error instanceof AccountError)) throw error;
+        return send(error.status, { source, code: error.code, error: error.message, attemptedAt: new Date().toISOString() });
       }
     }
     return send(404, { error: '入口不存在。' });

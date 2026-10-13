@@ -357,8 +357,9 @@ onUnmounted(() => cleanup());
       >
         <div class="section-heading">
           <h2 id="account-title" class="section-title">账户快照</h2>
-          <span class="muted section-heading__note">前台每 3 秒刷新</span>
+          <a class="button button--text button--link" href="/account">查看账户详情</a>
         </div>
+        <p class="muted section-heading__note">前台每 3 秒刷新</p>
         <p id="account-error" class="error" role="status" :hidden="!text['account-error']">
           {{ text['account-error'] }}
         </p>

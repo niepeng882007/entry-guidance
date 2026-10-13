@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { get } from 'node:https';
+import { parseDecimal, formatDecimal } from '../public/draft.js';
 
 export type Transport = (url: URL, headers: Record<string, string>, signal: AbortSignal) => Promise<{ status: number; body: unknown }>;
 export type AccountConfig = { apiKey?: string; apiSecret?: string; transport?: Transport };
@@ -108,16 +109,15 @@ const writePermissions = [
 
 function decimal(value: unknown): bigint {
   if (typeof value !== 'string' || !/^-?\d{1,24}(\.\d{1,8})?$/.test(value)) throw new AccountError('invalid_response', 'USDT 金额缺失或精度不支持，无法确认余额。');
-  const [whole, fraction = ''] = value.replace('-', '').split('.');
-  return BigInt(`${whole}${fraction.padEnd(8, '0')}`) * (value.startsWith('-') ? -1n : 1n);
+  return parseDecimal(value.replace('-', ''), 'USDT 金额') * (value.startsWith('-') ? -1n : 1n);
 }
 
 function format(value: bigint): string {
-  const digits = (value < 0n ? -value : value).toString().padStart(9, '0');
-  return `${value < 0n ? '-' : ''}${digits.slice(0, -8)}.${digits.slice(-8)}`;
+  const [whole, fraction = ''] = formatDecimal(value).split('.');
+  return `${whole}.${fraction.padEnd(8, '0')}`;
 }
 
-export async function readAccount(config: AccountConfig, symbol?: string, signal = AbortSignal.timeout(10_000)) {
+async function readAccountData(config: AccountConfig, signal: AbortSignal) {
   if (!config.apiKey || !config.apiSecret) throw new AccountError('missing_credentials', '未连接：请在后端配置 BINANCE_API_KEY 和 BINANCE_API_SECRET。', 503);
   const read = async (operation: keyof typeof endpoints) => object(await readBinance(config, operation, signal));
   try {
@@ -136,19 +136,33 @@ export async function readAccount(config: AccountConfig, symbol?: string, signal
     const pnl = decimal(asset.unrealizedProfit);
     const available = decimal(asset.availableBalance);
     if (wallet + pnl !== decimal(asset.marginBalance)) throw new AccountError('invalid_response', 'USDT 权益与钱包余额、未实现盈亏不一致，请重新查询。');
-    if (symbol !== undefined) {
-      if (account.canTrade !== true) throw new AccountError('trading_disabled', '账户交易状态未确认可用，请在 Binance 检查后刷新；不要为本工具开启 API 交易权限。');
-      if (!Array.isArray(account.positions)) throw new AccountError('invalid_response', '持仓列表缺失，无法确认空仓。');
-      const positions = account.positions.map(object).filter((position) => position.symbol === symbol);
-      if (positions.length !== 1 || positions[0]!.positionSide !== 'BOTH') throw new AccountError('unsupported_position', '无法确认目标币种为单向持仓，请在 Binance 检查后刷新。');
-      if (decimal(positions[0]!.positionAmt) !== 0n) throw new AccountError('existing_position', '目标币种已有仓位，请先在 Binance 处理后刷新；本工具不支持加仓。');
-      if (positions[0]!.isolated === false) throw new AccountError('unsupported_margin', `${symbol} 当前为全仓模式，本工具仅支持逐仓开仓方案。请在 Binance 将该合约切换为逐仓后刷新，或选择其他币种。`, 409);
-      if (positions[0]!.isolated !== true) throw new AccountError('unsupported_margin', `${symbol} 的保证金模式数据缺失或无效，无法确认逐仓，请刷新后重试。`);
-    }
-    return { source: 'binance' as const, queriedAt: new Date().toISOString(), walletBalance: format(wallet), unrealizedProfit: format(pnl), equity: format(wallet + pnl), availableBalance: format(available) };
+    const snapshot = { source: 'binance' as const, queriedAt: new Date().toISOString(), walletBalance: format(wallet), unrealizedProfit: format(pnl), equity: format(wallet + pnl), availableBalance: format(available) };
+    return { account, asset, snapshot };
   } catch (error) {
     if (signal.aborted) throw new AccountError('timeout', '账户查询超时，请检查网络后重试。', 504);
     if (error instanceof AccountError) throw error;
     throw new AccountError('connection_failed', '账户连接失败，请检查网络或后端代理设置。');
   }
+}
+
+export async function readAccount(config: AccountConfig, symbol?: string, signal = AbortSignal.timeout(10_000)) {
+  const { account, snapshot } = await readAccountData(config, signal);
+  if (symbol !== undefined) {
+    if (account.canTrade !== true) throw new AccountError('trading_disabled', '账户交易状态未确认可用，请在 Binance 检查后刷新；不要为本工具开启 API 交易权限。');
+    if (!Array.isArray(account.positions)) throw new AccountError('invalid_response', '持仓列表缺失，无法确认空仓。');
+    const positions = account.positions.map(object).filter((position) => position.symbol === symbol);
+    if (positions.length !== 1 || positions[0]!.positionSide !== 'BOTH') throw new AccountError('unsupported_position', '无法确认目标币种为单向持仓，请在 Binance 检查后刷新。');
+    if (decimal(positions[0]!.positionAmt) !== 0n) throw new AccountError('existing_position', '目标币种已有仓位，请先在 Binance 处理后刷新；本工具不支持加仓。');
+    if (positions[0]!.isolated === false) throw new AccountError('unsupported_margin', `${symbol} 当前为全仓模式，本工具仅支持逐仓开仓方案。请在 Binance 将该合约切换为逐仓后刷新，或选择其他币种。`, 409);
+    if (positions[0]!.isolated !== true) throw new AccountError('unsupported_margin', `${symbol} 的保证金模式数据缺失或无效，无法确认逐仓，请刷新后重试。`);
+  }
+  return snapshot;
+}
+
+export async function readAccountAssets(config: AccountConfig, signal = AbortSignal.timeout(10_000)) {
+  const { asset, snapshot } = await readAccountData(config, signal);
+  const amount = (field: string) => asset[field] === undefined ? null : format(decimal(asset[field]));
+  return { ...snapshot, positionInitialMargin: amount('positionInitialMargin'),
+    openOrderInitialMargin: amount('openOrderInitialMargin'), maintMargin: amount('maintMargin'),
+    maxWithdrawAmount: amount('maxWithdrawAmount') };
 }

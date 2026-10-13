@@ -47,6 +47,10 @@ test('anonymous visitors cannot open the account page or read account data', asy
   const account = await fetch(`${base}/api/account`);
   assert.equal(account.status, 401);
   assert.equal(account.headers.get('cache-control'), 'no-store');
+  const assetsPage = await fetch(`${base}/account`, { redirect: 'manual' });
+  assert.equal(assetsPage.status, 303);
+  assert.equal(assetsPage.headers.get('location'), '/login');
+  assert.equal((await fetch(`${base}/api/account/assets`)).status, 401);
 });
 
 test('built frontend assets require login and only explicit build filenames are served', async (t) => {
@@ -59,6 +63,13 @@ test('built frontend assets require login and only explicit build filenames are 
   const assets = Array.from(page.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g), (match) => match[1]!);
   assert.ok(assets.some((path) => path.endsWith('.js')));
   assert.ok(assets.some((path) => path.endsWith('.css')));
+  const detailsPage = await fetch(`${base}/account`, { headers: { Cookie: cookie } });
+  assert.equal(detailsPage.status, 200);
+  const detailsHtml = await detailsPage.text();
+  assert.match(detailsHtml, /账户快照 · USDT/);
+  assert.match(detailsHtml, /data-page="account"/);
+  assert.match(detailsHtml, /data-mode="demo"/);
+  for (const path of assets) assert.ok(detailsHtml.includes(path));
   for (const path of assets) {
     assert.equal((await fetch(`${base}${path}`)).status, 401);
     const asset = await fetch(`${base}${path}`, { headers: { Cookie: cookie } });
@@ -138,6 +149,101 @@ test('authenticated account reads use USDT equity and available balance with exa
   assert.doesNotMatch(JSON.stringify(body), /controlled-test|signature|crossUnPnl|initialMargin/);
 });
 
+test('independent assets read uses exact USDT amounts even with cross and hedge positions', async (t) => {
+  const paths: string[] = [];
+  const base = await start(t, {
+    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      paths.push(url.pathname);
+      if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+      if (url.pathname === '/sapi/v1/portfolio/account') return { status: 400, body: { code: -21001 } };
+      return { status: 200, body: { ...accountResponse, canTrade: false,
+        positions: [{ symbol: 'BTCUSDT', positionSide: 'LONG', isolated: false, positionAmt: '1' },
+          { symbol: 'BTCUSDT', positionSide: 'SHORT', isolated: false, positionAmt: '-2' }],
+        assets: [{ ...accountResponse.assets[0], positionInitialMargin: '200.00000001',
+          openOrderInitialMargin: '75.06999998', maintMargin: '3.12345678', maxWithdrawAmount: '690.00000001' }],
+      } };
+    },
+  });
+  const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+  const response = await fetch(`${base}/api/account/assets`, { headers: { Cookie: cookie } });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.equity, '975.09999999');
+  assert.equal(body.availableBalance, '700.03000000');
+  assert.equal(body.unrealizedProfit, '-25.00000002');
+  assert.equal(body.positionInitialMargin, '200.00000001');
+  assert.equal(body.openOrderInitialMargin, '75.06999998');
+  assert.equal(body.maintMargin, '3.12345678');
+  assert.equal(body.maxWithdrawAmount, '690.00000001');
+  assert.equal(body.source, 'binance');
+  assert.ok(Number.isFinite(Date.parse(body.queriedAt)));
+  assert.deepEqual(paths, ['/sapi/v1/account/apiRestrictions', '/sapi/v1/portfolio/account', '/fapi/v2/account']);
+  assert.doesNotMatch(JSON.stringify(body), /controlled-test|signature|positions|totalWalletBalance/);
+});
+
+test('asset details distinguish absent amounts from malformed amounts without changing the summary', async (t) => {
+  let fields: Record<string, unknown> = {};
+  const base = await start(t, {
+    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+      if (url.pathname === '/sapi/v1/portfolio/account') return { status: 400, body: { code: -21001 } };
+      return { status: 200, body: { ...accountResponse, assets: [{ ...accountResponse.assets[0], ...fields }] } };
+    },
+  });
+  const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+  const read = (path: string) => fetch(base + path, { headers: { Cookie: cookie } });
+  const missing = await (await read('/api/account/assets')).json();
+  for (const field of ['positionInitialMargin', 'openOrderInitialMargin', 'maintMargin', 'maxWithdrawAmount']) {
+    assert.equal(missing[field], null);
+    for (const invalid of ['NaN', '0.000000001', 1, null]) {
+      fields = { [field]: invalid };
+      const response = await read('/api/account/assets');
+      assert.equal(response.status, 502);
+      const error = await response.json();
+      assert.equal(error.code, 'invalid_response');
+      assert.equal(error.equity, undefined);
+    }
+  }
+  fields = { maintMargin: 'NaN' };
+  const summary = await read('/api/account');
+  assert.equal(summary.status, 200);
+  assert.equal((await summary.json()).maintMargin, undefined);
+  fields = { positionInitialMargin: '0' };
+  assert.equal((await (await read('/api/account/assets')).json()).positionInitialMargin, '0.00000000');
+});
+
+test('logout during a pending asset read prevents the response from exposing account data', async (t) => {
+  let release!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let started!: () => void;
+  const reading = new Promise<void>((resolve) => { started = resolve; });
+  const base = await start(t, {
+    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      if (url.pathname.endsWith('apiRestrictions')) {
+        started();
+        await entered;
+        return { status: 200, body: permissions };
+      }
+      if (url.pathname === '/sapi/v1/portfolio/account') return { status: 400, body: { code: -21001 } };
+      return { status: 200, body: accountResponse };
+    },
+  });
+  const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+  const pending = fetch(`${base}/api/account/assets`, { headers: { Cookie: cookie } });
+  await reading;
+  const logout = await fetch(`${base}/logout`, { method: 'POST', redirect: 'manual', headers: { Cookie: cookie, Origin: base } });
+  assert.equal(logout.status, 303);
+  release();
+  const response = await pending;
+  assert.equal(response.status, 401);
+  assert.equal((await response.json()).equity, undefined);
+});
+
 test('read-only failures are explicit and never expose a balance or upstream secrets', async (t) => {
   const cases: { name: string; permission?: unknown; account?: unknown; status?: number; error?: string; expected: string }[] = [
     ...Object.keys(permissions).filter((field) => field !== 'enableReading').map((field) => ({
@@ -170,14 +276,16 @@ test('read-only failures are explicit and never expose a balance or upstream sec
       },
     });
     const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-    const result = await fetch(`${base}/api/account`, { headers: { Cookie: cookie } });
-    assert.equal(result.status, 502);
-    const body = await result.json();
-    assert.equal(body.code, scenario.expected);
-    assert.equal(body.equity, undefined);
-    assert.equal(body.queriedAt, undefined);
-    assert.equal(body.source, 'binance');
-    assert.doesNotMatch(JSON.stringify(body), /controlled-test|signature=|private/);
+    for (const path of ['/api/account', '/api/account/assets']) {
+      const result = await fetch(base + path, { headers: { Cookie: cookie } });
+      assert.equal(result.status, 502);
+      const body = await result.json();
+      assert.equal(body.code, scenario.expected);
+      assert.equal(body.equity, undefined);
+      assert.equal(body.queriedAt, undefined);
+      assert.equal(body.source, 'binance');
+      assert.doesNotMatch(JSON.stringify(body), /controlled-test|signature=|private/);
+    }
   });
 });
 
@@ -190,11 +298,13 @@ test('unknown routes, methods and URLs never become signed requests', async (t) 
   assert.equal((await fetch(`${base}/api/account`)).status, 401);
   assert.equal((await fetch(`${base}/app.js`)).status, 401);
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-  for (const path of ['/api/account?url=https://example.com', '/api/account?symbol=BTCUSDT', '/api/order', '/.env', '/src/account.ts', '/%2e%2e/.env']) {
+  for (const path of ['/api/account?url=https://example.com', '/api/account?symbol=BTCUSDT', '/api/account/assets?symbol=BTCUSDT', '/api/account/assets?url=https://example.com', '/api/order', '/.env', '/src/account.ts', '/%2e%2e/.env']) {
     assert.equal((await fetch(base + path, { headers: { Cookie: cookie } })).status, 404);
   }
   for (const method of ['POST', 'PUT', 'DELETE']) {
-    assert.equal((await fetch(`${base}/api/account`, { method, headers: { Cookie: cookie, Origin: base } })).status, 405);
+    for (const path of ['/api/account', '/api/account/assets', '/account']) {
+      assert.equal((await fetch(base + path, { method, headers: { Cookie: cookie, Origin: base } })).status, 405);
+    }
   }
   assert.equal(requests, 0);
 });

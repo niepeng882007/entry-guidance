@@ -8,6 +8,11 @@ export function demoAccount() {
   return { source: 'demo' as const, queriedAt: new Date().toISOString(), walletBalance: '1250.00000000', unrealizedProfit: '-12.35000000', equity: '1237.65000000', availableBalance: '920.12540000' };
 }
 
+export function demoAccountAssets() {
+  return { ...demoAccount(), positionInitialMargin: '280.00000000',
+    openOrderInitialMargin: '37.52460000', maintMargin: '6.00000000', maxWithdrawAmount: '920.12540000' };
+}
+
 function supported(contract: Record<string, unknown>) {
   return typeof contract.symbol === 'string' && /^[\p{L}\p{N}_]{1,30}USDT$/u.test(contract.symbol)
     && contract.status === 'TRADING' && (contract.contractType === 'PERPETUAL' || contract.contractType === 'TRADIFI_PERPETUAL')
