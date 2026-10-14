@@ -86,16 +86,20 @@ function candles(value: unknown, start: number, end: number, step: number, queri
   return rows.sort((a, b) => a.openTime - b.openTime);
 }
 
-function coverage(series: MarketSeries, archive: MarketArchive) {
-  const known = new Set(series.candles.map((row) => row.openTime));
-  series.gaps = [];
+export function marketGaps(archive: Pick<MarketArchive, 'startTime' | 'endTime' | 'interval'>, candles: readonly Candle[]): MarketSeries['gaps'] {
+  const gaps: MarketSeries['gaps'] = [];
   const step = marketIntervals[archive.interval];
-  for (let time = archive.startTime; time <= archive.endTime; time += step) {
-    if (known.has(time)) continue;
-    const last = series.gaps.at(-1);
-    if (last && last.endTime + 1 === time) last.endTime = Math.min(time + step - 1, archive.endTime);
-    else series.gaps.push({ startTime: time, endTime: Math.min(time + step - 1, archive.endTime) });
+  let next = archive.startTime;
+  for (const candle of [...candles].sort((a, b) => a.openTime - b.openTime)) {
+    if (candle.openTime < next || candle.openTime > archive.endTime) continue;
+    if (candle.openTime > next) gaps.push({ startTime: next, endTime: candle.openTime - 1 });
+    next = candle.openTime + step;
   }
+  if (next <= archive.endTime) gaps.push({ startTime: next, endTime: archive.endTime });
+  return gaps;
+}
+function coverage(series: MarketSeries, archive: MarketArchive) {
+  series.gaps = marketGaps(archive, series.candles);
   series.complete = !series.gaps.length && series.nextTime > archive.endTime && series.candles.every((row) => row.final);
 }
 

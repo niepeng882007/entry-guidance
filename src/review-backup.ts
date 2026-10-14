@@ -2,9 +2,9 @@ import { createHash } from 'node:crypto';
 import type { ReviewIdentity } from './review-ledger.ts';
 import { parseDecimal } from '../public/draft.js';
 import { noteInput, tagInput, noteBasis } from './review-notes.ts';
-import type { ReviewTrade } from './review-ledger.ts';
+import type { ReviewTrade, ReviewFill, ReviewOrder, ReviewFunding } from './review-ledger.ts';
 import { validateAnalysisTask } from './analysis-contract.ts';
-import { marketIntervals } from './trade-market.ts';
+import { marketIntervals, marketGaps, type MarketArchive, type Candle } from './trade-market.ts';
 import type { SyncState, ArchiveState } from './review-ledger.ts';
 import type { AnalysisTask } from './trade-analysis.ts';
 
@@ -104,6 +104,26 @@ function trade(value: unknown, scope: ReviewIdentity) {
   for (const item of evidence.funding) {
     const fee = object(item); id(fee.id); requireValue(fee.symbol === row.symbol && (fee.asset === null || typeof fee.asset === 'string')); date(fee.time); amount(fee.amount, true);
   }
+  if (row.status === 'closed') {
+    const fills = evidence.fills as ReviewFill[], orders = evidence.orders as ReviewOrder[], fees = evidence.funding as ReviewFunding[];
+    requireValue(fills.length >= 2 && new Set(fills.map((fill) => fill.id)).size === fills.length && new Set(orders.map((order) => order.id)).size === orders.length && new Set(fees.map((fee) => fee.id)).size === fees.length);
+    requireValue(Date.parse(String(row.openedAt)) === Date.parse(fills[0]!.time) && Date.parse(String(row.closedAt)) === Date.parse(fills.at(-1)!.time) && row.side === (fills[0]!.side === 'BUY' ? 'long' : 'short'));
+    let position = 0n, gross = 0n, costs = 0n, fundingSum = 0n;
+    for (const [index, fill] of fills.entries()) {
+      requireValue(fill.positionSide === fills[0]!.positionSide && (index === 0 || Date.parse(fill.time) >= Date.parse(fills[index - 1]!.time)));
+      requireValue(orders.some((order) => order.id === fill.orderId && order.side === fill.side));
+      requireValue(fill.realizedPnl !== null && fill.commission !== null && fill.commissionAsset === 'USDT' && amount(fill.commission)! >= 0n);
+      position += amount(fill.quantity)! * (fill.side === 'BUY' ? 1n : -1n);
+      requireValue(row.side === 'long' ? position >= 0n : position <= 0n);
+      requireValue(index === fills.length - 1 ? position === 0n : position !== 0n);
+      gross += amount(fill.realizedPnl)!; costs += amount(fill.commission)!;
+    }
+    for (const fee of fees) {
+      requireValue(fee.amount !== null && fee.asset === 'USDT' && fee.attribution !== 'ambiguous' && Date.parse(fee.time) >= Date.parse(String(row.openedAt)) && Date.parse(fee.time) <= Date.parse(String(row.closedAt)));
+      fundingSum += amount(fee.amount)!;
+    }
+    requireValue(realized === gross && commission === costs && funding === fundingSum && net === gross - costs + fundingSum);
+  }
   if (evidence.raw !== undefined) { requireValue(Array.isArray(evidence.raw)); evidence.raw.forEach(raw); }
   if (row.groupingVersion === 2) { date(row.observedAt); amount(row.unrealizedPnl, true); date(row.unrealizedAt, true); }
 }
@@ -140,18 +160,25 @@ function market(value: unknown, scope: ReviewIdentity) {
   requireValue(object(row.evidence).id === row.tradeId && object(row.evidence).symbol === row.symbol && Object.hasOwn(marketIntervals, String(row.interval)));
   id(row.snapshotId); id(row.cacheKey); date(row.queriedAt); date(row.openedAt, true); date(row.closedAt, true);
   for (const key of ['startTime', 'endTime', 'desiredEndTime']) integer(row[key]);
+  const step = marketIntervals[row.interval as keyof typeof marketIntervals];
+  requireValue(Number(row.startTime) % step === 0 && Number(row.endTime) >= Number(row.startTime) && Number(row.desiredEndTime) >= Number(row.endTime));
   strings(row.missing); strings(row.limitations);
   requireValue(Array.isArray(row.events) && Array.isArray(row.stops)); row.events.forEach((item) => fill(item, row.symbol));
   for (const item of row.stops) { const stop = object(item); id(stop.id); amount(stop.price); integer(stop.time); string(stop.basis); string(stop.label); requireValue(['plan', 'observed', 'historical'].includes(String(stop.kind))); }
-  for (const source of ['contract', 'mark']) {
+  for (const source of ['contract', 'mark'] as const) {
     const series = object(object(row.series)[source]); string(series.endpoint); integer(series.nextTime);
+    requireValue(series.endpoint === (source === 'contract' ? '/fapi/v1/klines' : '/fapi/v1/markPriceKlines'));
     requireValue(typeof series.complete === 'boolean' && (series.error === null || typeof series.error === 'string') && Array.isArray(series.candles) && Array.isArray(series.gaps));
+    let previous = -1;
     for (const item of series.candles) {
       const candle = object(item); integer(candle.openTime); integer(candle.closeTime); date(candle.queriedAt); requireValue(typeof candle.final === 'boolean');
+      requireValue(Number(candle.openTime) > previous && Number(candle.openTime) >= Number(row.startTime) && Number(candle.openTime) <= Number(row.endTime) && Number(candle.openTime) % step === 0 && candle.closeTime === Number(candle.openTime) + step - 1 && (!candle.final || Number(candle.closeTime) < Date.parse(String(candle.queriedAt))));
+      previous = Number(candle.openTime);
       for (const key of ['open', 'high', 'low', 'close']) requireValue(amount(candle[key])! > 0n);
+      requireValue(amount(candle.high)! >= amount(candle.open)! && amount(candle.high)! >= amount(candle.close)! && amount(candle.low)! <= amount(candle.open)! && amount(candle.low)! <= amount(candle.close)! && amount(candle.high)! >= amount(candle.low)!);
     }
     for (const item of series.gaps) { const gap = object(item); integer(gap.startTime); integer(gap.endTime); requireValue(Number(gap.endTime) >= Number(gap.startTime)); }
-    if (series.complete) requireValue(!series.gaps.length && series.error === null && series.candles.every((item) => object(item).final));
+    if (series.complete) requireValue(!series.gaps.length && !marketGaps(row as MarketArchive, series.candles as Candle[]).length && Number(series.nextTime) > Number(row.endTime) && series.error === null && series.candles.every((item) => object(item).final));
   }
 }
 function payload(row: BackupRecord, scope: ReviewIdentity) {
@@ -243,7 +270,11 @@ export function validateBackup(value: unknown, scope: ReviewIdentity): { backup:
       object(row); requireValue(Object.keys(row).sort().join(',') === 'data,table' && Object.hasOwn(backupTables, row.table));
       const data = object(row.data), columns: readonly string[] = backupTables[row.table].columns;
       requireValue(Object.keys(data).sort().join(',') === [...columns].sort().join(','));
-      for (const column of columns) if (column !== 'payload') { string(data[column]); if (column !== 'opened_at') id(data[column]); }
+      for (const column of columns) if (column !== 'payload') {
+        string(data[column]);
+        const accountIncome = row.table === 'history_raw' && data.kind === 'income' && column === 'symbol' && data.symbol === '';
+        if (column !== 'opened_at' && !accountIncome) id(data[column]);
+      }
       safeContent(data.payload, scope); payload(row, scope);
       const key = recordKey(row); requireValue(!identities.has(key)); identities.add(key);
       normalizeImported(row);

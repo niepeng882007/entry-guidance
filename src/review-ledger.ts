@@ -458,8 +458,14 @@ export class ReviewLedger {
       }
     }
     // Identical observations have no installation-local integer ID in the portable format.
-    const unique = new Map(records.map((row) => [recordKey(row), row]));
-    return [...unique.values()].sort((a, b) => recordKey(a).localeCompare(recordKey(b)));
+    const observations = new Set<string>();
+    const unique = records.filter((row) => {
+      if (row.table !== 'review_verifications') return true;
+      const key = recordKey(row);
+      if (observations.has(key)) return false;
+      observations.add(key); return true;
+    });
+    return unique.sort((a, b) => recordKey(a).localeCompare(recordKey(b)));
   }
 
   backup(): ReviewBackup {
@@ -484,12 +490,15 @@ export class ReviewLedger {
       else if (canonical(previous) === canonical(row)) result.duplicates++;
       else result.conflicts.push({ key, table: row.table, id: String(row.data.id ?? row.data.symbol ?? '账户'), overwritable: personal(row.table) && recordKey(previous) === key, current: previous.data.payload, incoming: row.data.payload });
     }
-    const available = incoming.filter((row) => row.table === 'style_tags' && !result.conflicts.some((conflict) => conflict.key === recordKey(row)));
+    const available = incoming.filter((row) => row.table === 'style_tags' && !result.conflicts.some((conflict) => conflict.key === recordKey(row)) && (existing.has(recordKey(row)) || !this.retainedRestoreVersion(row, existing)));
     const tags = new Set([...current, ...available].filter((row) => row.table === 'style_tags').map((row) => row.data.id));
+    const trades = new Map(current.filter((row) => row.table === 'trades').map((row) => [row.data.id, row.data.payload as ReviewTrade]));
+    for (const row of incoming) if (row.table === 'trades' && !trades.has(row.data.id)) trades.set(row.data.id, row.data.payload as ReviewTrade);
     for (const row of incoming) {
       if (row.table !== 'review_notes') continue;
+      if (!existing.has(recordKey(row)) && this.retainedRestoreVersion(row, existing)) continue;
       const note = row.data.payload as ReviewNote;
-      if (note.tagIds.some((id) => !tags.has(id))) {
+      if (note.tagIds.some((id) => !tags.has(id)) || !noteBelongsTo(note, trades.get(note.trade.id) ?? null)) {
         const conflict = result.conflicts.find((item) => item.key === recordKey(row));
         if (conflict) { conflict.overwritable = false; continue; }
         if (existing.has(recordKey(row))) continue;
@@ -503,12 +512,17 @@ export class ReviewLedger {
   private restorePrevious(row: BackupRecord, current: BackupRecord[], existing: Map<string, BackupRecord>) {
     const exact = existing.get(recordKey(row));
     if (exact) return exact;
+    if (this.retainedRestoreVersion(row, existing)) return row;
     if (row.table === 'style_tags') return current.find((item) => item.table === row.table && (item.data.payload as StyleTag).name === (row.data.payload as StyleTag).name);
     if (row.table === 'review_notes') {
       const note = row.data.payload as ReviewNote;
       return current.find((item) => item.table === row.table && noteBelongsTo(item.data.payload as ReviewNote, note.trade));
     }
     return undefined;
+  }
+
+  private retainedRestoreVersion(row: BackupRecord, existing: Map<string, BackupRecord>): boolean {
+    return personal(row.table) && existing.has(canonical(['review_versions', fingerprint([row.table, row.data.id, row.data.payload])]));
   }
 
   restoreVersions(): RecordVersion[] {
@@ -540,7 +554,7 @@ export class ReviewLedger {
           this.keepRestoreVersion(previous);
           const payload = row.data.payload as ReviewNote | StyleTag;
           row.data.payload = { ...payload, version: Math.max(payload.version, (previous.data.payload as ReviewNote | StyleTag).version) + 1, updatedAt: new Date().toISOString() };
-        } else if (existing.has(key)) continue;
+        } else if (existing.has(key) || this.retainedRestoreVersion(row, existing)) continue;
         const schema = backupTables[row.table];
         const columns: readonly string[] = schema.columns;
         const compressed = row.table === 'review_market' || row.table === 'review_analysis';

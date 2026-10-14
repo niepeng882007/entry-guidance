@@ -9,6 +9,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import type { ReviewTrade } from '../src/review-ledger.ts';
+import type { MarketArchive } from '../src/trade-market.ts';
 
 test('a full backup restores exact trades and personal records, and a repeated restore adds nothing', (t) => {
   const source = new ReviewLedger(':memory:', { source: 'demo', accountId: 'demo-account' });
@@ -31,6 +33,77 @@ test('a full backup restores exact trades and personal records, and a repeated r
   assert.equal(repeated.duplicates, backup.records.length);
   target.restoreBackup(backup, repeated.token, []);
   assert.deepEqual(target.journal(), source.journal());
+});
+
+test('restore rejects confirmed trade amounts when fills, costs, order links or the position chain do not support them', (t) => {
+  const source = new ReviewLedger(':memory:', { source: 'demo', accountId: 'demo-account' });
+  const target = new ReviewLedger(':memory:', source.scope());
+  t.after(() => { source.close(); target.close(); });
+  source.archive(demoTrade());
+  for (const mutate of [
+    (trade: ReviewTrade) => { trade.evidence.fills = []; trade.evidence.orders = []; trade.evidence.funding = []; },
+    (trade: ReviewTrade) => { trade.evidence.fills[0]!.commission = null; },
+    (trade: ReviewTrade) => { trade.evidence.fills[0]!.commissionAsset = 'BNB'; },
+    (trade: ReviewTrade) => { trade.evidence.fills[1]!.orderId = 'unknown-order'; },
+    (trade: ReviewTrade) => { trade.evidence.fills[3]!.quantity = '0.005'; },
+    (trade: ReviewTrade) => { trade.realizedPnl = '99'; trade.netPnl = '98.4735'; },
+  ]) {
+    const backup = source.backup();
+    mutate(backup.records.find((row) => row.table === 'trades')!.data.payload as ReviewTrade);
+    const preview = target.previewRestore(backup);
+    assert.ok(preview.rejected.length > 0);
+    assert.throws(() => target.restoreBackup(backup, preview.token, []), /备份/);
+    assert.deepEqual(target.list(), []);
+  }
+});
+
+test('restore rejects a complete market with absent candles, hidden gaps or prices inconsistent with its range', async (t) => {
+  const source = new ReviewLedger(':memory:', { source: 'demo', accountId: 'demo-account' });
+  const target = new ReviewLedger(':memory:', source.scope());
+  t.after(() => { source.close(); target.close(); });
+  const id = source.archive(demoTrade());
+  await readTradeMarket({}, source, source.get(id)!, '15m', new AbortController().signal);
+  for (const mutate of [
+    (market: MarketArchive) => { market.series.contract.candles = []; },
+    (market: MarketArchive) => { market.series.mark.candles.splice(1, 1); },
+    (market: MarketArchive) => { market.series.contract.candles[0]!.low = '99999999'; },
+  ]) {
+    const backup = source.backup();
+    mutate(backup.records.find((row) => row.table === 'review_market')!.data.payload as MarketArchive);
+    const preview = target.previewRestore(backup);
+    assert.ok(preview.rejected.length > 0);
+    assert.throws(() => target.restoreBackup(backup, preview.token, []), /备份/);
+    assert.deepEqual(target.backup().records, []);
+  }
+});
+
+test('a note whose snapshot does not belong to the retained trade is previewed as a conflict and kept only as a readable old version', (t) => {
+  const source = new ReviewLedger(':memory:', { source: 'demo', accountId: 'demo-account' });
+  const target = new ReviewLedger(':memory:', source.scope());
+  t.after(() => { source.close(); target.close(); });
+  const id = source.archive(demoTrade()); target.archive(demoTrade());
+  source.saveNote(id, { noteId: null, version: 0, basis: source.get(id)!.noteBasis, entryReason: '旧归属', exitReason: '', executionProblem: '', improvement: '', freeNote: '', tagIds: [] });
+  const current = target.get(id)!; current.evidence.fills[0]!.price = '10000';
+  target.project('BTCUSDT', [current]);
+  const backup = source.backup(), preview = target.previewRestore(backup);
+  const noteConflict = preview.conflicts.find((row) => row.table === 'review_notes');
+  assert.ok(noteConflict && !noteConflict.overwritable);
+  target.restoreBackup(backup, preview.token, []);
+  assert.deepEqual(target.journal().notes, []);
+  assert.equal(target.restoreVersions().length, 1);
+});
+
+test('account-level income with an empty symbol and archive discovery state survive backup restoration', (t) => {
+  const source = new ReviewLedger(':memory:', { source: 'binance', accountId: '12345' });
+  const target = new ReviewLedger(':memory:', source.scope());
+  t.after(() => { source.close(); target.close(); });
+  source.saveArchive({ status: 'complete', startTime: 1, endTime: 1000, symbols: [], pendingSymbols: [], completedSymbols: [], missing: [], scopeMissing: ['未发现历史合约仍未知'], lastSuccessAt: '2026-10-14T00:00:00.000Z', discovery: { symbol: '*', startTime: 1, endTime: 1000, status: 'complete', pages: 1, records: 1, pending: [], completed: [{ source: 'income', startTime: 1, endTime: 1000, page: 1 }], missing: [], lastSuccessAt: '2026-10-14T00:00:00.000Z' } }, [{ kind: 'income', id: 'TRANSFER-1', time: 500, payload: { symbol: '', incomeType: 'TRANSFER', income: '1', asset: 'USDT', tranId: 1, time: 500 } }]);
+  const backup = source.backup(), preview = target.previewRestore(backup);
+  assert.deepEqual(preview.rejected, []);
+  target.restoreBackup(backup, preview.token, []);
+  assert.deepEqual(target.raw(''), source.raw(''));
+  assert.equal(target.archiveState()!.status, 'interrupted');
+  assert.equal(target.archiveState()!.discovery.completed.length, 0);
 });
 
 test('same-name tags and notes with a different identity remain viewable history instead of replacing current personal records', (t) => {
