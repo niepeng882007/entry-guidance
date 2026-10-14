@@ -2,12 +2,15 @@ import { createHmac } from 'node:crypto';
 import { get } from 'node:https';
 import { parseDecimal, formatDecimal } from '../public/draft.js';
 
-export type Transport = (url: URL, headers: Record<string, string>, signal: AbortSignal) => Promise<{ status: number; body: unknown }>;
+export type Transport = (url: URL, headers: Record<string, string>, signal: AbortSignal) => Promise<{ status: number; body: unknown; headers?: Record<string, string | undefined> }>;
 export type AccountConfig = { apiKey?: string; apiSecret?: string; transport?: Transport };
 
 export class AccountError extends Error {
   code: string;
   status: number;
+  retryAt?: string;
+  attemptedAt?: string;
+  scopeConfirmed?: false;
   constructor(code: string, message: string, status = 502) {
     super(message);
     this.code = code;
@@ -22,7 +25,7 @@ export function object(value: unknown): Record<string, unknown> {
 
 const integerIdPaths = ['/api/v3/account', '/fapi/v1/openOrders', '/fapi/v1/openAlgoOrders', '/fapi/v1/userTrades', '/fapi/v1/allOrders', '/fapi/v1/allAlgoOrders', '/fapi/v1/income', '/fapi/v1/forceOrders'];
 
-const transport: Transport = (url, headers, signal) => new Promise((resolve, reject) => {
+export const binanceTransport: Transport = (url, headers, signal) => new Promise((resolve, reject) => {
   const request = get(url, { headers, signal }, (response) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -39,8 +42,11 @@ const transport: Transport = (url, headers, signal) => new Promise((resolve, rej
         // Signed source IDs are int64; keep their JSON tokens until the read boundary.
         data = integerIdPaths.includes(url.pathname) && response.statusCode === 200 ? text : JSON.parse(text);
       }
-      catch { reject(new AccountError('upstream_error', 'Binance 返回异常响应，请稍后重试。')); return; }
-      resolve({ status: response.statusCode ?? 502, body: data });
+      catch {
+        if (response.statusCode === 429 || response.statusCode === 418) data = null;
+        else { reject(new AccountError('upstream_error', 'Binance 返回异常响应，请稍后重试。')); return; }
+      }
+      resolve({ status: response.statusCode ?? 502, body: data, headers: Object.fromEntries(Object.entries(response.headers).map(([key, value]) => [key, Array.isArray(value) ? value.join(',') : value])) });
     });
   });
   request.on('error', reject);
@@ -99,7 +105,7 @@ export async function readBinance(config: AccountConfig, operation: keyof typeof
     url.searchParams.set('signature', createHmac('sha256', config.apiSecret).update(url.searchParams.toString()).digest('hex'));
   }
   try {
-    const response = await (config.transport ?? transport)(url, headers, signal);
+    const response = await (config.transport ?? binanceTransport)(url, headers, signal);
     if (operation === 'portfolio' && response.status === 400 && object(response.body).code === -21001) return response.body;
     if (response.status !== 200) {
       const data = object(response.body);
@@ -154,8 +160,10 @@ export async function readAccountScope(config: AccountConfig, signal: AbortSigna
     return { account, asset };
   } catch (error) {
     if (signal.aborted) throw new AccountError('timeout', '账户查询超时，请检查网络后重试。', 504);
-    if (error instanceof AccountError) throw error;
-    throw new AccountError('connection_failed', '账户连接失败，请检查网络或后端代理设置。');
+    if (error instanceof AccountError) { error.scopeConfirmed = false; throw error; }
+    const failure = new AccountError('connection_failed', '账户连接失败，请检查网络或后端代理设置。');
+    failure.scopeConfirmed = false;
+    throw failure;
   }
 }
 
@@ -173,7 +181,7 @@ export async function readReviewIdentity(config: AccountConfig, signal: AbortSig
   return String(uid);
 }
 
-async function readAccountData(config: AccountConfig, signal: AbortSignal) {
+export async function readAccountData(config: AccountConfig, signal: AbortSignal) {
   const { account, asset } = await readAccountScope(config, signal);
   const wallet = decimal(asset.walletBalance);
   const pnl = decimal(asset.unrealizedProfit);
@@ -197,10 +205,14 @@ export async function readAccount(config: AccountConfig, symbol?: string, signal
   return snapshot;
 }
 
-export async function readAccountAssets(config: AccountConfig, signal = AbortSignal.timeout(10_000)) {
-  const { asset, snapshot } = await readAccountData(config, signal);
+export function accountAssetDetails(asset: Record<string, unknown>) {
   const amount = (field: string) => asset[field] === undefined ? null : format(decimal(asset[field]));
-  return { ...snapshot, positionInitialMargin: amount('positionInitialMargin'),
+  return { positionInitialMargin: amount('positionInitialMargin'),
     openOrderInitialMargin: amount('openOrderInitialMargin'), maintMargin: amount('maintMargin'),
     maxWithdrawAmount: amount('maxWithdrawAmount') };
+}
+
+export async function readAccountAssets(config: AccountConfig, signal = AbortSignal.timeout(10_000)) {
+  const { asset, snapshot } = await readAccountData(config, signal);
+  return { ...snapshot, ...accountAssetDetails(asset) };
 }

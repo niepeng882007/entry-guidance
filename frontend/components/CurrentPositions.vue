@@ -7,6 +7,7 @@ type MarketState<T> = {
   snapshot: Extract<MarketPart<T>, { status: 'ok' }> | null;
   stale: boolean;
   error: string;
+  attemptedAt?: string;
 };
 const props = defineProps<{
   positions: { queriedAt: string; data: Position[] } | null;
@@ -67,6 +68,14 @@ function pnlState(value: string) {
         attemptedAt ? time(attemptedAt) : '尚无'
       }}
     </p>
+    <p class="muted">
+      最新成交价最近尝试：{{ time(last.attemptedAt) }} ·
+      {{ last.stale ? '已过期或尚未确认' : '查询成功' }}
+    </p>
+    <p class="muted">
+      资金费最近尝试：{{ time(funding.attemptedAt) }} ·
+      {{ funding.stale ? '已过期或尚未确认' : '查询成功' }}
+    </p>
     <label class="field positions__filter">
       <span class="field-label">筛选持仓标的</span>
       <input
@@ -78,7 +87,8 @@ function pnlState(value: string) {
       />
     </label>
     <p v-if="positions" class="muted">
-      显示 {{ filtered.length }} / 全账户 {{ positions.data.length }} 份持仓
+      显示 {{ filtered.length }} / {{ stale ? '上次全账户' : '全账户' }}
+      {{ positions.data.length }} 份持仓{{ stale ? ' · 已过期' : '' }}
     </p>
     <p v-if="!positions" class="muted">尚无成功持仓数据，不能确认是否空仓。</p>
     <p v-else-if="!positions.data.length" class="muted">

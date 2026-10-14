@@ -15,6 +15,7 @@ const props = defineProps<{
   stale: boolean;
   status: string;
   attemptedAt: string;
+  conditionalAttemptedAt: string;
 }>();
 const filter = ref('');
 const all = computed(() => [
@@ -97,7 +98,7 @@ function price(value: string | null) {
     </p>
     <p class="muted">
       条件委托成功查询：{{ conditionalOrders ? time(conditionalOrders.queriedAt) : '尚无' }} ·
-      最近尝试：{{ attemptedAt ? time(attemptedAt) : '尚无' }}
+      最近尝试：{{ conditionalAttemptedAt ? time(conditionalAttemptedAt) : '尚无' }}
     </p>
     <label class="field orders__filter">
       <span class="field-label">筛选委托标的</span>

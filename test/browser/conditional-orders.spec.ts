@@ -142,6 +142,7 @@ test('conditional response validation preserves the last successful list and nev
   let variant = 'ok';
   await page.route('**/api/account/conditional-orders', async (route) => {
     const data = await (await route.fetch()).json();
+    data.queriedAt = new Date().toISOString();
     if (variant === 'type-array') data.orders[0].type = ['STOP_MARKET'];
     if (variant === 'side-array') data.orders[0].side = ['SELL'];
     if (variant === 'source') data.source = 'binance';
@@ -169,9 +170,14 @@ test('conditional response validation preserves the last successful list and nev
     'older',
   ]) {
     await page.getByRole('button', { name: '手动刷新' }).click();
-    await expect(orders).toContainText('上次条件委托已过期');
+    if (variant === 'source') {
+      await expect(orders).toContainText('账户来源无效');
+      await expect(orders.locator('article[data-current=true]')).toHaveCount(0);
+    } else {
+      await expect(orders).toContainText('上次条件委托已过期');
+      await expect(orders).toContainText('普通委托查询成功');
+    }
     await expect(orders.locator('article[data-kind=conditional]')).toHaveCount(4);
-    await expect(orders).toContainText('普通委托查询成功');
   }
   variant = 'ok';
   await page.getByRole('button', { name: '手动刷新' }).click();

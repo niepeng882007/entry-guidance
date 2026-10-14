@@ -10,7 +10,7 @@ export type Position = {
 };
 export type LastPrice = { symbol: string; price: string; updatedAt: string | null };
 export type Funding = { symbol: string; rate: string | null; nextFundingAt: string | null; updatedAt: string | null };
-export type MarketPart<T> = { status: 'ok'; queriedAt: string; data: T[] } | { status: 'error'; error: string };
+export type MarketPart<T> = ({ status: 'ok'; queriedAt: string; data: T[] } | { status: 'error'; error: string }) & { attemptedAt?: string; retryAt?: string };
 export type PositionsSnapshot = {
   source: 'binance' | 'demo'; queriedAt: string; positions: Position[];
   last: MarketPart<LastPrice>; funding: MarketPart<Funding>;
@@ -72,14 +72,15 @@ export async function readAccountPositions(config: AccountConfig, signal = Abort
   const queriedAt = positionRead.queriedAt;
   const symbols = new Set(positions.map((p) => p.symbol));
   async function market<T>(operation: 'last' | 'mark', parse: (p: Record<string, unknown>) => T): Promise<MarketPart<T>> {
+    const attemptedAt = new Date().toISOString();
     try {
-      if (!symbols.size) return { status: 'ok', queriedAt: new Date().toISOString(), data: [] };
+      if (!symbols.size) return { status: 'ok', attemptedAt, queriedAt: new Date().toISOString(), data: [] };
       const rows = list(await readBinance(config, operation, signal)).filter((p) => symbols.has(p.symbol as string));
       const seen = new Set<unknown>();
       const data = rows.map((p) => { if (seen.has(p.symbol)) invalid(); seen.add(p.symbol); return parse(p); });
-      return { status: 'ok', queriedAt: new Date().toISOString(), data };
+      return { status: 'ok', attemptedAt, queriedAt: new Date().toISOString(), data };
     } catch (error) {
-      return { status: 'error', error: error instanceof AccountError ? error.message : '辅助行情读取失败。' };
+      return { status: 'error', attemptedAt: error instanceof AccountError ? error.attemptedAt ?? attemptedAt : attemptedAt, retryAt: error instanceof AccountError ? error.retryAt : undefined, error: error instanceof AccountError ? `${error.message}${error.retryAt ? ` 下次允许读取：${error.retryAt}。` : ''}` : '辅助行情读取失败。' };
     }
   }
   const [last, funding] = await Promise.all([

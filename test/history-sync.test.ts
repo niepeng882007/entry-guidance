@@ -281,6 +281,7 @@ test('unsafe permissions, expired sessions and concurrent submissions cannot sta
 });
 
 test('resuming an older symbol reports its own progress rather than another completed symbol', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   let phase = 'fail';
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -296,6 +297,7 @@ test('resuming an older symbol reports its own progress rather than another comp
   });
   await app.sync();
   assert.equal((await finished(app)).sync.status, 'failed');
+  t.mock.timers.setTime(Date.now() + 65_000);
   await app.sync('ETHUSDT');
   assert.equal((await finished(app)).sync.symbol, 'ETHUSDT');
   phase = 'resume';
