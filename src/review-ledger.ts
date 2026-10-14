@@ -483,10 +483,14 @@ export class ReviewLedger {
   private restorePreview(checked: ReturnType<typeof validateBackup>, current: BackupRecord[]): RestorePreview {
     const incoming = checked.backup?.records ?? [];
     const existing = new Map(current.map((row) => [recordKey(row), row]));
+    const compared = [...current];
     const result: RestorePreview = { added: 0, duplicates: 0, conflicts: [], rejected: checked.rejected, token: fingerprint([checked.backup, checked.rejected, current]) };
     for (const row of incoming) {
-      const key = recordKey(row), previous = this.restorePrevious(row, current, existing);
-      if (!previous) result.added++;
+      const key = recordKey(row), previous = this.restorePrevious(row, compared, existing);
+      if (!previous) {
+        result.added++;
+        if (row.table === 'style_tags') compared.push(row);
+      }
       else if (canonical(previous) === canonical(row)) result.duplicates++;
       else result.conflicts.push({ key, table: row.table, id: String(row.data.id ?? row.data.symbol ?? '账户'), overwritable: personal(row.table) && recordKey(previous) === key, current: previous.data.payload, incoming: row.data.payload });
     }
@@ -494,17 +498,23 @@ export class ReviewLedger {
     const tags = new Set([...current, ...available].filter((row) => row.table === 'style_tags').map((row) => row.data.id));
     const trades = new Map(current.filter((row) => row.table === 'trades').map((row) => [row.data.id, row.data.payload as ReviewTrade]));
     for (const row of incoming) if (row.table === 'trades' && !trades.has(row.data.id)) trades.set(row.data.id, row.data.payload as ReviewTrade);
+    const boundNotes = new Map<string, ReviewNote>();
+    for (const row of current) if (row.table === 'review_notes') {
+      const note = row.data.payload as ReviewNote;
+      if (noteBelongsTo(note, trades.get(note.trade.id) ?? null)) boundNotes.set(note.trade.id, note);
+    }
     for (const row of incoming) {
       if (row.table !== 'review_notes') continue;
       if (!existing.has(recordKey(row)) && this.retainedRestoreVersion(row, existing)) continue;
       const note = row.data.payload as ReviewNote;
-      if (note.tagIds.some((id) => !tags.has(id)) || !noteBelongsTo(note, trades.get(note.trade.id) ?? null)) {
+      const bound = boundNotes.get(note.trade.id);
+      if (note.tagIds.some((id) => !tags.has(id)) || !noteBelongsTo(note, trades.get(note.trade.id) ?? null) || bound && bound.id !== note.id) {
         const conflict = result.conflicts.find((item) => item.key === recordKey(row));
         if (conflict) { conflict.overwritable = false; continue; }
         if (existing.has(recordKey(row))) continue;
         result.added--;
-        result.conflicts.push({ key: recordKey(row), table: row.table, id: note.id, overwritable: false, current: null, incoming: note });
-      }
+        result.conflicts.push({ key: recordKey(row), table: row.table, id: note.id, overwritable: false, current: bound ?? null, incoming: note });
+      } else boundNotes.set(note.trade.id, note);
     }
     return result;
   }

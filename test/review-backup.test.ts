@@ -35,6 +35,24 @@ test('a full backup restores exact trades and personal records, and a repeated r
   assert.deepEqual(target.journal(), source.journal());
 });
 
+test('two incoming notes for the same retained trade preview a personal conflict instead of creating two current notes', (t) => {
+  const source = new ReviewLedger(':memory:', { source: 'demo', accountId: 'demo-account' });
+  const target = new ReviewLedger(':memory:', source.scope());
+  t.after(() => { source.close(); target.close(); });
+  const id = source.archive(demoTrade());
+  source.saveNote(id, { noteId: null, version: 0, basis: source.get(id)!.noteBasis, entryReason: '第一条', exitReason: '', executionProblem: '', improvement: '', freeNote: '', tagIds: [] });
+  const backup = source.backup(), duplicate = structuredClone(backup.records.find((row) => row.table === 'review_notes')!);
+  duplicate.data.id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  Object.assign(duplicate.data.payload as Record<string, unknown>, { id: duplicate.data.id, entryReason: '另一条' });
+  backup.records.push(duplicate);
+  const preview = target.previewRestore(backup);
+  assert.deepEqual(preview.rejected, []);
+  assert.equal(preview.conflicts.filter((row) => row.table === 'review_notes').length, 1);
+  target.restoreBackup(backup, preview.token, []);
+  assert.equal(target.journal().notes.filter((row) => row.binding === 'current').length, 1);
+  assert.equal(target.restoreVersions().length, 1);
+});
+
 test('restore rejects confirmed trade amounts when fills, costs, order links or the position chain do not support them', (t) => {
   const source = new ReviewLedger(':memory:', { source: 'demo', accountId: 'demo-account' });
   const target = new ReviewLedger(':memory:', source.scope());
