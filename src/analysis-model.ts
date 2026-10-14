@@ -28,6 +28,12 @@ export function modelUsage(value: unknown): ModelUsage | null {
 export const reportFields = ['observations', 'evidence', 'improvements', 'nextChecks'] as const;
 export type AnalysisItem = { text: string; kind: 'fact' | 'user' | 'inference'; timing: 'contemporaneous' | 'retrospective' | 'unknown'; refs: string[] };
 export type AnalysisReport = Record<typeof reportFields[number], AnalysisItem[]>;
+export function segmentSummaries(segments: { id: string; report: AnalysisReport | null }[]) {
+  return segments.map((segment) => ({ id: segment.id, basis: '已完成分段结果，非原始证据', report: Object.fromEntries(reportFields.map((field) => [field, (segment.report?.[field] ?? []).map((item, index) => ({ ...item, id: `${segment.id}/${field}/${index}` }))])) as Record<typeof reportFields[number], (AnalysisItem & { id: string })[]> }));
+}
+export function summaryCitations(summaries: ReturnType<typeof segmentSummaries>) {
+  return summaries.flatMap((summary) => [{ id: summary.id, kind: 'summary' as const }, ...reportFields.flatMap((field) => summary.report[field].map((item) => ({ id: item.id, kind: item.kind })))]);
+}
 export type EvidenceRecord = { id: string; path: string; kind: 'fact' | 'user'; tradeId: string; time: string | null; value: unknown };
 export const reportSchema = {
   type: 'object', additionalProperties: false, required: reportFields,
@@ -37,7 +43,7 @@ export const reportSchema = {
     },
   } }])),
 };
-export function validateReport(value: unknown, records: { id: string; kind: 'fact' | 'user' | 'summary' }[]): AnalysisReport {
+export function validateReport(value: unknown, records: { id: string; kind: 'fact' | 'user' | 'inference' | 'summary' }[]): AnalysisReport {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new AnalysisError('模型报告格式无效。');
   const data = value as Record<string, unknown>;
   if (Object.keys(data).length !== reportFields.length || Object.keys(data).some((key) => !reportFields.includes(key as typeof reportFields[number]))) throw new AnalysisError('模型报告字段无效。');

@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import type { TestContext } from 'node:test';
 import { ReviewLedger } from '../src/review-ledger.ts';
 import { seedReviewFilters } from './review-filter-fixtures.ts';
+import { request as httpRequest } from 'node:http';
 
 async function app(t: TestContext, llm = simulatedModel(), reviewLedgerPath?: string, tradeId = 'BTCUSDT-demo-fill-1') {
   const server = createServer({ password: 'analysis-test-only', mode: 'demo', llm, reviewLedgerPath });
@@ -31,6 +32,37 @@ async function finished(application: Awaited<ReturnType<typeof app>>) {
   assert.fail('task did not settle');
 }
 const startInput = { includeNotes: false, regenerate: false, query: '' };
+
+test('logout during a streamed continue body cannot initiate another paid request', async (t) => {
+  let calls = 0;
+  const application = await app(t, simulatedModel(1000000, async (body) => { calls++; return modelResponse(body, { text: '{invalid' }); }));
+  const task = await (await application.post(startInput)).json(); await finished(application);
+  const body = JSON.stringify({ action: 'continue', taskId: task.id });
+  let complete!: (response: { status: number; body: string }) => void;
+  const result = new Promise<{ status: number; body: string }>((resolve) => { complete = resolve; });
+  const request = httpRequest(`${application.base}/api/review/trades/BTCUSDT-demo-fill-1/analysis`, { method: 'POST', headers: { Cookie: application.cookie, Origin: application.base, 'Content-Type': 'application/json' } }, (response) => {
+    let body = ''; response.on('data', (chunk) => { body += chunk; }); response.on('end', () => complete({ status: response.statusCode!, body }));
+  });
+  request.write(body.slice(0, 2));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal((await fetch(`${application.base}/logout`, { method: 'POST', redirect: 'manual', headers: { Cookie: application.cookie, Origin: application.base } })).status, 303);
+  request.end(body.slice(2));
+  assert.equal((await result).status, 401); assert.equal(calls, 1);
+});
+
+test('synthesis preserves fact and user classifications while explicitly citing segment results', async (t) => {
+  const application = await app(t, simulatedModel(12000, async (body) => {
+    const input = JSON.parse(String(body.input));
+    const fact = input.stage === 'evidence' ? input.records.find((row: { kind: string }) => row.kind === 'fact') : input.summaries.flatMap((row: { report: { observations: { id: string; kind: string }[] } }) => row.report.observations).find((row: { kind: string }) => row.kind === 'fact');
+    const user = input.stage === 'evidence' ? input.records.find((row: { path: string }) => row.path.endsWith('/freeNote')) : input.summaries.flatMap((row: { report: { evidence: { id: string; kind: string }[] } }) => row.report.evidence).find((row: { kind: string }) => row.kind === 'user');
+    return modelResponse(body, { text: JSON.stringify({ observations: [{ text: '事实源于当前证据或已完成分段事实。', kind: fact ? 'fact' : 'inference', timing: 'unknown', refs: [fact?.id ?? input.records[0].id] }], evidence: user ? [{ text: '用户已保存自述。', kind: 'user', timing: 'unknown', refs: [user.id] }] : [], improvements: [], nextChecks: [] }) });
+  }));
+  const detail = await (await fetch(`${application.base}/api/review/trades/BTCUSDT-demo-fill-1`, { headers: { Cookie: application.cookie } })).json();
+  await fetch(`${application.base}/api/review/trades/${detail.id}/note`, { method: 'POST', headers: { Cookie: application.cookie, Origin: application.base, 'Content-Type': 'application/json' }, body: JSON.stringify({ noteId: null, version: 0, basis: detail.noteBasis, entryReason: '', exitReason: '', executionProblem: '', improvement: '', freeNote: '已保存自述', tagIds: [] }) });
+  await application.post({ ...startInput, includeNotes: true }); const task = await finished(application);
+  assert.equal(task.status, 'complete'); assert.equal(task.report!.observations[0]!.kind, 'fact'); assert.equal(task.report!.evidence[0]!.kind, 'user');
+  assert.match(task.report!.observations[0]!.refs[0]!, /^(segment|synthesis)-\d+\/observations\/\d+$/);
+});
 
 test('simultaneous reuse requests create one task instead of duplicate paid requests', async (t) => {
   let metadata = 0, paid = 0, release!: () => void;

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { ReviewLedger, ReviewIdentity, ReviewTrade } from './review-ledger.ts';
 import { reviewStatistics, type StatisticsSnapshot } from './review-statistics.ts';
 import { marketIntervals, type MarketArchive } from './trade-market.ts';
-import { AnalysisError, configuredModel, modelCapacity, callModel, modelRequest, modelUsage, validateReport, type ModelConfig, type ModelCapacity, type ModelUsage, type AnalysisReport, type EvidenceRecord } from './analysis-model.ts';
+import { AnalysisError, configuredModel, modelCapacity, callModel, modelRequest, modelUsage, validateReport, segmentSummaries, summaryCitations, type ModelConfig, type ModelCapacity, type ModelUsage, type AnalysisReport, type EvidenceRecord } from './analysis-model.ts';
 import type { ReviewFilters } from './review-filters.ts';
 
 export type AnalysisSnapshot = { trade: ReviewTrade; notes: { id: string; version: number; updatedAt: string; entryReason: string; exitReason: string; executionProblem: string; improvement: string; freeNote: string }[]; tags: { id: string; name: string }[]; markets: MarketArchive[]; statistics: StatisticsSnapshot; missing: string[]; frozenAt: string };
@@ -137,6 +137,7 @@ export class TradeAnalysis {
     return this.ledger.analysis(id)!;
   }
   continue(id: string, tradeId: string) {
+    if (this.stopping) throw new AnalysisError('账户或服务已经变化，请重新读取。', 409);
     const task = this.ledger.analysis(id);
     if (!task || task.tradeId !== tradeId) throw new AnalysisError('未找到该交易的任务。', 404);
     if (task.status === 'complete' || this.running.has(id)) return task;
@@ -151,14 +152,14 @@ export class TradeAnalysis {
         const consumed = new Set(task.requests.flatMap((row) => row.segments));
         const frontier = task.requests.filter((row) => !consumed.has(row.id));
         if (frontier.length === 1) { task.report = frontier[0]!.report; task.status = 'complete'; task.error = null; this.save(task); return; }
-        const summaries = frontier.map((row) => ({ id: row.id, report: row.report, basis: '已完成分段结果，非原始证据' }));
+        const summaries = segmentSummaries(frontier);
         const groups = this.groups(task, summaries, 'synthesis');
         if (groups.length >= frontier.length) throw new AnalysisError('分段结果无法在容量内综合；已有分段保留，整体未完成。');
         for (const group of groups) task.requests.push({ id: `synthesis-${task.requests.length + 1}`, stage: 'synthesis', records: [], segments: group.map((row) => row.id), status: 'pending', report: null, usage: null, attempts: [] });
         this.save(task); request = task.requests.find((row) => row.status !== 'complete')!;
       }
       request.status = 'running'; request.usage = null; request.attempts.push({ usage: null, status: 'running' }); this.save(task);
-      const summaries = request.segments.map((id) => ({ id, report: task.requests.find((row) => row.id === id)!.report, basis: '已完成分段结果，非原始证据' }));
+      const summaries = segmentSummaries(request.segments.map((id) => task.requests.find((row) => row.id === id)!));
       const input = { stage: request.stage, records: request.records, summaries, missing: task.snapshot.missing };
       if (!this.fits(task, input)) throw new AnalysisError('请求超过冻结模型容量；没有发送或截断。');
       const raw = await callModel(configuredModel(this.config), task.capacity, input, signal) as { usage?: unknown; status?: unknown; output?: { type?: unknown; status?: unknown; content?: { type?: unknown; text?: unknown }[] }[] };
@@ -167,7 +168,7 @@ export class TradeAnalysis {
       if (raw.status !== 'completed' || !Array.isArray(raw.output) || raw.output.some((item) => item.status && item.status !== 'completed')) throw new AnalysisError('模型输出未完成或被截断。');
       const text = raw.output.filter((item) => item.type === 'message').flatMap((item) => item.content ?? []).filter((item) => item.type === 'output_text').map((item) => item.text).join('');
       if (this.config?.apiKey && text.includes(this.config.apiKey)) throw new AnalysisError('模型内容包含敏感配置值，报告未保存。');
-      request.report = validateReport(JSON.parse(text), [...request.records, ...request.segments.map((id) => ({ id, kind: 'summary' as const }))]); request.status = 'complete'; request.attempts.at(-1)!.status = 'complete';
+      request.report = validateReport(JSON.parse(text), [...request.records, ...summaryCitations(summaries)]); request.status = 'complete'; request.attempts.at(-1)!.status = 'complete';
       this.save(task);
       }
       throw new AnalysisError('任务已取消或中断；已完成分段保留。');

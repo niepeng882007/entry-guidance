@@ -287,10 +287,13 @@ export function createServer(config: Config) {
         const service = getAnalysis(ledger);
         const session = sessions.get(cookie!);
         if (!session || session.expiresAt <= Date.now() || closing) return send(401, { error: '登录已过期，请重新登录。' });
+        const generation = scopeGeneration;
         if (req.method === 'GET') return send(200, { ...ledger.scope(), tasks: service.list(trade.id) });
         if (req.headers['content-type'] !== 'application/json') return send(415, { error: '分析输入格式不支持。' });
         let body = '';
         for await (const chunk of req) { body += chunk.toString(); if (Buffer.byteLength(body) > 8192) return send(413, { error: '分析输入过大。' }); }
+        if (sessions.get(cookie!) !== session || session.expiresAt <= Date.now() || closing) return send(401, { error: '登录已过期，请重新登录。' });
+        if (analysis !== service || generation !== scopeGeneration) return send(409, { error: '账户已经变化，请重新读取。' });
         let input: unknown;
         try { input = JSON.parse(body); } catch { return send(400, { error: '分析输入格式无效。' }); }
         if (!input || typeof input !== 'object' || Array.isArray(input)) return send(400, { error: '分析参数无效。' });
@@ -301,7 +304,6 @@ export function createServer(config: Config) {
         }
         if (Object.keys(data).length !== 3 || typeof data.includeNotes !== 'boolean' || typeof data.regenerate !== 'boolean' || typeof data.query !== 'string') return send(400, { error: '分析参数无效。' });
         const filters = parseReviewQuery(new URLSearchParams(data.query)).filters;
-        const generation = scopeGeneration;
         const task = await service.start(trade, filters, data.includeNotes, data.regenerate, () => analysis === service && !closing && generation === scopeGeneration && sessions.get(cookie!) === session && session.expiresAt > Date.now());
         const currentSession = sessions.get(cookie!);
         if (!currentSession || currentSession.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });

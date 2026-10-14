@@ -1,5 +1,5 @@
 import type { AnalysisTask } from './trade-analysis.ts';
-import { validateReport } from './analysis-model.ts';
+import { validateReport, segmentSummaries, summaryCitations } from './analysis-model.ts';
 
 export function validateAnalysisTask(value: unknown, trade: { id: string; source: string; accountId: string }): AnalysisTask {
   if (!value || typeof value !== 'object') throw new Error('分析任务格式无效。');
@@ -64,7 +64,7 @@ export function validateAnalysisTask(value: unknown, trade: { id: string; source
     if (request.report)
       validateReport(request.report, [
         ...request.records,
-        ...request.segments.map((id) => ({ id, kind: 'summary' as const })),
+        ...summaryCitations(segmentSummaries(request.segments.map((id) => complete.get(id)!))),
       ]);
     if (request.status === 'complete') {
       if (!request.report) throw new Error('分段结果缺失。');

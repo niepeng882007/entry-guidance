@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, toRef } from 'vue';
 import type { ReviewTrade } from '../../src/review-ledger.ts';
+import type { AnalysisTask } from '../../src/trade-analysis.ts';
 import { useTradeAnalysis } from '../useTradeAnalysis';
 import { reviewTime } from '../review-records';
-import { reportFields } from '../../src/analysis-model.ts';
+import { reportFields, segmentSummaries } from '../../src/analysis-model.ts';
 const props = defineProps<{ trade: ReviewTrade; query: string }>();
 const { tasks, includeNotes, busy, stale, status, refresh, start, action } = useTradeAnalysis(
   toRef(props, 'trade'),
@@ -37,6 +38,19 @@ function disclosure(event: Event, id: string) {
   sections.value = next;
 }
 const latest = computed(() => tasks.value[0]);
+function citation(task: AnalysisTask, id: string) {
+  const record = task.records.find((row) => row.id === id);
+  if (record) return `${record.path} · ${JSON.stringify(record.value)}`;
+  for (const request of task.requests) {
+    const summary = segmentSummaries([request])[0]!;
+    for (const field of reportFields) {
+      const item = summary.report[field].find((row) => row.id === id);
+      if (item)
+        return `分段结果（非原始证据） · ${request.id} · ${labels[field]} · ${kinds[item.kind]} · ${item.text} · 原引用 ${item.refs.join('、')}`;
+    }
+  }
+  return '已完成分段结果（非原始证据），见下方分段清单';
+}
 </script>
 
 <template>
@@ -123,12 +137,7 @@ const latest = computed(() => tasks.value[0]);
               <summary class="disclosure__summary">引用依据 · {{ item.refs.join('、') }}</summary>
               <div v-if="sections.has(`${task.id}-${field}-${index}`)">
                 <p v-for="id in item.refs" :key="id" class="trade-analysis__evidence">
-                  {{ id }} ·
-                  {{
-                    task.records.find((row) => row.id === id)?.path ??
-                    '已完成分段结果（非原始证据），见下方分段清单'
-                  }}
-                  · {{ JSON.stringify(task.records.find((row) => row.id === id)?.value) }}
+                  {{ id }} · {{ citation(task, id) }}
                 </p>
               </div>
             </details>
@@ -176,7 +185,11 @@ const latest = computed(() => tasks.value[0]);
               </p>
               <pre class="trade-analysis__evidence">{{
                 JSON.stringify(
-                  { records: request.records, segments: request.segments, report: request.report },
+                  {
+                    records: request.records,
+                    segments: request.segments,
+                    report: segmentSummaries([request])[0]?.report,
+                  },
                   null,
                   2,
                 )
