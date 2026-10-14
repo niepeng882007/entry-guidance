@@ -47,6 +47,12 @@ const symbolOptions = computed(() =>
 const hasFilters = computed(
   () => !!(location.value.from || location.value.to || location.value.symbol),
 );
+const analysisQuery = computed(() => {
+  const query = new URLSearchParams();
+  for (const key of ['from', 'to', 'symbol'] as const)
+    if (location.value[key]) query.set(key, location.value[key]);
+  return query.toString();
+});
 const columns: TableColumnsType<ReviewSummary> = [
   { title: '交易对', key: 'symbol', dataIndex: 'symbol', width: 136 },
   { title: '方向', key: 'side', width: 80 },
@@ -293,7 +299,7 @@ watch([lastPage, busy], () => {
       </section>
 
       <template v-else>
-        <ReviewTradeDetail v-if="trade" :trade="trade" />
+        <ReviewTradeDetail v-if="trade" :trade="trade" :analysis-query="analysisQuery" />
         <p v-else class="muted">
           {{ busy ? '正在读取交易详情…' : '详情暂不可用，请重新读取或返回交易记录。' }}
         </p>

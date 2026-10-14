@@ -11,6 +11,8 @@ import type { EntryInput } from '../public/draft.js';
 import { formatDecimal, parseDecimal } from '../public/draft.js';
 import type { MarketArchive } from './trade-market.ts';
 import type { StatisticsEvidence } from './review-statistics.ts';
+import type { AnalysisTask } from './trade-analysis.ts';
+import { validateAnalysisTask } from './analysis-contract.ts';
 
 export type ReviewIdentity = { source: 'demo' | 'binance'; accountId: string };
 export type ReviewOrder = {
@@ -140,6 +142,10 @@ export class ReviewLedger {
       if (path !== ':memory:') chmodSync(path, 0o600);
       this.db.exec(`
         PRAGMA foreign_keys = ON;
+        CREATE TABLE IF NOT EXISTS review_analysis (
+          source TEXT NOT NULL, account TEXT NOT NULL, id TEXT NOT NULL, trade_id TEXT NOT NULL, payload BLOB NOT NULL,
+          PRIMARY KEY (source, account, id)
+        ) STRICT;
         CREATE TABLE IF NOT EXISTS review_market (
           source TEXT NOT NULL, account TEXT NOT NULL, id TEXT NOT NULL, cache_key TEXT NOT NULL, queried_at TEXT NOT NULL, payload BLOB NOT NULL,
           PRIMARY KEY (source, account, id)
@@ -245,6 +251,40 @@ export class ReviewLedger {
   market(id: string): MarketArchive | null {
     const row = this.db.prepare('SELECT payload FROM review_market WHERE source=? AND account=? AND id=?').get(this.identity.source, this.identity.accountId, id);
     return row ? marketPayload(row.payload) : null;
+  }
+
+  scope(): ReviewIdentity { return { ...this.identity }; }
+
+  tradeMarkets(tradeId: string): MarketArchive[] {
+    const latest = new Map<string, MarketArchive>();
+    for (const row of this.db.prepare('SELECT payload FROM review_market WHERE source=? AND account=? ORDER BY queried_at, rowid').all(this.identity.source, this.identity.accountId)) {
+      const market = marketPayload(row.payload);
+      if (market.tradeId === tradeId) latest.set(market.interval, market);
+    }
+    return [...latest.values()].sort((a, b) => a.interval.localeCompare(b.interval));
+  }
+
+  analyses(tradeId?: string): AnalysisTask[] {
+    const rows = tradeId === undefined
+      ? this.db.prepare('SELECT payload FROM review_analysis WHERE source=? AND account=? ORDER BY rowid DESC').all(this.identity.source, this.identity.accountId)
+      : this.db.prepare('SELECT payload FROM review_analysis WHERE source=? AND account=? AND trade_id=? ORDER BY rowid DESC').all(this.identity.source, this.identity.accountId, tradeId);
+    return rows.map((row) => {
+      const task = JSON.parse(gunzipSync(row.payload as Uint8Array).toString('utf8')) as AnalysisTask;
+      return validateAnalysisTask(task, { ...this.identity, id: task.tradeId });
+    });
+  }
+
+  analysis(id: string): AnalysisTask | null {
+    const row = this.db.prepare('SELECT payload FROM review_analysis WHERE source=? AND account=? AND id=?').get(this.identity.source, this.identity.accountId, id);
+    if (!row) return null;
+    const task = JSON.parse(gunzipSync(row.payload as Uint8Array).toString('utf8')) as AnalysisTask;
+    return validateAnalysisTask(task, { ...this.identity, id: task.tradeId });
+  }
+
+  saveAnalysis(task: AnalysisTask) {
+    if (task.source !== this.identity.source || task.accountId !== this.identity.accountId) throw new Error('分析账户身份不一致。');
+    validateAnalysisTask(task, { ...this.identity, id: task.tradeId });
+    this.db.prepare('INSERT INTO review_analysis VALUES (?, ?, ?, ?, ?) ON CONFLICT(source, account, id) DO UPDATE SET payload=excluded.payload').run(task.source, task.accountId, task.id, task.tradeId, gzipSync(JSON.stringify(task)));
   }
 
   latestMarket(key: string): MarketArchive | null {

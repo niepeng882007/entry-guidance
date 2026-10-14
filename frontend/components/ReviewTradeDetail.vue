@@ -3,12 +3,13 @@ import { nextTick } from 'vue';
 import type { ReviewTrade } from '../../src/review-ledger.ts';
 import PlanComparison from './PlanComparison.vue';
 import TradeChart from './TradeChart.vue';
+import TradeAnalysis from './TradeAnalysis.vue';
 import {
   reviewTime as time,
   reviewAmount as amount,
   reviewDuration as duration,
 } from '../review-records';
-defineProps<{ trade: ReviewTrade }>();
+defineProps<{ trade: ReviewTrade; analysisQuery: string }>();
 const orderTypes: Record<string, string> = {
   LIMIT: '限价单',
   MARKET: '市价单',
@@ -128,6 +129,7 @@ async function focusFill(index: number) {
       </p>
     </details>
     <TradeChart :trade="trade" @fill="focusFill" />
+    <TradeAnalysis :trade="trade" :query="analysisQuery" />
     <details class="disclosure">
       <summary class="disclosure__summary">
         订单证据 · {{ trade.evidence.orders.length }} 张

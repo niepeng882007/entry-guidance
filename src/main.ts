@@ -28,6 +28,7 @@ try {
   const server = createServer({
     password: process.env.APP_PASSWORD ?? '', origin: origin.origin, tls, mode, frontend, httpServer,
     apiKey: process.env.BINANCE_API_KEY, apiSecret: process.env.BINANCE_API_SECRET,
+    llm: { provider: process.env.LLM_PROVIDER ?? '', model: process.env.LLM_MODEL ?? '', effort: process.env.LLM_EFFORT ?? '', apiKey: process.env.LLM_API_KEY ?? '' },
     reviewLedgerPath: join(resolve(process.env.REVIEW_DATA_DIR ?? '.local/review'), `${mode}.sqlite`),
   });
   server.on('close', () => { void frontend?.close(); });
