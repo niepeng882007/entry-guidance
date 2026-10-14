@@ -215,6 +215,17 @@ export class HistorySync {
     for (const mode of ['BOTH', 'LONG', 'SHORT'] as const) {
       let lane = fills.filter((fill) => fill.positionSide === mode);
       let reliable = coverage && anchor?.positions[mode] !== undefined;
+      let position: bigint | null = reliable ? anchor!.positions[mode]! - lane.reduce((sum, fill) => sum + money(fill.quantity, false) * (fill.side === 'BUY' ? 1n : -1n), 0n) : null;
+      if (position !== null) {
+        let chain = position;
+        for (const fill of lane) {
+          const delta = money(fill.quantity, false) * (fill.side === 'BUY' ? 1n : -1n);
+          if ((chain === 0n || chain * delta > 0n) && fill.realizedPnl !== null && money(fill.realizedPnl) !== 0n) reliable = false;
+          if ((mode === 'LONG' && chain < 0n) || (mode === 'SHORT' && chain > 0n)) reliable = false;
+          chain += delta;
+          if ((mode === 'LONG' && chain < 0n) || (mode === 'SHORT' && chain > 0n)) reliable = false;
+        }
+      }
       const previous = old.filter((trade) => trade.evidence.fills[0]?.positionSide === mode);
       if (!reliable || !lane.length) {
         preserved.push(...previous);
@@ -228,15 +239,6 @@ export class HistorySync {
         });
       }
       if (!lane.length) continue;
-      let position: bigint | null = reliable ? anchor!.positions[mode]! - lane.reduce((sum, fill) => sum + money(fill.quantity, false) * (fill.side === 'BUY' ? 1n : -1n), 0n) : null;
-      if (mode !== 'BOTH' && position !== null) {
-        let chain = position;
-        for (const fill of lane) {
-          if (mode === 'LONG' ? chain < 0n : chain > 0n) reliable = false;
-          chain += money(fill.quantity, false) * (fill.side === 'BUY' ? 1n : -1n);
-          if (mode === 'LONG' ? chain < 0n : chain > 0n) reliable = false;
-        }
-      }
       if (!reliable) position = null;
       let group = { mode, reliable, fills: [] as ReviewFill[], start: position, end: position };
       for (const fill of lane) {
@@ -298,7 +300,7 @@ export class HistorySync {
       if (funding.some((fee) => fee.attribution === 'ambiguous')) missing.add('资金费无法唯一归属');
       const realized = fills.some((fill) => fill.realizedPnl === null) ? null : fills.reduce((sum, fill) => sum + money(fill.realizedPnl), 0n);
       const commission = fills.every((fill) => fill.commissionAsset === 'USDT' && fill.commission !== null) ? fills.reduce((sum, fill) => sum + money(fill.commission, false), 0n) : null;
-      const fundingNet = fundingComplete && funding.every((fee) => fee.attribution === 'confirmed' && fee.asset === 'USDT' && fee.amount !== null) ? funding.reduce((sum, fee) => sum + money(fee.amount), 0n) : null;
+      const fundingNet = reliable && start === 0n && fundingComplete && funding.every((fee) => fee.attribution === 'confirmed' && fee.asset === 'USDT' && fee.amount !== null) ? funding.reduce((sum, fee) => sum + money(fee.amount), 0n) : null;
       if (realized === null) missing.add('已实现盈亏缺失');
       if (commission === null) missing.add('手续费缺失或非 USDT，缺少可靠换算');
       if (fundingNet === null) missing.add('资金费缺失或非 USDT，归属待确认');
@@ -315,7 +317,7 @@ export class HistorySync {
       const unrealized = snapshot && typeof snapshot.payload.unRealizedProfit === 'string' && /^-?\d{1,24}(\.\d{1,8})?$/.test(snapshot.payload.unRealizedProfit) ? formatDecimal(money(snapshot.payload.unRealizedProfit)) : null;
       return {
         observedAt: new Date(state.endTime).toISOString(), unrealizedPnl: unrealized, unrealizedAt: unrealized === null ? null : new Date(anchor!.at).toISOString(),
-        ...this.identity, id: `binance-${createHash('sha256').update(state.symbol).digest('hex').slice(0, 32)}-${first.id}`, groupingVersion: 2, symbol: state.symbol, baseAsset: state.symbol.slice(0, -4),
+        ...this.identity, id: `binance-${createHash('sha256').update(state.symbol).digest('hex').slice(0, 32)}-${first.id}${first.allocation === 'open' ? '-open' : ''}`, groupingVersion: 2, symbol: state.symbol, baseAsset: state.symbol.slice(0, -4),
         side: mode === 'LONG' ? 'long' : mode === 'SHORT' ? 'short' : start === 0n ? (first.side === 'BUY' ? 'long' : 'short') : start !== null ? (start > 0n ? 'long' : 'short') : null,
         status: reliable && start === 0n && end !== 0n ? 'open' : missing.size ? 'incomplete' : 'closed', openedAt: start === 0n ? first.time : null, closedAt: end === 0n ? last.time : null,
         realizedPnl: realized === null ? null : formatDecimal(realized), commission: commission === null ? null : formatDecimal(commission), fundingNet: fundingNet === null ? null : formatDecimal(fundingNet),

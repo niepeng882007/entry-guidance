@@ -583,3 +583,42 @@ test('conditional execution types retain their linked algo order rather than onl
   assert.equal(detail.evidence.orders[1].algoId, '800');
   assert.ok(detail.evidence.raw.some((row: { kind: string; id: string }) => row.kind === 'algoHistory' && row.id === '800'));
 });
+
+
+test('a first visible reversal retains an incomplete old fragment and a distinct reliable new cycle', async (t) => {
+  const reversal = { ...fills[1]!, qty: '2', commission: '0.2' };
+  const sourceFills = [reversal];
+  const sourceOrders = [{ ...orders[1]!, origQty: '2', executedQty: '2' }];
+  const app = await start(t, fixture({ '/fapi/v1/userTrades': sourceFills,
+    '/fapi/v1/allOrders': sourceOrders,
+    '/fapi/v1/income': [], '/fapi/v2/positionRisk': [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '-1' }] }));
+  await app.sync();
+  const data = await finished(app);
+  assert.equal(data.sync.status, 'complete');
+  assert.equal(data.trades.length, 2);
+  assert.equal(new Set(data.trades.map((trade: { id: string }) => trade.id)).size, 2);
+  const old = data.trades.find((trade: { status: string }) => trade.status === 'incomplete');
+  const next = data.trades.find((trade: { status: string }) => trade.status === 'open');
+  assert.equal(old.openedAt, null);
+  assert.equal(old.realizedPnl, '10');
+  assert.equal(old.commission, '0.1');
+  assert.equal(next.side, 'short');
+  assert.equal(next.commission, '0.1');
+  assert.equal(next.realizedPnl, '0');
+  sourceFills.push(fills[0]!);
+  sourceOrders.push(orders[0]!);
+  await app.sync();
+  const supplemented = await finished(app);
+  assert.equal(supplemented.trades.length, 2);
+  assert.equal(supplemented.trades.find((trade: { status: string }) => trade.status === 'closed').netPnl, '9.8');
+  assert.equal(supplemented.trades.find((trade: { status: string }) => trade.status === 'open').id, next.id);
+});
+
+test('realized PnL on a reconstructed opening fill contradicts a complete starting chain', async (t) => {
+  const app = await start(t, fixture({ '/fapi/v1/userTrades': [{ ...fills[0]!, realizedPnl: '5' }, fills[1]!] }));
+  await app.sync();
+  const data = await finished(app);
+  assert.equal(data.trades[0].status, 'incomplete');
+  assert.equal(data.trades[0].netPnl, null);
+  assert.equal(data.trades[0].openedAt, null);
+});
