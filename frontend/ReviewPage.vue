@@ -1,4 +1,11 @@
 <script setup lang="ts">
+import {
+  entryTypeLabel,
+  executionTypes,
+  orderTypes,
+  reviewTimeZone,
+} from '../src/review-filters.ts';
+import SelectControl from './components/SelectControl.vue';
 import type { ReviewTrade } from '../src/review-ledger.ts';
 import PlanComparison from './components/PlanComparison.vue';
 import ReviewNotes from './components/ReviewNotes.vue';
@@ -10,6 +17,14 @@ const { source, expectedSource } = defineProps<{
 }>();
 const {
   list,
+  filters,
+  filterOptions,
+  page,
+  stale,
+  applyFilters,
+  clearFilters,
+  changePage,
+  cancelRead,
   trade,
   busy,
   relogin,
@@ -23,36 +38,16 @@ const {
   evidence,
   readEvidence,
 } = useReviewPage(expectedSource);
-const orderTypes: Record<string, string> = {
-  LIMIT: '限价单',
-  MARKET: '市价单',
-  STOP: '止损限价单',
-  STOP_MARKET: '止损市价单',
-  TAKE_PROFIT: '止盈限价单',
-  TAKE_PROFIT_MARKET: '止盈市价单',
-  TRAILING_STOP_MARKET: '追踪止损单',
-};
+const orderLabels: Readonly<Record<string, string>> = orderTypes;
 const events = { entry: '开仓', add: '加仓', reduce: '减仓', exit: '平仓' };
 function executionType(value: ReviewTrade, entry: boolean) {
-  const fills = value.evidence.fills.filter((fill) =>
-    value.groupingVersion === 2
-      ? entry
-        ? fill.event === 'entry' || fill.event === 'add'
-        : fill.event === 'reduce' || fill.event === 'exit'
-      : value.side !== null && (fill.side === (value.side === 'long' ? 'BUY' : 'SELL')) === entry,
-  );
-  const types = [
-    ...new Set(
-      fills.map((fill) => {
-        const type = value.evidence.orders.find((order) => order.id === fill.orderId)?.type;
-        return type ? (orderTypes[type] ?? type) : '未知';
-      }),
-    ),
-  ];
+  const types = executionTypes(value, entry).map(entryTypeLabel);
   return types.length > 1 ? `混合（${types.join('、')}）` : (types[0] ?? '未知');
 }
 function time(value: string | null) {
-  return value === null ? '待确认' : new Date(value).toLocaleString('zh-CN', { hour12: false });
+  return value === null
+    ? '待确认'
+    : new Date(value).toLocaleString('zh-CN', { hour12: false, timeZone: reviewTimeZone });
 }
 function amount(value: string | null, asset: string | null = 'USDT') {
   return value === null ? '待确认' : `${value} ${asset ?? '未知资产'}`;
@@ -164,8 +159,174 @@ async function show(id: string) {
         </button>
       </section>
     </section>
+    <details class="disclosure review-page__filters" open>
+      <summary class="disclosure__summary">筛选交易记录</summary>
+      <p class="muted">
+        日期按
+        Asia/Shanghai（UTC+8），包含起止日，留空不限日期；默认按开仓时间筛选，最近开仓排在前面。多标签须全部匹配。
+      </p>
+      <form class="review-page__filter-form" @submit.prevent="applyFilters" @reset="clearFilters">
+        <div class="review-page__filter-grid">
+          <div class="field">
+            <label class="field-label" for="filter-date-field">日期字段</label>
+            <SelectControl
+              ><select
+                id="filter-date-field"
+                v-model="filters.dateField"
+                class="field-control field-control--select"
+                :disabled="relogin"
+              >
+                <option value="openedAt">开仓时间</option>
+                <option value="closedAt">平仓时间</option>
+              </select></SelectControl
+            >
+          </div>
+          <div class="field">
+            <label class="field-label" for="filter-from">起始日期</label>
+            <input
+              id="filter-from"
+              v-model="filters.from"
+              class="field-control"
+              type="date"
+              min="1970-01-01"
+              max="9998-12-31"
+              :disabled="relogin"
+            />
+          </div>
+          <div class="field">
+            <label class="field-label" for="filter-to">结束日期</label>
+            <input
+              id="filter-to"
+              v-model="filters.to"
+              class="field-control"
+              type="date"
+              min="1970-01-01"
+              max="9998-12-31"
+              :disabled="relogin"
+            />
+          </div>
+          <div class="field">
+            <label class="field-label" for="filter-symbol">币种筛选</label>
+            <input
+              id="filter-symbol"
+              v-model="filters.symbol"
+              class="field-control"
+              list="filter-symbols"
+              placeholder="全部币种，如 BTCUSDT"
+              :disabled="relogin"
+            />
+            <datalist id="filter-symbols">
+              <option v-for="value in filterOptions.symbols" :key="value" :value="value" />
+            </datalist>
+          </div>
+          <div class="field">
+            <label class="field-label" for="filter-side">方向筛选</label>
+            <SelectControl
+              ><select
+                id="filter-side"
+                v-model="filters.side"
+                class="field-control field-control--select"
+                :disabled="relogin"
+              >
+                <option value="">全部方向</option>
+                <option value="long">做多</option>
+                <option value="short">做空</option>
+                <option value="unknown">方向待确认</option>
+              </select></SelectControl
+            >
+          </div>
+          <div class="field">
+            <label class="field-label" for="filter-pnl">净赢亏筛选</label>
+            <SelectControl
+              ><select
+                id="filter-pnl"
+                v-model="filters.pnl"
+                class="field-control field-control--select"
+                :disabled="relogin"
+              >
+                <option value="">全部净赢亏</option>
+                <option value="win">盈利</option>
+                <option value="loss">亏损</option>
+                <option value="flat">持平</option>
+                <option value="pending">待确认</option>
+              </select></SelectControl
+            >
+          </div>
+          <div class="field">
+            <label class="field-label" for="filter-status">记录状态筛选</label>
+            <SelectControl
+              ><select
+                id="filter-status"
+                v-model="filters.status"
+                class="field-control field-control--select"
+                :disabled="relogin"
+              >
+                <option value="">全部状态</option>
+                <option value="closed">已结束</option>
+                <option value="open">持仓中</option>
+                <option value="incomplete">数据不完整</option>
+              </select></SelectControl
+            >
+          </div>
+          <div class="field">
+            <label class="field-label" for="filter-entry-type">入场类型筛选</label>
+            <SelectControl
+              ><select
+                id="filter-entry-type"
+                v-model="filters.entryType"
+                class="field-control field-control--select"
+                :disabled="relogin"
+              >
+                <option value="">全部入场类型</option>
+                <option v-for="(label, value) in orderTypes" :key="value" :value="value">
+                  {{ label }}
+                </option>
+                <option value="mixed">混合</option>
+                <option value="unknown">未知</option>
+              </select></SelectControl
+            >
+          </div>
+          <div class="field">
+            <label class="field-label" for="filter-plan">方案关联筛选</label>
+            <SelectControl
+              ><select
+                id="filter-plan"
+                v-model="filters.plan"
+                class="field-control field-control--select"
+                :disabled="relogin"
+              >
+                <option value="">全部关联状态</option>
+                <option value="linked">已确认关联</option>
+                <option value="unconfirmed">无确认关联（含歧义）</option>
+              </select></SelectControl
+            >
+          </div>
+        </div>
+        <fieldset v-if="filterOptions.tags.length" class="review-notes__tags" :disabled="relogin">
+          <legend>风格标签 · 全部匹配</legend>
+          <label v-for="tag in filterOptions.tags" :key="tag.id" class="review-notes__tag">
+            <input
+              v-model="filters.tagIds"
+              type="checkbox"
+              :value="tag.id"
+              :aria-label="`筛选标签：${tag.name}${tag.active ? '' : '（已停用）'}`"
+            />
+            {{ tag.name }}{{ tag.active ? '' : '（已停用）' }}
+          </label>
+        </fieldset>
+        <div class="review-page__actions">
+          <button class="button" type="submit" :disabled="relogin">应用筛选</button>
+          <button class="button button--secondary" type="reset" :disabled="relogin">
+            清除筛选
+          </button>
+          <button v-if="busy" class="button button--text" type="button" @click="cancelRead">
+            取消读取
+          </button>
+        </div>
+      </form>
+    </details>
     <div class="section-heading">
-      <h2 class="section-title">{{ list ? `${list.trades.length} 笔归档交易` : '交易列表' }}</h2>
+      <h2 class="section-title">{{ list ? `${list.total} 笔归档交易` : '交易列表' }}</h2>
       <button
         class="button button--secondary"
         type="button"
@@ -176,11 +337,20 @@ async function show(id: string) {
         重新读取
       </button>
     </div>
+    <p v-if="stale && list" class="muted">
+      上次读取结果 · 当前范围需重新读取确认，详情暂不可打开。
+    </p>
+    <p v-if="list" class="muted">
+      当前筛选共 {{ list.total }} 笔；每页最多
+      {{ list.pageSize }} 笔。后续统计、分析与导出使用完整筛选范围。
+    </p>
     <p v-if="list && !list.trades.length" class="muted">
       {{
-        sync
-          ? '当前没有可归并的成交记录；查询范围与缺口见同步状态。'
-          : '尚未同步，无真实交易归档。请选择合约并开始同步。'
+        list.total
+          ? '本页没有记录，请返回上一页。'
+          : list.syncStatus === 'not-synced'
+            ? '尚未同步，无真实交易归档。请选择合约并开始同步。'
+            : '没有符合当前筛选条件的交易，可清除筛选重新查看。'
       }}
     </p>
     <ul v-if="list?.trades.length" class="review-page__list">
@@ -195,6 +365,23 @@ async function show(id: string) {
           }}</span>
         </div>
         <p class="amount review-page__amount">{{ amount(item.netPnl) }}</p>
+        <p class="muted">
+          入场类型：{{ entryTypeLabel(item.entryType) }} ·
+          {{
+            item.planLink?.status === 'linked'
+              ? '已确认关联方案'
+              : item.planLink?.status === 'ambiguous'
+                ? '方案关联有歧义'
+                : '无确认关联方案'
+          }}
+        </p>
+        <p v-if="item.tagIds.length" class="muted">
+          风格标签：{{
+            item.tagIds
+              .map((id) => filterOptions.tags.find((tag) => tag.id === id)?.name ?? '未知标签')
+              .join('、')
+          }}
+        </p>
         <p class="muted">复盘净盈亏 · 已实现盈亏 − 手续费 + 资金费净收支</p>
         <dl class="details details--card">
           <div class="details__row">
@@ -215,7 +402,7 @@ async function show(id: string) {
         <button
           class="button button--secondary"
           type="button"
-          :disabled="busy || relogin"
+          :disabled="busy || relogin || stale"
           :aria-label="`查看 ${item.symbol} 交易详情`"
           aria-controls="trade-detail"
           @click="show(item.id)"
@@ -224,6 +411,32 @@ async function show(id: string) {
         </button>
       </li>
     </ul>
+    <nav
+      v-if="list && list.total > list.pageSize"
+      class="review-page__actions"
+      aria-label="交易列表分页"
+    >
+      <button
+        class="button button--secondary"
+        type="button"
+        :disabled="busy || relogin || page <= 1"
+        @click="changePage(page - 1)"
+      >
+        上一页交易
+      </button>
+      <p class="muted">
+        第 {{ list.page }} / {{ Math.ceil(list.total / list.pageSize) }} 页 · 本页
+        {{ list.trades.length }} 笔
+      </p>
+      <button
+        class="button button--secondary"
+        type="button"
+        :disabled="busy || relogin || list.nextPage === null"
+        @click="changePage(list.nextPage!)"
+      >
+        下一页交易
+      </button>
+    </nav>
     <section
       v-if="trade"
       id="trade-detail"
@@ -307,7 +520,7 @@ async function show(id: string) {
           <h3 class="section-title">{{ order.id }}</h3>
           <p>{{ order.symbol }} · {{ order.side === 'BUY' ? '买入' : '卖出' }}</p>
           <p>
-            {{ order.type === null ? '订单类型：未知' : (orderTypes[order.type] ?? order.type) }}
+            {{ order.type === null ? '订单类型：未知' : (orderLabels[order.type] ?? order.type) }}
           </p>
           <p v-if="order.algoId" class="muted">条件订单：{{ order.algoId }}</p>
           <p>{{ order.quantity }} {{ trade.baseAsset }} · {{ time(order.time) }}</p>

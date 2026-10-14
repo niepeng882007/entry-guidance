@@ -226,10 +226,12 @@ test('changing accounts through an unsynced state cannot reuse another account d
     await page.route('**/api/review/trades', (route) =>
       route.fulfill({
         json: {
+          ...list,
+          total: account ? 1 : 0,
           source: 'binance',
           accountId: account,
           syncStatus: account ? 'synced' : 'not-synced',
-          trades: account ? [{ ...original, source: 'binance', accountId: account }] : [],
+          trades: account ? [{ ...list.trades[0], source: 'binance', accountId: account }] : [],
         },
       }),
     );

@@ -1,4 +1,14 @@
-import { onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
+import {
+  defaultReviewFilters,
+  parseReviewQuery,
+  reviewQuery,
+  reviewPageSize,
+  matchesReview,
+  sortReview,
+  orderTypes,
+  type ReviewFilters,
+} from '../src/review-filters.ts';
+import { onMounted, onUnmounted, reactive, ref, shallowRef, watch } from 'vue';
 import { parseDecimal } from '../public/draft.js';
 import type {
   RawRecord,
@@ -341,6 +351,10 @@ function validateSync(value: unknown): SyncState {
 export function useReviewPage(source: Source) {
   const list = shallowRef<ReviewList | null>(null);
   const trade = shallowRef<ReviewTrade | null>(null);
+  const filters = reactive(defaultReviewFilters());
+  const filterOptions = shallowRef<ReviewList['options']>({ symbols: [], tags: [] });
+  const page = ref(1);
+  const stale = ref(false);
   const busy = ref(false);
   const relogin = ref(false);
   const status = ref('正在读取归档…');
@@ -367,14 +381,20 @@ export function useReviewPage(source: Source) {
     pending = controller;
     busy.value = true;
     trade.value = null;
+    const requestedPage = page.value;
+    let requestedFilters: ReviewFilters;
+    stale.value = true;
+    status.value = id ? '正在读取交易详情…' : startSync ? '正在发起历史同步…' : '正在读取归档…';
     try {
+      requestedFilters = parseReviewQuery(reviewQuery(filters, requestedPage)).filters;
+      const query = reviewQuery(requestedFilters, requestedPage).toString();
       const requestedSymbol = symbol.value.trim().toUpperCase();
       const response = await fetch(
         startSync
           ? '/api/review/sync'
           : evidenceOffset !== undefined
             ? `/api/review/evidence?symbol=${encodeURIComponent(requestedSymbol)}&offset=${evidenceOffset}`
-            : `/api/review/trades${id ? `/${encodeURIComponent(id)}` : ''}`,
+            : `/api/review/trades${id ? `/${encodeURIComponent(id)}` : query ? `?${query}` : ''}`,
         {
           cache: 'no-store',
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
@@ -457,12 +477,88 @@ export function useReviewPage(source: Source) {
           (next.accountId === null && next.trades.length)
         )
           throw new Error('复盘来源或同步状态无效。');
-        for (const item of next.trades) validateTrade(item, source, String(next.accountId));
+        const range = object(next.filters);
+        const defaults = defaultReviewFilters();
+        if (
+          Object.keys(range).length !== Object.keys(defaults).length ||
+          Object.keys(defaults).some((key) =>
+            key === 'tagIds'
+              ? !Array.isArray(range[key]) ||
+                !(range[key] as unknown[]).every((id) => typeof id === 'string')
+              : typeof range[key] !== 'string',
+          )
+        )
+          throw new Error('筛选范围格式无效。');
+        const normalized = parseReviewQuery(reviewQuery(range as ReviewFilters)).filters;
+        if (
+          Object.entries(normalized).some(([key, value]) =>
+            key === 'tagIds'
+              ? JSON.stringify(range[key]) !== JSON.stringify(value)
+              : range[key] !== value,
+          ) ||
+          JSON.stringify(normalized) !== JSON.stringify(requestedFilters) ||
+          next.page !== requestedPage ||
+          next.pageSize !== reviewPageSize ||
+          !Number.isSafeInteger(next.total) ||
+          Number(next.total) < 0 ||
+          next.trades.length !==
+            Math.min(
+              reviewPageSize,
+              Math.max(0, Number(next.total) - (requestedPage - 1) * reviewPageSize),
+            ) ||
+          next.nextPage !==
+            (requestedPage * reviewPageSize < Number(next.total) ? requestedPage + 1 : null)
+        )
+          throw new Error('筛选范围或分页结果不一致。');
+        const options = object(next.options);
+        if (
+          !Array.isArray(options.symbols) ||
+          !options.symbols.every(
+            (value) => typeof value === 'string' && /^[\p{L}\p{N}_]{1,30}USDT$/u.test(value),
+          ) ||
+          new Set(options.symbols).size !== options.symbols.length ||
+          !Array.isArray(options.tags)
+        )
+          throw new Error('筛选选项无效。');
+        for (const value of options.tags) {
+          const tag = object(value);
+          if (
+            typeof tag.id !== 'string' ||
+            !/^[a-f0-9-]{36}$/.test(tag.id) ||
+            typeof tag.name !== 'string' ||
+            !tag.name.trim() ||
+            tag.name.length > 40 ||
+            typeof tag.active !== 'boolean'
+          )
+            throw new Error('筛选标签无效。');
+        }
+        const records: ReviewSummary[] = [];
+        for (const item of next.trades) {
+          const record = validateTrade(item, source, String(next.accountId));
+          if (
+            typeof record.entryType !== 'string' ||
+            !['mixed', 'unknown', ...Object.keys(orderTypes)].includes(record.entryType) ||
+            !Array.isArray(record.tagIds) ||
+            !record.tagIds.every((id) => typeof id === 'string' && /^[a-f0-9-]{36}$/.test(id)) ||
+            new Set(record.tagIds).size !== record.tagIds.length ||
+            !matchesReview(record, requestedFilters)
+          )
+            throw new Error('交易与筛选范围不一致。');
+          if (
+            records.some((previous) => previous.id === record.id) ||
+            (records.length && sortReview(records.at(-1)!, record) > 0)
+          )
+            throw new Error('交易排序或身份重复。');
+          records.push(record);
+        }
+        filterOptions.value = options as ReviewList['options'];
         if (list.value?.accountId !== next.accountId) evidence.value = null;
         sync.value = next.sync === undefined || next.sync === null ? null : validateSync(next.sync);
         if (source === 'demo' && sync.value) throw new Error('演示模式不接受真实同步进度。');
         list.value = next as ReviewList;
+        stale.value = false;
       }
+      if (!startSync && (id || evidenceOffset !== undefined)) stale.value = false;
       if (!startSync)
         status.value =
           source === 'demo'
@@ -487,6 +583,46 @@ export function useReviewPage(source: Source) {
     }
   }
 
+  watch(
+    filters,
+    () => {
+      sequence++;
+      pending?.abort();
+      pending = undefined;
+      clearTimeout(polling);
+      busy.value = false;
+      trade.value = null;
+      list.value = null;
+      page.value = 1;
+      stale.value = false;
+      status.value = '筛选已修改，请应用筛选。';
+    },
+    { flush: 'sync' },
+  );
+
+  function applyFilters() {
+    page.value = 1;
+    void read();
+  }
+  function clearFilters() {
+    Object.assign(filters, defaultReviewFilters());
+    applyFilters();
+  }
+  function changePage(value: number) {
+    page.value = value;
+    void read();
+  }
+  function cancelRead() {
+    sequence++;
+    pending?.abort();
+    pending = undefined;
+    clearTimeout(polling);
+    busy.value = false;
+    trade.value = null;
+    stale.value = true;
+    status.value = '读取已取消，上次读取结果需重新确认。';
+  }
+
   watch(symbol, () => {
     sequence++;
     pending?.abort();
@@ -504,6 +640,7 @@ export function useReviewPage(source: Source) {
     pending?.abort();
     pending = undefined;
     busy.value = false;
+    stale.value = true;
     status.value = reason;
   }
   function resume() {
@@ -553,6 +690,14 @@ export function useReviewPage(source: Source) {
   return {
     list,
     trade,
+    filters,
+    filterOptions,
+    page,
+    stale,
+    applyFilters,
+    clearFilters,
+    changePage,
+    cancelRead,
     busy,
     relogin,
     status,

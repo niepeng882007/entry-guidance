@@ -1,3 +1,4 @@
+import { entryType, matchesReview, sortReview, defaultReviewFilters, type EntryType, type ReviewFilters } from './review-filters.ts';
 import { randomUUID } from 'node:crypto';
 import { noteBasis, noteBelongsTo, noteInput, tagInput, ReviewWriteError, type ReviewJournal, type ReviewNote, type StyleTag } from './review-notes.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
@@ -37,7 +38,7 @@ export type ReviewTrade = ReviewIdentity & {
   exitReason?: 'LIQUIDATION' | 'ADL' | 'unknown';
   noteBasis?: string;
 };
-export type ReviewSummary = Omit<ReviewTrade, 'evidence' | 'planComparison'>;
+export type ReviewSummary = Omit<ReviewTrade, 'evidence' | 'planComparison'> & { entryType: EntryType; tagIds: string[] };
 export type HistorySource = 'trades' | 'history' | 'algoHistory' | 'income' | 'forceOrders';
 export type HistoryPage = { source: HistorySource; startTime: number; endTime: number; page: number; autoCloseType?: 'LIQUIDATION' | 'ADL'; fingerprint?: string };
 export type RawRecord = { kind: HistorySource | 'position'; id: string; time: number; payload: Record<string, unknown> };
@@ -48,7 +49,7 @@ export type SyncState = {
   attemptedAt?: string;
   missing: string[]; lastSuccessAt: string | null;
 };
-export type ReviewList = { source: ReviewIdentity['source']; accountId: string | null; syncStatus: 'demo' | 'not-synced' | 'synced'; trades: ReviewSummary[]; sync?: SyncState | null };
+export type ReviewList = { source: ReviewIdentity['source']; accountId: string | null; syncStatus: 'demo' | 'not-synced' | 'synced'; trades: ReviewSummary[]; filters: ReviewFilters; total: number; page: number; pageSize: number; nextPage: number | null; options: { symbols: string[]; tags: Pick<StyleTag, 'id' | 'name' | 'active'>[] }; sync?: SyncState | null };
 
 function signed(value: string, label: string) {
   return parseDecimal(value.startsWith('-') ? value.slice(1) : value, label) * (value.startsWith('-') ? -1n : 1n);
@@ -199,12 +200,14 @@ export class ReviewLedger {
     this.db.prepare('INSERT INTO review_verifications(source, account, plan_id, payload) VALUES (?, ?, ?, ?)').run(this.identity.source, this.identity.accountId, plan.id, JSON.stringify(verification));
   }
 
-  list(): ReviewSummary[] {
+  list(filters: ReviewFilters = defaultReviewFilters()): ReviewSummary[] {
     const plans = this.archivedPlans();
-    return this.db.prepare('SELECT payload FROM trades WHERE source=? AND account=? ORDER BY opened_at DESC, id').all(this.identity.source, this.identity.accountId).map((row) => {
-      const { evidence: _evidence, planComparison: _comparison, ...summary } = this.withPlan(JSON.parse(String(row.payload)) as ReviewTrade, plans);
-      return summary;
-    });
+    const notes = this.db.prepare('SELECT payload FROM review_notes WHERE source=? AND account=?').all(this.identity.source, this.identity.accountId).map((row) => JSON.parse(String(row.payload)) as ReviewNote);
+    return this.db.prepare('SELECT payload FROM trades WHERE source=? AND account=?').all(this.identity.source, this.identity.accountId).map((row) => {
+      const trade = this.withPlan(JSON.parse(String(row.payload)) as ReviewTrade, plans);
+      const { evidence: _evidence, planComparison: _comparison, ...summary } = trade;
+      return { ...summary, entryType: entryType(trade), tagIds: [...new Set(notes.filter((note) => noteBelongsTo(note, trade)).flatMap((note) => note.tagIds))].sort() };
+    }).filter((trade) => matchesReview(trade, filters)).sort(sortReview);
   }
 
   get(id: string): ReviewTrade | null {
@@ -231,9 +234,13 @@ export class ReviewLedger {
     return { ...trade, noteBasis: noteBasis(trade), planComparison: comparison, planLink: { status: comparison.status, reason: comparison.reason, candidatePlanIds: comparison.candidatePlanIds } };
   }
 
+  tags(): StyleTag[] {
+    return this.db.prepare('SELECT payload FROM style_tags WHERE source=? AND account=? ORDER BY id').all(this.identity.source, this.identity.accountId).map((row) => JSON.parse(String(row.payload)) as StyleTag);
+  }
+
   journal(): ReviewJournal {
     const { source, accountId } = this.identity;
-    const tags = this.db.prepare('SELECT payload FROM style_tags WHERE source=? AND account=? ORDER BY id').all(source, accountId).map((row) => JSON.parse(String(row.payload)) as StyleTag);
+    const tags = this.tags();
     const notes = this.db.prepare('SELECT payload FROM review_notes WHERE source=? AND account=? ORDER BY id').all(source, accountId).map((row) => {
       const note = JSON.parse(String(row.payload)) as ReviewNote;
       return { ...note, binding: noteBelongsTo(note, this.get(note.trade.id)) ? 'current' as const : 'pending' as const };

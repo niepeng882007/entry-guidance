@@ -1,3 +1,4 @@
+import { parseReviewQuery, reviewPageSize, matchesReview, ReviewFilterError } from './review-filters.ts';
 import { SharedRead, coordinateAccountReads } from './account-refresh.ts';
 import { readAccountOrders, demoAccountOrders, readAccountConditionalOrders, demoAccountConditionalOrders } from './orders.ts';
 import { readAccountPositions, demoAccountPositions } from './positions.ts';
@@ -282,16 +283,25 @@ export function createServer(config: Config) {
         return send(503, { error: '复盘同步暂不可用，已有账本保留。' });
       }
     }
-    if (path === '/api/review/trades' || path?.startsWith('/api/review/trades/')) {
+    if (path === '/api/review/trades' || path?.startsWith('/api/review/trades?') || path?.startsWith('/api/review/trades/')) {
       try {
+        const url = new URL(path, origin);
+        const query = url.pathname === '/api/review/trades' ? parseReviewQuery(url.searchParams) : null;
         const sync = source === 'binance' ? await getHistory() : null;
         const currentSession = sessions.get(cookie!);
         if (!currentSession || currentSession.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
-        if (path === '/api/review/trades') {
+        if (query) {
+          const ledger = source === 'demo' ? getReviewLedger() : reviewLedger;
+          const all = ledger?.list() ?? [];
+          const selected = all.filter((trade) => matchesReview(trade, query.filters));
+          const offset = (query.page - 1) * reviewPageSize;
           return send(200, {
             source, accountId: source === 'demo' ? 'demo-account' : reviewAccountId ?? null,
             syncStatus: source === 'demo' ? 'demo' : sync?.state() ? 'synced' : 'not-synced',
-            trades: source === 'demo' ? getReviewLedger().list() : reviewLedger?.list() ?? [],
+            trades: selected.slice(offset, offset + reviewPageSize),
+            filters: query.filters, total: selected.length, page: query.page, pageSize: reviewPageSize,
+            nextPage: offset + reviewPageSize < selected.length ? query.page + 1 : null,
+            options: { symbols: [...new Set(all.map((trade) => trade.symbol))].sort(), tags: (ledger?.tags() ?? []).map(({ id, name, active }) => ({ id, name, active })) },
             ...(sync ? { sync: sync.state() } : {}),
           } satisfies ReviewList);
         }
@@ -299,7 +309,7 @@ export function createServer(config: Config) {
         if (!/^[A-Za-z0-9-]{1,160}$/.test(id)) return send(400, { error: '交易身份无效。' });
         const trade = source === 'demo' ? getReviewLedger().get(id) : reviewLedger?.get(id);
         return trade ? send(200, trade) : send(404, { error: '未找到该来源的归档交易。' });
-      } catch { return send(503, { error: '复盘账本暂不可用，已有归档保留，请重试。' }); }
+      } catch (error) { return error instanceof ReviewFilterError ? send(400, { error: error.message }) : send(503, { error: '复盘账本暂不可用，已有归档保留，请重试。' }); }
     }
     if (path?.startsWith('/api/review/evidence?')) {
       const query = new URL(path, origin).searchParams;

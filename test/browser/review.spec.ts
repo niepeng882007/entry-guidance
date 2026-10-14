@@ -1,5 +1,14 @@
+import { defaultReviewFilters } from '../../src/review-filters.ts';
 import { navigate } from './navigation';
 import { test, expect } from '@playwright/test';
+const emptyRange = {
+  filters: defaultReviewFilters(),
+  total: 0,
+  page: 1,
+  pageSize: 20,
+  nextPage: null,
+  options: { symbols: [], tags: [] },
+};
 
 test('a user opens one archived trade and expands linked orders, fills and PnL', async ({
   page,
@@ -160,7 +169,13 @@ test('the real-mode page clearly displays an unsynced empty ledger', async ({ pa
   });
   await page.route('**/api/review/trades', (route) =>
     route.fulfill({
-      json: { source: 'binance', accountId: null, syncStatus: 'not-synced', trades: [] },
+      json: {
+        ...emptyRange,
+        source: 'binance',
+        accountId: null,
+        syncStatus: 'not-synced',
+        trades: [],
+      },
     }),
   );
   await page.goto('/review');
@@ -213,6 +228,7 @@ test('real history sync shows progress, gaps and retry without claiming old resu
     route.fulfill({
       json: started
         ? {
+            ...emptyRange,
             source: 'binance',
             accountId: '12345',
             syncStatus: 'synced',
@@ -225,7 +241,13 @@ test('real history sync shows progress, gaps and retry without claiming old resu
               lastSuccessAt: failed ? null : '2026-10-07T00:00:00Z',
             },
           }
-        : { source: 'binance', accountId: null, syncStatus: 'not-synced', trades: [] },
+        : {
+            ...emptyRange,
+            source: 'binance',
+            accountId: null,
+            syncStatus: 'not-synced',
+            trades: [],
+          },
     }),
   );
   await page.route('**/api/review/sync', async (route) => {
@@ -282,7 +304,13 @@ test('a late sync response after leaving the page cannot restore current progres
   await page.route('**/api/symbols', (route) => route.fulfill({ json: { symbols: ['BTCUSDT'] } }));
   await page.route('**/api/review/trades', (route) =>
     route.fulfill({
-      json: { source: 'binance', accountId: null, syncStatus: 'not-synced', trades: [] },
+      json: {
+        ...emptyRange,
+        source: 'binance',
+        accountId: null,
+        syncStatus: 'not-synced',
+        trades: [],
+      },
     }),
   );
   let release!: () => void;
@@ -346,11 +374,13 @@ test('complex trade detail shows mixed execution types, shared reversal evidence
   detail.missing = ['资金费无法唯一归属'];
   detail.fundingNet = null;
   await page.route('**/api/review/trades', (route) =>
-    route.fulfill({ json: { ...list, trades: [detail] } }),
+    route.fulfill({ json: { ...list, trades: [{ ...detail, entryType: 'mixed', tagIds: [] }] } }),
   );
   await page.route('**/api/review/trades/*', (route) => route.fulfill({ json: detail }));
   await page.goto('/review');
-  await expect(page.getByText('持仓中', { exact: true })).toBeVisible();
+  await expect(
+    page.locator('.review-page__record .tag').getByText('持仓中', { exact: true }),
+  ).toBeVisible();
   await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
   await expect(page.locator('#trade-detail')).toBeFocused();
   await expect(page.locator('#trade-detail')).toContainText('入场类型：混合（限价单、市价单）');
