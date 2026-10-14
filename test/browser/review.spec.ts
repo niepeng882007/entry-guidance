@@ -355,7 +355,13 @@ test('the real-mode page clearly displays an unsynced empty ledger', async ({ pa
   await page.unroute('**/api/review/trades');
   await page.route('**/api/review/trades', (route) =>
     route.fulfill({
-      json: { source: 'binance', accountId: '12345', syncStatus: 'not-synced', trades: [] },
+      json: {
+        ...emptyRange,
+        source: 'binance',
+        accountId: '12345',
+        syncStatus: 'not-synced',
+        trades: [],
+      },
     }),
   );
   await page.getByRole('button', { name: '重新读取', exact: true }).click();

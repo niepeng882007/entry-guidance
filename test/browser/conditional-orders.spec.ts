@@ -140,14 +140,17 @@ test('conditional response validation preserves the last successful list and nev
   page,
 }) => {
   let variant = 'ok';
+  let confirmedAt = '';
   await page.route('**/api/account/conditional-orders', async (route) => {
     const data = await (await route.fetch()).json();
     data.queriedAt = new Date().toISOString();
+    if (variant === 'ok') confirmedAt = data.queriedAt;
     if (variant === 'type-array') data.orders[0].type = ['STOP_MARKET'];
     if (variant === 'side-array') data.orders[0].side = ['SELL'];
     if (variant === 'source') data.source = 'binance';
     if (variant === 'time') data.queriedAt = new Date(Date.now() - 60000).toISOString();
-    if (variant === 'older') data.queriedAt = new Date(Date.now() - 1000).toISOString();
+    if (variant === 'older')
+      data.queriedAt = new Date(Date.parse(confirmedAt) - 1000).toISOString();
     if (variant === 'quantity') data.orders[1].quantity = '0.00000000';
     if (variant === 'remaining') data.orders[2].remainingQty = '1.00000001';
     if (variant === 'id') data.orders[0].algoId = 9007199254740992;

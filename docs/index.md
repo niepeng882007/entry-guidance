@@ -26,6 +26,7 @@
 | [src/server.ts](../src/server.ts) | 登录、会话、静态文件白名单、方案保存与签名恢复、HTTP 业务入口 |
 | [src/account.ts](../src/account.ts) | Binance 白名单读取与签名、权限与账户口径校验；`transport` 是测试替换外部响应的边界 |
 | [src/account-archive.ts](../src/account-archive.ts)；[src/history-sync.ts](../src/history-sync.ts)；[src/review-ledger.ts](../src/review-ledger.ts) | 按 UID 隔离的 SQLite 复盘账本、全账户发现与持续归档、历史分页及保守归并；`src/review-notes.ts` 定义个人记录校验及交易依据关联；`frontend/useReviewPage.ts` 和 `frontend/ReviewPage.vue` 展示进度、缺口与原始证据，`frontend/useReviewNotes.ts` 与 `frontend/components/ReviewNotes.vue` 管理个人笔记、标签与未保存草稿 |
+| [src/review-filters.ts](../src/review-filters.ts) | 规范化上海日历日期与组合筛选参数、入场类型及稳定排序；账本 `list(filters)` 返回完整匹配范围，HTTP 以每页 20 条展示 |
 | [src/plan-comparison.ts](../src/plan-comparison.ts)；[frontend/components/PlanComparison.vue](../frontend/components/PlanComparison.vue) | 依据长期保存的方案与查询证据判断唯一关联，计算并展示固定原计划、实际入场、净亏损与历史止损设置对照；列表和详情使用同一关联口径 |
 | [src/market.ts](../src/market.ts) | 汇集账户、行情、费率、合约规则及模拟快照 |
 | [public/draft.js](../public/draft.js) | 前后端共用的十进制计算、模板应用、草稿、正式方案和分层数量计算 |
