@@ -2,7 +2,8 @@ import { createHmac } from 'node:crypto';
 import { get } from 'node:https';
 import { parseDecimal, formatDecimal } from '../public/draft.js';
 
-export type Transport = (url: URL, headers: Record<string, string>, signal: AbortSignal) => Promise<{ status: number; body: unknown; headers?: Record<string, string | undefined> }>;
+export type ReadPriority = 'foreground' | 'archive';
+export type Transport = (url: URL, headers: Record<string, string>, signal: AbortSignal, priority?: ReadPriority) => Promise<{ status: number; body: unknown; headers?: Record<string, string | undefined> }>;
 export type AccountConfig = { apiKey?: string; apiSecret?: string; transport?: Transport };
 
 export class AccountError extends Error {
@@ -75,7 +76,14 @@ const endpoints = {
   forceOrders: 'https://fapi.binance.com/fapi/v1/forceOrders',
 } as const;
 
-export async function readBinance(config: AccountConfig, operation: keyof typeof endpoints, signal: AbortSignal, symbol?: string, period?: { startTime: number; endTime: number; page?: number; autoCloseType?: 'LIQUIDATION' | 'ADL' }): Promise<unknown> {
+export function signBinanceRequest(config: AccountConfig, url: URL) {
+  if (!config.apiSecret) throw new AccountError('missing_credentials', '后端只读凭据缺失。', 503);
+  url.searchParams.delete('signature');
+  url.searchParams.set('timestamp', Date.now().toString()); url.searchParams.set('recvWindow', '5000');
+  url.searchParams.set('signature', createHmac('sha256', config.apiSecret).update(url.searchParams.toString()).digest('hex'));
+}
+
+export async function readBinance(config: AccountConfig, operation: keyof typeof endpoints, signal: AbortSignal, symbol?: string, period?: { startTime: number; endTime: number; page?: number; autoCloseType?: 'LIQUIDATION' | 'ADL' }, priority: ReadPriority = 'foreground'): Promise<unknown> {
   const url = new URL(endpoints[operation]);
   const isPublic = operation === 'exchange' || operation === 'book' || operation === 'mark' || operation === 'last' || operation === 'time';
   if (symbol !== undefined) {
@@ -83,7 +91,7 @@ export async function readBinance(config: AccountConfig, operation: keyof typeof
     url.searchParams.set('symbol', symbol);
   }
   if (period) {
-    if (!symbol || !['trades', 'history', 'algoHistory', 'income', 'forceOrders'].includes(operation) || !Number.isSafeInteger(period.startTime) || !Number.isSafeInteger(period.endTime) || period.startTime <= 0 || period.endTime < period.startTime || period.endTime - period.startTime >= 7 * 86_400_000) throw new AccountError('invalid_period', '成交查询区间无效或超过支持范围。', 400);
+    if ((!symbol && operation !== 'income') || !['trades', 'history', 'algoHistory', 'income', 'forceOrders'].includes(operation) || !Number.isSafeInteger(period.startTime) || !Number.isSafeInteger(period.endTime) || period.startTime <= 0 || period.endTime < period.startTime || period.endTime - period.startTime >= 7 * 86_400_000) throw new AccountError('invalid_period', '成交查询区间无效或超过支持范围。', 400);
     url.searchParams.set('startTime', String(period.startTime));
     url.searchParams.set('endTime', String(period.endTime));
     url.searchParams.set('limit', operation === 'forceOrders' ? '100' : '1000');
@@ -100,12 +108,10 @@ export async function readBinance(config: AccountConfig, operation: keyof typeof
   if (!isPublic) {
     if (!config.apiKey || !config.apiSecret) throw new AccountError('missing_credentials', '未连接：请在后端配置 BINANCE_API_KEY 和 BINANCE_API_SECRET。', 503);
     headers['X-MBX-APIKEY'] = config.apiKey;
-    url.searchParams.set('timestamp', Date.now().toString());
-    url.searchParams.set('recvWindow', '5000');
-    url.searchParams.set('signature', createHmac('sha256', config.apiSecret).update(url.searchParams.toString()).digest('hex'));
   }
   try {
-    const response = await (config.transport ?? binanceTransport)(url, headers, signal);
+    if (!isPublic) signBinanceRequest(config, url);
+    const response = await (config.transport ?? binanceTransport)(url, headers, signal, priority);
     if (operation === 'portfolio' && response.status === 400 && object(response.body).code === -21001) return response.body;
     if (response.status !== 200) {
       const data = object(response.body);
@@ -175,9 +181,9 @@ export async function readAccountScope(config: AccountConfig, signal: AbortSigna
   } finally { signal.removeEventListener('abort', tagAbort); }
 }
 
-async function verifyReadPermissions(config: AccountConfig, signal: AbortSignal) {
+async function verifyReadPermissions(config: AccountConfig, signal: AbortSignal, priority: ReadPriority = 'foreground') {
   try {
-    const permissions = object(await readBinance(config, 'permissions', signal));
+    const permissions = object(await readBinance(config, 'permissions', signal, undefined, undefined, priority));
     if (permissions.enableReading !== true) throw new AccountError('reading_disabled', '凭据没有可验证的读取权限。');
     if (writePermissions.some((field) => permissions[field] === true)) throw new AccountError('unsafe_permissions', '凭据包含交易、提现或划转权限，请更换专用只读凭据。');
     if (writePermissions.some((field) => permissions[field] !== false)) throw new AccountError('unverified_permissions', '无法完整确认凭据的只读权限，已停止读取。');
@@ -187,9 +193,9 @@ async function verifyReadPermissions(config: AccountConfig, signal: AbortSignal)
   }
 }
 
-export async function readReviewIdentity(config: AccountConfig, signal: AbortSignal) {
-  await verifyReadPermissions(config, signal);
-  const { uid } = object(await readBinance(config, 'identity', signal));
+export async function readReviewIdentity(config: AccountConfig, signal: AbortSignal, priority: ReadPriority = 'foreground') {
+  await verifyReadPermissions(config, signal, priority);
+  const { uid } = object(await readBinance(config, 'identity', signal, undefined, undefined, priority));
   if (!(typeof uid === 'number' && Number.isSafeInteger(uid) && uid > 0) && !(typeof uid === 'string' && /^[1-9]\d{0,23}$/.test(uid))) throw new AccountError('unverified_identity', '账户身份无法确认，已暂停新增归档；已有账本保留。');
   return String(uid);
 }

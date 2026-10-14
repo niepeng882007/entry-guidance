@@ -22,6 +22,9 @@ const {
   startSync,
   evidence,
   readEvidence,
+  archive,
+  archiveIssue,
+  startArchive,
 } = useReviewPage(expectedSource);
 const orderTypes: Record<string, string> = {
   LIMIT: '限价单',
@@ -83,10 +86,91 @@ async function show(id: string) {
     <section
       v-if="expectedSource === 'binance'"
       class="review-page__detail"
+      aria-labelledby="account-archive-title"
+    >
+      <h2 id="account-archive-title" class="section-title">全账户历史归档</h2>
+      <p class="muted">
+        首次读取最近 3 个月；服务运行期间每 5 分钟增量归档。关闭页面继续，服务停止暂停，重启后补查。
+      </p>
+      <button
+        class="button button--primary"
+        type="button"
+        :disabled="busy || relogin || archive?.status === 'running' || sync?.status === 'running'"
+        :aria-busy="archive?.status === 'running'"
+        @click="startArchive"
+      >
+        立即同步全账户
+      </button>
+      <p v-if="archiveIssue" class="error">后台归档暂停：{{ archiveIssue }}</p>
+      <div v-if="archive">
+        <p class="muted">
+          本轮已读取合约：{{ archive.completedSymbols.length }} / {{ archive.symbols.length }} ·
+          待完成 {{ archive.pendingSymbols.length }} 个
+        </p>
+        <p class="muted">
+          归档范围：{{ time(new Date(archive.startTime).toISOString()) }} 至
+          {{ time(new Date(archive.endTime).toISOString()) }}
+        </p>
+        <p class="muted">最后成功时间：{{ time(archive.lastSuccessAt) }}</p>
+        <p class="muted">
+          全账户发现：已读取 {{ archive.discovery.pages }} 页 ·
+          {{ archive.discovery.pending.length }} 个待完成区间
+        </p>
+        <p v-for="item in archive.scopeMissing" :key="item" class="muted">{{ item }}</p>
+        <p v-if="archive.missing.length" class="error">
+          账户同步缺口：{{ archive.missing.join('；') }}
+        </p>
+        <p v-if="archive.discovery.missing.length" class="error">
+          发现缺口：{{ archive.discovery.missing.join('；') }}
+        </p>
+        <details class="disclosure">
+          <summary class="disclosure__summary">合约进度与缺失区间</summary>
+          <p v-for="symbolName in archive.pendingSymbols" :key="symbolName" class="muted">
+            {{ symbolName }} · 本轮尚未读完
+          </p>
+          <p
+            v-for="(range, index) in archive.discovery.pending"
+            :key="`discovery-${index}`"
+            class="muted"
+          >
+            全账户 income · {{ time(new Date(range.startTime).toISOString()) }} 至
+            {{ time(new Date(range.endTime).toISOString()) }} · 第 {{ range.page }} 页
+          </p>
+          <article v-for="contract in archive.contracts" :key="contract.symbol" class="review-fill">
+            <h3 class="section-title">{{ contract.symbol }}</h3>
+            <p class="muted">
+              {{
+                {
+                  running: '读取中',
+                  complete: '读取结束',
+                  failed: '读取失败',
+                  interrupted: '读取中断',
+                }[contract.status]
+              }}
+              · {{ contract.pages }} 页 · {{ contract.pending.length }} 个待完成区间
+            </p>
+            <p class="muted">最后成功时间：{{ time(contract.lastSuccessAt) }}</p>
+            <p v-if="contract.missing.length" class="error">{{ contract.missing.join('；') }}</p>
+            <p
+              v-for="(range, index) in [...contract.pending, ...(contract.unavailable ?? [])]"
+              :key="index"
+              class="muted"
+            >
+              {{ range.source }} · {{ time(new Date(range.startTime).toISOString()) }} 至
+              {{ time(new Date(range.endTime).toISOString()) }} · 第 {{ range.page }} 页
+            </p>
+          </article>
+        </details>
+      </div>
+      <p v-else class="muted">尚无全账户读取进度；身份或权限未确认时暂停新增归档。</p>
+    </section>
+    <section
+      v-if="expectedSource === 'binance'"
+      class="review-page__detail"
       aria-labelledby="history-sync-title"
     >
       <h2 id="history-sync-title" class="section-title">同步单币种真实历史</h2>
-      <p class="muted">最近 3 个月 · 仅使用只读查询。重启后再次同步可继续补查。</p>
+      <p class="muted">最近 3 个月 · 可单独补查合约，包括已下架合约。与全账户归档协调执行。</p>
       <form class="review-page__sync" @submit.prevent="startSync">
         <div class="field">
           <label class="field-label" for="history-symbol">USDT 永续合约</label>
@@ -98,7 +182,9 @@ async function show(id: string) {
             type="text"
             maxlength="34"
             required
-            :disabled="busy || relogin || sync?.status === 'running'"
+            :disabled="
+              busy || relogin || sync?.status === 'running' || archive?.status === 'running'
+            "
           />
           <datalist id="history-symbols">
             <option v-for="value in symbols" :key="value" :value="value" />
@@ -107,7 +193,7 @@ async function show(id: string) {
         <button
           class="button button--primary"
           type="submit"
-          :disabled="busy || relogin || sync?.status === 'running'"
+          :disabled="busy || relogin || sync?.status === 'running' || archive?.status === 'running'"
           :aria-busy="busy || sync?.status === 'running'"
         >
           开始同步
@@ -178,7 +264,7 @@ async function show(id: string) {
     </div>
     <p v-if="list && !list.trades.length" class="muted">
       {{
-        sync
+        sync || archive
           ? '当前没有可归并的成交记录；查询范围与缺口见同步状态。'
           : '尚未同步，无真实交易归档。请选择合约并开始同步。'
       }}

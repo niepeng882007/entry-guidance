@@ -295,7 +295,7 @@ test('resuming an older symbol reports its own progress rather than another comp
       if (phase === 'resume') await gate;
     }
     const response = await base(url, headers, signal);
-    if (Array.isArray(response.body) && url.searchParams.get('symbol') === 'ETHUSDT') response.body = response.body.map((row) => ({ ...row, symbol: 'ETHUSDT' }));
+    if (Array.isArray(response.body) && url.searchParams.get('symbol') === 'ETHUSDT') response.body = response.body.map((row) => ({ ...row, symbol: 'ETHUSDT', ...(url.pathname === '/fapi/v1/income' ? { tranId: Number(row.tranId) + 1000 } : {}) }));
     return response;
   });
   await app.sync();
