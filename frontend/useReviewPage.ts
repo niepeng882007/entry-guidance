@@ -83,6 +83,8 @@ function validateTrade(value: unknown, source: Source, accountId: string): Revie
 function validateDetail(value: unknown, source: Source, accountId: string): ReviewTrade {
   validateTrade(value, source, accountId);
   const data = object(value);
+  if (typeof data.noteBasis !== 'string' || !/^[a-f0-9]{64}$/.test(data.noteBasis))
+    throw new Error('笔记交易依据无效。');
   const evidence = object(data.evidence);
   if (evidence.symbol !== data.symbol || evidence.baseAsset !== data.baseAsset)
     throw new Error('交易证据关联无效。');

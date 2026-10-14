@@ -137,6 +137,6 @@ test('a plan from another account cannot appear as a confirmed comparison', asyn
   detail.planComparison!.plan!.reviewAccountId = 'another-account';
   await page.goto('/review');
   await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
-  await expect(page.getByRole('status')).toContainText('原方案来源、账户或交易关联无效');
+  await expect(page.locator('#review-status')).toContainText('原方案来源、账户或交易关联无效');
   await expect(page.locator('#trade-detail')).toHaveCount(0);
 });

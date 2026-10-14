@@ -91,3 +91,59 @@ test('a broken position chain cannot be archived as a complete trade', (t) => {
   assert.throws(() => ledger.archive(evidence), /反手/);
   assert.deepEqual(ledger.list(), []);
 });
+
+test('notes stay with stable evidence and changed grouping preserves an unassigned snapshot', (t) => {
+  const ledger = new ReviewLedger(':memory:', { source: 'demo', accountId: 'demo-account' });
+  t.after(() => ledger.close());
+  const id = ledger.archive(demoTrade());
+  const original = ledger.get(id)!;
+  const input = { noteId: null, version: 0, basis: original.noteBasis, entryReason: '原入场', exitReason: '', executionProblem: '', improvement: '', freeNote: '', tagIds: [] };
+  const saved = ledger.saveNote(id, input).notes[0]!;
+  const enriched = structuredClone(original);
+  enriched.groupingVersion = 2;
+  enriched.evidence.fundingComplete = false;
+  ledger.project('BTCUSDT', [enriched]);
+  assert.equal(ledger.journal().notes[0]!.binding, 'current');
+  const regrouped = structuredClone(enriched);
+  regrouped.evidence.fills[0]!.allocation = 'open';
+  regrouped.evidence.fills[0]!.quantity = '0.002';
+  ledger.project('BTCUSDT', [regrouped]);
+  assert.equal(ledger.journal().notes[0]!.binding, 'pending');
+  assert.equal(ledger.journal().notes[0]!.trade.evidence.fills[0]!.quantity, '0.004');
+  assert.throws(() => ledger.saveNote(id, { ...input, noteId: saved.id, version: 1, basis: ledger.get(id)!.noteBasis }), /归属/);
+  const current = ledger.saveNote(id, { ...input, basis: ledger.get(id)!.noteBasis, entryReason: '新的确认' });
+  assert.equal(current.notes.length, 2);
+  assert.equal(current.notes.find((note) => note.binding === 'current')!.entryReason, '新的确认');
+  ledger.project('BTCUSDT', []);
+  assert.equal(ledger.journal().notes.length, 2);
+  assert.ok(ledger.journal().notes.every((note) => note.binding === 'pending'));
+});
+
+test('personal records isolate accounts and inactive tags retain history but cannot be newly applied', (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'review-notes-isolation-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'ledger.sqlite');
+  const owner = new ReviewLedger(path, { source: 'demo', accountId: 'demo-account' });
+  const other = new ReviewLedger(path, { source: 'demo', accountId: 'other' });
+  const real = new ReviewLedger(path, { source: 'binance', accountId: 'demo-account' });
+  t.after(() => { owner.close(); other.close(); real.close(); });
+  const id = owner.archive(demoTrade());
+  const tag = owner.saveTag({ id: null, version: 0, name: '顺势', active: true }).tags[0]!;
+  const input = { noteId: null, version: 0, basis: owner.get(id)!.noteBasis, entryReason: '', exitReason: '', executionProblem: '', improvement: '', freeNote: '个人内容', tagIds: [tag.id] };
+  const note = owner.saveNote(id, input).notes[0]!;
+  owner.saveTag({ id: tag.id, version: 1, name: '顺势更新', active: false });
+  assert.equal(owner.saveNote(id, { ...input, noteId: note.id, version: 1 }).notes[0]!.version, 2);
+  const second = owner.get(id)!;
+  second.id += '-second';
+  owner.project('BTCUSDT', [owner.get(id)!, second]);
+  assert.throws(() => owner.saveNote(second.id, { ...input, basis: owner.get(second.id)!.noteBasis }), /停用/);
+  for (const ledger of [other, real]) {
+    assert.deepEqual(ledger.journal().notes, []);
+    assert.deepEqual(ledger.journal().tags, []);
+    assert.throws(() => ledger.saveNote(id, input), /未找到/);
+    assert.throws(() => ledger.saveTag({ id: tag.id, version: 2, name: '盗用', active: true }), /未找到/);
+  }
+  assert.throws(() => owner.saveTag({ id: null, version: 0, name: '多行\n标签', active: true }), /单行/);
+  assert.throws(() => owner.saveTag({ id: null, version: 0, name: 'x'.repeat(41), active: true }), /单行/);
+  assert.throws(() => owner.saveTag({ id: null, version: 0, name: '顺势更新', active: true }), /同名/);
+});
