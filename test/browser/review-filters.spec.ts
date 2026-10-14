@@ -1,3 +1,4 @@
+import { withStatistics } from './review-statistics-fixtures.ts';
 import { test, expect, type Page } from '@playwright/test';
 import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -237,27 +238,24 @@ test('reading raw evidence cannot make a failed trade list current again', async
       const data = await response.json();
       await route.fulfill({
         response,
-        json: {
-          ...data,
-          source: 'binance',
-          accountId: '12345',
-          syncStatus: 'synced',
-          statistics: {
-            ...data.statistics,
+        json: withStatistics(
+          {
+            ...data,
             source: 'binance',
             accountId: '12345',
-            trades: data.statistics.trades.map((trade: Record<string, unknown>) => ({
+            syncStatus: 'synced',
+            trades: data.trades.map((trade: Record<string, unknown>) => ({
               ...trade,
               source: 'binance',
               accountId: '12345',
             })),
           },
-          trades: data.trades.map((trade: Record<string, unknown>) => ({
+          data.statistics.trades.map((trade: Record<string, unknown>) => ({
             ...trade,
             source: 'binance',
             accountId: '12345',
           })),
-        },
+        ),
       });
     });
     await page.route('**/api/review/journal', (route) =>
@@ -360,7 +358,12 @@ test('statistics and charts use the full range, overlap tags, and remain readabl
       await panel
         .getByRole('heading', { name: '累计净盈亏 · USDT', exact: true })
         .scrollIntoViewIfNeeded();
-      await page.screenshot({ path: test.info().outputPath(`statistics-curve-${width}.png`) });
+      await panel
+        .locator('.review-statistics__chart')
+        .screenshot({ path: test.info().outputPath(`statistics-curve-${width}.png`) });
+      await panel
+        .locator('.review-statistics__groups')
+        .screenshot({ path: test.info().outputPath(`statistics-groups-${width}.png`) });
       await panel
         .getByRole('heading', { name: '筛选范围表现统计', exact: true })
         .scrollIntoViewIfNeeded();
@@ -382,13 +385,14 @@ test('statistics with a foreign identity or changed totals cannot become current
   const app = await startFiltersPage(page);
   try {
     await expect(page.locator('.review-statistics')).toBeVisible();
-    for (const change of ['identity', 'total', 'money'] as const) {
+    for (const change of ['identity', 'total', 'money', 'fingerprint'] as const) {
       await page.route('**/api/review/trades', async (route) => {
         const response = await route.fetch();
         const data = await response.json();
         if (change === 'identity') data.statistics.accountId = 'foreign';
         if (change === 'total') data.statistics.trades.pop();
         if (change === 'money') data.statistics.pnl.netPnl = '999';
+        if (change === 'fingerprint') data.statistics.evidenceId = '0'.repeat(64);
         await route.fulfill({ response, json: data });
       });
       await page.getByRole('button', { name: '重新读取', exact: true }).click();
@@ -400,6 +404,44 @@ test('statistics with a foreign identity or changed totals cannot become current
     }
   } finally {
     await page.unrouteAll({ behavior: 'wait' });
+    await app.close();
+  }
+});
+
+test('cancelling during fingerprint verification rejects its late result', async ({ page }) => {
+  const app = await startFiltersPage(page);
+  try {
+    await expect(page.locator('.review-statistics')).toContainText('净盈亏有效 26 笔');
+    await page.evaluate(() => {
+      const digest = crypto.subtle.digest.bind(crypto.subtle);
+      let paused = false;
+      Object.defineProperty(crypto.subtle, 'digest', {
+        configurable: true,
+        value: async (...args: Parameters<SubtleCrypto['digest']>) => {
+          const result = await digest(...args);
+          if (!paused) {
+            paused = true;
+            document.body.dataset.digestPaused = 'true';
+            await new Promise<void>((resolve) =>
+              window.addEventListener('release-statistics-digest', () => resolve(), { once: true }),
+            );
+          }
+          return result;
+        },
+      });
+    });
+    await page.getByRole('button', { name: '重新读取', exact: true }).click();
+    await expect(page.locator('body')).toHaveAttribute('data-digest-paused', 'true');
+    await page.getByRole('button', { name: '取消读取', exact: true }).click();
+    await expect(page.locator('.review-statistics')).toHaveCount(0);
+    await page.getByLabel('币种筛选', { exact: true }).fill('SOLUSDT');
+    await page.getByRole('button', { name: '应用筛选', exact: true }).click();
+    await expect(page.locator('.review-statistics')).toContainText('净盈亏有效 1 笔');
+    await page.evaluate(() => window.dispatchEvent(new Event('release-statistics-digest')));
+    await expect(page.locator('.review-statistics')).toContainText('全范围 4 笔');
+    await expect(page.locator('.review-page__record')).toHaveCount(4);
+  } finally {
+    await page.evaluate(() => window.dispatchEvent(new Event('release-statistics-digest')));
     await app.close();
   }
 });

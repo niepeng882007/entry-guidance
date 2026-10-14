@@ -674,6 +674,17 @@ export function useReviewPage(source: Source) {
           })
         )
           throw new Error('统计证据与当前交易范围不一致。');
+        if (!globalThis.crypto?.subtle)
+          throw new Error('统计证据校验需要安全连接，请使用 HTTPS 或本机地址。');
+        const digest = await crypto.subtle.digest(
+          'SHA-256',
+          new TextEncoder().encode(JSON.stringify(expected)),
+        );
+        if (current !== sequence || controller.signal.aborted) return;
+        const fingerprint = [...new Uint8Array(digest)]
+          .map((byte) => byte.toString(16).padStart(2, '0'))
+          .join('');
+        if (fingerprint !== statistics.evidenceId) throw new Error('统计证据指纹与内容不一致。');
         filterOptions.value = options as ReviewList['options'];
         if (list.value?.accountId !== next.accountId) evidence.value = null;
         sync.value = next.sync === undefined || next.sync === null ? null : validateSync(next.sync);

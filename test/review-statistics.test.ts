@@ -52,6 +52,10 @@ test('losses, flats, mixed results and an empty range have explicit denominators
   assert.equal(result.pnl.winRate, '0');
   assert.equal(result.pnl.averageLoss, '-3');
   assert.equal(result.pnl.profitFactor, '0');
+  const losses = statistics([{ ...base, id: 'loss-a', netPnl: '-3' }, { ...base, id: 'loss-b', netPnl: '-7' }]);
+  assert.equal(losses.pnl.netPnl, '-10');
+  assert.equal(losses.pnl.averageLoss, '-5');
+  assert.equal(losses.pnl.winRate, '0');
   const mixed = statistics([{ ...base, id: 'win', netPnl: '10' }, { ...base, id: 'loss', netPnl: '-4' }, { ...base, id: 'flat', netPnl: '0' }]);
   assert.equal(mixed.pnl.winRate, '33.33333333');
   assert.equal(mixed.pnl.netPnl, '6');

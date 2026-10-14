@@ -23,7 +23,8 @@ function pnlMetrics(trades: ReviewSummary[]) {
 }
 function metrics(trades: ReviewSummary[]) {
   const valid = trades.filter((trade) => trade.status === 'closed' && trade.netPnl !== null && trade.realizedPnl !== null && trade.commission !== null && trade.fundingNet !== null && !trade.missing.length);
-  const excluded: Exclusion[] = trades.filter((trade) => !valid.includes(trade)).map((trade) => ({ tradeId: trade.id, reasons: [...new Set([
+  const validIds = new Set(valid.map((trade) => trade.id));
+  const excluded: Exclusion[] = trades.filter((trade) => !validIds.has(trade.id)).map((trade) => ({ tradeId: trade.id, reasons: [...new Set([
     ...(trade.status === 'open' ? ['交易尚未结束'] : []), ...trade.missing,
     ...(trade.realizedPnl === null ? ['已实现盈亏缺失'] : []),
     ...(trade.commission === null ? ['手续费缺失或换算待确认'] : []),

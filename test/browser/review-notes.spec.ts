@@ -1,3 +1,4 @@
+import { withStatistics } from './review-statistics-fixtures.ts';
 import { test, expect, type Page } from '@playwright/test';
 import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -227,18 +228,20 @@ test('changing accounts through an unsynced state cannot reuse another account d
     });
     await page.route('**/api/review/trades', (route) =>
       route.fulfill({
-        json: {
+        json: withStatistics({
           ...list,
           total: account ? 1 : 0,
           source: 'binance',
           accountId: account,
           syncStatus: account ? 'synced' : 'not-synced',
           trades: account ? [{ ...list.trades[0], source: 'binance', accountId: account }] : [],
-        },
+        }),
       }),
     );
     await page.route('**/api/review/trades/*', (route) =>
-      route.fulfill({ json: { ...original, source: 'binance', accountId: account } }),
+      route.fulfill({
+        json: { ...original, source: 'binance', accountId: account },
+      }),
     );
     await page.route('**/api/review/journal', (route) =>
       route.fulfill({ json: { source: 'binance', accountId: account, notes: [], tags: [] } }),
