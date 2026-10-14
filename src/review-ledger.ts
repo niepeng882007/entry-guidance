@@ -230,7 +230,7 @@ export class ReviewLedger {
   }
 
   latestMarket(key: string): MarketArchive | null {
-    const row = this.db.prepare('SELECT payload FROM review_market WHERE source=? AND account=? AND cache_key=? ORDER BY queried_at DESC, id DESC LIMIT 1').get(this.identity.source, this.identity.accountId, key);
+    const row = this.db.prepare('SELECT payload FROM review_market WHERE source=? AND account=? AND cache_key=? ORDER BY queried_at DESC, rowid DESC LIMIT 1').get(this.identity.source, this.identity.accountId, key);
     return row ? marketPayload(row.payload) : null;
   }
 

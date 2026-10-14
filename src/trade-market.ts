@@ -106,9 +106,9 @@ export async function readTradeMarket(config: AccountConfig, ledger: ReviewLedge
   const startTime = Math.max(step, Math.floor(first / step) * step - 10 * step);
   const desiredEndTime = trade.closedAt ? Math.floor(Date.parse(trade.closedAt) / step) * step + 11 * step - 1 : now;
   const endTime = Math.min(desiredEndTime, now);
-  const cacheKey = createHash('sha256').update(JSON.stringify([trade.source, trade.accountId, trade.id, trade.evidence, trade.planComparison, interval, startTime, trade.closedAt ? desiredEndTime : Math.floor(endTime / step) * step])).digest('hex');
+  const cacheKey = createHash('sha256').update(JSON.stringify([trade.source, trade.accountId, trade.id, trade.symbol, interval, startTime, trade.closedAt])).digest('hex');
   const cached = ledger.latestMarket(cacheKey);
-  if (cached && cached.endTime === endTime && cached.series.contract.complete && cached.series.mark.complete) return cached;
+  if (cached && cached.endTime === endTime && cached.series.contract.complete && cached.series.mark.complete && JSON.stringify(cached.evidence) === JSON.stringify(trade)) return cached;
   const archive: MarketArchive = cached ?? {
     snapshotId: '', cacheKey, source: trade.source, accountId: trade.accountId, tradeId: trade.id, symbol: trade.symbol, interval,
     queriedAt: new Date(now).toISOString(), startTime, endTime, desiredEndTime, openedAt: trade.openedAt, closedAt: trade.closedAt,
@@ -119,14 +119,22 @@ export async function readTradeMarket(config: AccountConfig, ledger: ReviewLedge
   archive.snapshotId = createHash('sha256').update(randomUUID()).digest('hex');
   if (archive.endTime !== endTime) for (const series of Object.values(archive.series)) series.complete = false;
   archive.endTime = endTime;
+  archive.desiredEndTime = desiredEndTime;
   archive.queriedAt = new Date(now).toISOString();
+  archive.events = tradeEvents(trade);
+  archive.stops = tradeStops(trade);
+  archive.missing = [...trade.missing];
+  archive.evidence = structuredClone(trade);
+  archive.openedAt = trade.openedAt;
+  archive.closedAt = trade.closedAt;
   for (const source of ['contract', 'mark'] as const) {
     const series = archive.series[source];
     if (series.complete) continue;
     series.error = null;
     series.candles = series.candles.filter((row) => row.final);
     coverage(series, archive);
-    series.nextTime = series.gaps[0]?.startTime ?? endTime + 1;
+    // Finish the forward scan before repairing old holes, so a permanent gap cannot starve later evidence.
+    if (series.nextTime > endTime) series.nextTime = series.gaps[0]?.startTime ?? endTime + 1;
     for (let page = 0; page < 4 && series.nextTime <= endTime; page++) {
       const start = series.nextTime, end = Math.min(endTime, start + 499 * step - 1);
       const queriedAt = new Date().toISOString();

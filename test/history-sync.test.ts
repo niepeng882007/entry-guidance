@@ -171,6 +171,51 @@ test('an ordinary historical stop is shown only through its actual linked order 
   assert.equal(chart.openedAt, new Date(opened).toISOString());
 });
 
+test('a permanent early market gap cannot block later available candles', async (t) => {
+  const anchor = Math.floor((Date.now() - 10 * 86_400_000) / 60_000) * 60_000;
+  const historyFills = [{ ...fills[0], time: anchor }, { ...fills[1], time: anchor + 3 * 86_400_000 }];
+  const base = fixture({ '/fapi/v1/userTrades': historyFills, '/fapi/v1/allOrders': historyFills.map((fill) => ({ ...orders[0], orderId: fill.orderId, side: fill.side, time: fill.time, updateTime: fill.time })), '/fapi/v1/income': [], '/fapi/v2/positionRisk': [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0', updateTime: historyFills[1]!.time }] });
+  const app = await start(t, async (url, headers, signal) => {
+    if (['/fapi/v1/klines', '/fapi/v1/markPriceKlines'].includes(url.pathname)) return { status: 200, body: marketRows(url).filter((row) => row[0] !== anchor - 10 * 60_000) };
+    return base(url, headers, signal);
+  });
+  await app.sync();
+  const list = await finished(app);
+  const path = `/api/review/trades/${list.trades[0].id}/market?interval=1m`;
+  const first = await (await app.get(path)).json();
+  const second = await (await app.get(path)).json();
+  assert.equal(first.series.contract.rawCount, 1995);
+  assert.equal(second.series.contract.rawCount, 3991);
+  const third = await (await app.get(path)).json();
+  assert.equal(third.series.contract.rawCount, 4340);
+  assert.equal(third.series.contract.gaps.length, 1);
+  assert.equal(third.series.contract.complete, false);
+  assert.equal(third.series.contract.candles.at(-1).openTime, anchor + 3 * 86_400_000 + 10 * 60_000);
+});
+
+test('open-trade market pagination survives a changing time boundary and same-millisecond retries', async (t) => {
+  const now = Math.floor(Date.now() / 60_000) * 60_000 + 30_000;
+  t.mock.timers.enable({ apis: ['Date'], now });
+  const opening = now - 2 * 86_400_000;
+  const base = fixture({ '/fapi/v1/userTrades': [{ ...fills[0], time: opening }], '/fapi/v1/allOrders': [{ ...orders[0], time: opening, updateTime: opening }], '/fapi/v1/income': [], '/fapi/v2/positionRisk': [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '1', updateTime: opening }] });
+  const app = await start(t, async (url, headers, signal) => ['klines', 'markPriceKlines'].some((suffix) => url.pathname.endsWith(suffix)) ? { status: 200, body: marketRows(url) } : base(url, headers, signal));
+  await app.sync();
+  const list = await finished(app);
+  assert.equal(list.trades[0].status, 'open');
+  const path = `/api/review/trades/${list.trades[0].id}/market?interval=1m`;
+  const first = await (await app.get(path)).json();
+  t.mock.timers.setTime(now + 60_000);
+  const second = await (await app.get(path)).json();
+  assert.equal(first.series.contract.rawCount, 1996);
+  assert.equal(second.series.contract.rawCount, 2892);
+  assert.ok(second.endTime > first.endTime);
+  assert.equal(second.closedAt, null);
+  assert.equal(second.series.contract.candles.at(-1).final, false);
+  assert.equal(second.series.contract.complete, false);
+  const refreshed = await (await app.get(path)).json();
+  assert.equal(refreshed.series.contract.rawCount, second.series.contract.rawCount);
+});
+
 test('history refuses an unverifiable account before reading or archiving history', async (t) => {
   const app = await start(t, async (url) => {
     if (url.pathname === '/sapi/v1/account/apiRestrictions') return { status: 200, body: permissions };
