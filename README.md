@@ -197,7 +197,7 @@ TLS_KEY_FILE=.local/key.pem
 
 固定 GET `/api/account/conditional-orders` 受登录保护、不接受参数，复用既有只读权限与账户口径检查，从全账户 `openAlgoOrders` 读取，经合约元数据确认 USDT 永续范围。原始 JSON 条件标识保留整数 token；整仓退出不以零数量或推定数量显示，已执行量与剩余量没有证据时显示未知。普通和条件来源各自三秒刷新并保留成功时间；失败保留旧值与原时间，逐条标过期，另一来源仍可成功更新。汇总在任一来源未确认时只显示已知列表合计，不宣称已确认全账户总数。成功无委托、来源未知及筛选无结果分别表达，刷新保留仍存在记录的展开与焦点，记录移除不推断成交或撤销。
 
-2026-10-14 核对 [Binance 官方交易文档](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/trade)及[限流规则](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info)：全账户普通和条件请求权重各 40，每三秒各一次仅两类委托约 1600 权重/分钟。任务 05 的跨页面合并和限流退避尚待实施；真实账户持续刷新额度未验收。公开 HTTP 与生产 Chromium/WebKit 验证覆盖固定数量只减仓、整仓退出、止盈止损/追踪参数、触发依据/保护、同标的多空、标识碰撞、分项失败/恢复、记录变化、取消/生命周期、会话失效及 320/390/1280px 与减少动态效果。实体手机与真实账户未验收，本次无账户写操作；最终检查与双轴审查结果见任务 04 记录。
+2026-10-14 核对 [Binance 官方交易文档](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/trade)及[限流规则](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info)：全账户普通和条件请求权重各 40，每三秒各一次仅两类委托约 1600 权重/分钟。任务 05 的跨页面合并和限流退避尚待实施；真实账户持续刷新额度未验收。公开 HTTP 与生产 Chromium/WebKit 验证覆盖固定数量只减仓、整仓退出、止盈止损/追踪参数、触发依据/保护、同标的多空、标识碰撞、分项失败/恢复、记录变化、取消/生命周期、会话失效及 320/390/1280px 与减少动态效果。实体手机与真实账户未验收，本次无账户写操作；`pnpm check` 全部通过（224 项 Node 测试、114 项 Chromium/WebKit 用例），三个视口截图已目视检查，Standards 与 Spec 审查均无发现；完整记录见任务 04。
 
 ### 本单恢复（任务 08）
 
