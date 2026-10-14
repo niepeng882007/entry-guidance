@@ -1,4 +1,4 @@
-import { readAccountOrders, demoAccountOrders } from './orders.ts';
+import { readAccountOrders, demoAccountOrders, readAccountConditionalOrders, demoAccountConditionalOrders } from './orders.ts';
 import { readAccountPositions, demoAccountPositions } from './positions.ts';
 import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -281,9 +281,11 @@ export function createServer(config: Config) {
         return send(error.status, { source: 'binance', code: error.code, error: error.message, attemptedAt: new Date().toISOString() });
       }
     }
-    if (path === '/api/account/assets' || path === '/api/account/positions' || path === '/api/account/orders') {
+    if (path === '/api/account/assets' || path === '/api/account/positions' || path === '/api/account/orders' || path === '/api/account/conditional-orders') {
       try {
-        const data = path === '/api/account/orders'
+        const data = path === '/api/account/conditional-orders'
+          ? config.mode === 'demo' ? demoAccountConditionalOrders() : await readAccountConditionalOrders(config)
+          : path === '/api/account/orders'
           ? config.mode === 'demo' ? demoAccountOrders() : await readAccountOrders(config)
           : path === '/api/account/positions'
           ? config.mode === 'demo' ? demoAccountPositions() : await readAccountPositions(config)

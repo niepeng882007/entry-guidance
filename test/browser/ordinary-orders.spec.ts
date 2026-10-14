@@ -21,18 +21,20 @@ test('ordinary orders show exact fields and retain filter, expansion and focus a
   });
   await page.goto('/account');
   await page.getByRole('button', { name: '活跃委托', exact: true }).click();
-  const orders = page.getByRole('region', { name: '普通活跃委托', exact: true });
+  const orders = page.getByRole('region', { name: '活跃委托', exact: true });
   await expect(orders).toContainText('显示 2 / 全账户 2 张普通委托');
   await expect(orders).toContainText('0.12345677');
   await expect(orders).toContainText('买入 · 多头');
   await expect(orders).toContainText('卖出 · 空头');
-  const filter = orders.getByRole('searchbox', { name: '筛选普通委托标的' });
+  const filter = orders.getByRole('searchbox', { name: '筛选委托标的' });
   await filter.fill('btc');
   await expect(orders).toContainText('显示 1 / 全账户 2 张普通委托');
   const details = orders.getByRole('button', { name: 'BTCUSDT 委托 9007199254740993123 详情' });
   await details.click();
   await details.focus();
-  await expect(orders.getByText('9007199254740993123', { exact: true })).toBeVisible();
+  await expect(
+    orders.locator('article[data-kind=ordinary]').getByText('9007199254740993123', { exact: true }),
+  ).toBeVisible();
   await expect(orders.getByText('59999.12345678 USDT', { exact: true })).toBeVisible();
   await page.clock.runFor(2999);
   expect(requests).toBe(1);
@@ -40,14 +42,18 @@ test('ordinary orders show exact fields and retain filter, expansion and focus a
   await expect.poll(() => requests).toBe(2);
   await expect(details).toBeFocused();
   await expect(filter).toHaveValue('btc');
-  await expect(orders.getByText('9007199254740993123', { exact: true })).toBeVisible();
+  await expect(
+    orders.locator('article[data-kind=ordinary]').getByText('9007199254740993123', { exact: true }),
+  ).toBeVisible();
   await page.getByRole('button', { name: '持仓', exact: true }).click();
   await expect(page.getByRole('heading', { name: '当前持仓', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '活跃委托', exact: true }).click();
   await expect(filter).toHaveValue('btc');
-  await expect(orders.getByText('9007199254740993123', { exact: true })).toBeVisible();
+  await expect(
+    orders.locator('article[data-kind=ordinary]').getByText('9007199254740993123', { exact: true }),
+  ).toBeVisible();
   await filter.fill('none');
-  await expect(orders).toContainText('筛选无结果，全账户仍有 2 张普通委托');
+  await expect(orders).toContainText('筛选无结果，全账户仍有 6 张活跃委托');
 });
 
 test('ordinary order changes replace the active list while errors preserve the old list and time', async ({
@@ -75,7 +81,7 @@ test('ordinary order changes replace the active list while errors preserve the o
   });
   await page.goto('/account');
   await page.getByRole('button', { name: '活跃委托', exact: true }).click();
-  const orders = page.getByRole('region', { name: '普通活跃委托', exact: true });
+  const orders = page.getByRole('region', { name: '活跃委托', exact: true });
   await expect(orders).toContainText('显示 2 / 全账户 2');
   const details = orders.getByRole('button', { name: 'BTCUSDT 委托 9007199254740993123 详情' });
   await details.click();
@@ -98,12 +104,14 @@ test('ordinary order changes replace the active list while errors preserve the o
   await expect(orders).toContainText('显示 3 / 全账户 3');
   await expect(orders).toContainText('0.02345678');
   await expect(orders.getByText('RPI', { exact: true })).toBeVisible();
-  await expect(orders.locator('article h3')).toHaveText([
+  await expect(orders.locator('article[data-kind=ordinary] h3')).toHaveText([
     'BTCUSDT · 买入 · 多头',
     'ETHUSDT · 卖出 · 空头',
     'SOLUSDT · 卖出 · 空头',
   ]);
-  await expect(orders.getByText('9007199254740993123', { exact: true })).toBeVisible();
+  await expect(
+    orders.locator('article[data-kind=ordinary]').getByText('9007199254740993123', { exact: true }),
+  ).toBeVisible();
   variant = 'removed';
   await page.getByRole('button', { name: '手动刷新' }).click();
   await expect(details).toHaveCount(0);
@@ -138,113 +146,123 @@ test('ordinary orders reject unavailable or inconsistent data and recover withou
   });
   await page.goto('/account');
   await page.getByRole('button', { name: '活跃委托', exact: true }).click();
-  const orders = page.getByRole('region', { name: '普通活跃委托', exact: true });
+  const orders = page.getByRole('region', { name: '活跃委托', exact: true });
   await expect(orders).toContainText('尚无成功普通委托数据');
   await expect(orders).not.toContainText('成功查询：当前全账户无普通活跃委托');
   for (variant of ['source', 'time', 'remaining', 'negative', 'id']) {
     await page.getByRole('button', { name: '手动刷新' }).click();
-    await expect(orders.locator('article')).toHaveCount(0);
+    await expect(orders.locator('article[data-kind=ordinary]')).toHaveCount(0);
     await expect(orders).toContainText('无效');
     await expect(page.getByRole('status')).toContainText('模拟查询成功');
   }
   variant = 'ok';
   await page.getByRole('button', { name: '手动刷新' }).click();
-  await expect(orders.locator('article')).toHaveCount(2);
+  await expect(orders.locator('article[data-kind=ordinary]')).toHaveCount(2);
   variant = 'older';
   await page.getByRole('button', { name: '手动刷新' }).click();
   await expect(orders).toContainText('早于上次成功查询');
-  await expect(orders.locator('article')).toHaveCount(2);
+  await expect(orders.locator('article[data-kind=ordinary]')).toHaveCount(2);
 });
 
-test('busy ordinary reads pause on leaving and canceled responses cannot replace the resumed list', async ({
-  page,
-  context,
-}) => {
-  await login(page);
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
-  await page.clock.setFixedTime(new Date());
-  let requests = 0,
+for (const kind of ['ordinary', 'conditional'] as const) {
+  const path = kind === 'ordinary' ? '**/api/account/orders' : '**/api/account/conditional-orders';
+  const name = kind === 'ordinary' ? '普通委托' : '条件委托';
+  test(`busy ${kind} reads pause on leaving and canceled responses cannot replace the resumed list`, async ({
+    page,
+    context,
+  }) => {
+    await login(page);
+    await page.clock.install();
+    await page.clock.pauseAt(new Date());
+    await page.clock.setFixedTime(new Date());
+    let requests = 0,
+      hold = false;
+    let release!: () => void;
+    await page.route(path, async (route) => {
+      requests++;
+      const data = await (await route.fetch()).json();
+      if (hold) {
+        data.orders = [];
+        await new Promise<void>((resolve) => (release = resolve));
+      }
+      await route.fulfill({ json: data });
+    });
+    await page.goto('/account');
+    await page.getByRole('button', { name: '活跃委托', exact: true }).click();
+    const orders = page.getByRole('region', { name: '活跃委托', exact: true });
+    await expect(orders.locator(`article[data-kind=${kind}]`)).toHaveCount(
+      kind === 'ordinary' ? 2 : 4,
+    );
+    hold = true;
+    await page.getByRole('button', { name: '手动刷新' }).click();
+    await expect.poll(() => typeof release).toBe('function');
+    await page.clock.runFor(9000);
+    expect(requests).toBe(2);
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide')));
+    await expect(orders).toContainText('页面已离开');
     hold = false;
-  let release!: () => void;
-  await page.route('**/api/account/orders', async (route) => {
-    requests++;
-    const data = await (await route.fetch()).json();
-    if (hold) {
-      data.orders = [];
-      await new Promise<void>((resolve) => (release = resolve));
-    }
-    await route.fulfill({ json: data });
+    release();
+    await expect(page.getByRole('button', { name: '手动刷新' })).toBeEnabled();
+    await page.clock.runFor(9000);
+    expect(requests).toBe(2);
+    await expect(orders.locator(`article[data-kind=${kind}]`)).toHaveCount(
+      kind === 'ordinary' ? 2 : 4,
+    );
+    await page.evaluate(() =>
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })),
+    );
+    await expect(orders).toContainText(`${name}查询成功`);
+    expect(requests).toBe(3);
+    await context.setOffline(true);
+    await expect(orders).toContainText('网络已断开');
+    await page.clock.runFor(9000);
+    expect(requests).toBe(3);
+    await context.setOffline(false);
+    await expect(orders).toContainText(`${name}查询成功`);
+    expect(requests).toBe(4);
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await expect(orders).toContainText('页面已隐藏');
+    await page.clock.runFor(9000);
+    expect(requests).toBe(4);
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await expect(orders).toContainText(`${name}查询成功`);
+    expect(requests).toBe(5);
   });
-  await page.goto('/account');
-  await page.getByRole('button', { name: '活跃委托', exact: true }).click();
-  const orders = page.getByRole('region', { name: '普通活跃委托', exact: true });
-  await expect(orders.locator('article')).toHaveCount(2);
-  hold = true;
-  await page.getByRole('button', { name: '手动刷新' }).click();
-  await expect.poll(() => typeof release).toBe('function');
-  await page.clock.runFor(9000);
-  expect(requests).toBe(2);
-  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide')));
-  await expect(orders).toContainText('页面已离开');
-  hold = false;
-  release();
-  await expect(page.getByRole('button', { name: '手动刷新' })).toBeEnabled();
-  await page.clock.runFor(9000);
-  expect(requests).toBe(2);
-  await expect(orders.locator('article')).toHaveCount(2);
-  await page.evaluate(() =>
-    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })),
-  );
-  await expect(orders).toContainText('普通委托查询成功');
-  expect(requests).toBe(3);
-  await context.setOffline(true);
-  await expect(orders).toContainText('网络已断开');
-  await page.clock.runFor(9000);
-  expect(requests).toBe(3);
-  await context.setOffline(false);
-  await expect(orders).toContainText('普通委托查询成功');
-  expect(requests).toBe(4);
-  await page.evaluate(() => {
-    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
-    document.dispatchEvent(new Event('visibilitychange'));
-  });
-  await expect(orders).toContainText('页面已隐藏');
-  await page.clock.runFor(9000);
-  expect(requests).toBe(4);
-  await page.evaluate(() => {
-    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
-    document.dispatchEvent(new Event('visibilitychange'));
-  });
-  await expect(orders).toContainText('普通委托查询成功');
-  expect(requests).toBe(5);
-});
 
-test('ordinary order session expiry revokes all snapshots and stops polling', async ({ page }) => {
-  await login(page);
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
-  await page.clock.setFixedTime(new Date());
-  let requests = 0,
-    expired = false;
-  await page.route('**/api/account/orders', async (route) => {
-    requests++;
-    if (expired) await route.fulfill({ status: 401, json: { error: '请先登录。' } });
-    else await route.continue();
+  test(`${kind} order session expiry revokes all snapshots and stops polling`, async ({ page }) => {
+    await login(page);
+    await page.clock.install();
+    await page.clock.pauseAt(new Date());
+    await page.clock.setFixedTime(new Date());
+    let requests = 0,
+      expired = false;
+    await page.route(path, async (route) => {
+      requests++;
+      if (expired) await route.fulfill({ status: 401, json: { error: '请先登录。' } });
+      else await route.continue();
+    });
+    await page.goto('/account');
+    await page.getByRole('button', { name: '活跃委托', exact: true }).click();
+    const orders = page.getByRole('region', { name: '活跃委托', exact: true });
+    await expect(orders.locator(`article[data-kind=${kind}]`)).toHaveCount(
+      kind === 'ordinary' ? 2 : 4,
+    );
+    expired = true;
+    await page.getByRole('button', { name: '手动刷新' }).click();
+    await expect(page.getByRole('link', { name: '重新登录' })).toBeVisible();
+    await expect(orders).toContainText('登录已过期');
+    await expect(page.getByRole('status')).toContainText('已过期');
+    await expect(page.getByRole('button', { name: '手动刷新' })).toBeDisabled();
+    await page.clock.runFor(30_000);
+    expect(requests).toBe(2);
   });
-  await page.goto('/account');
-  await page.getByRole('button', { name: '活跃委托', exact: true }).click();
-  const orders = page.getByRole('region', { name: '普通活跃委托', exact: true });
-  await expect(orders.locator('article')).toHaveCount(2);
-  expired = true;
-  await page.getByRole('button', { name: '手动刷新' }).click();
-  await expect(page.getByRole('link', { name: '重新登录' })).toBeVisible();
-  await expect(orders).toContainText('登录已过期');
-  await expect(page.getByRole('status')).toContainText('已过期');
-  await expect(page.getByRole('button', { name: '手动刷新' })).toBeDisabled();
-  await page.clock.runFor(30_000);
-  expect(requests).toBe(2);
-});
+}
 
 for (const width of [320, 390, 1280])
   test(`ordinary order values and focus fit ${width}px with reduced motion`, async ({
@@ -255,19 +273,34 @@ for (const width of [320, 390, 1280])
     await login(page);
     await page.goto('/account');
     await page.getByRole('button', { name: '活跃委托', exact: true }).click();
-    const orders = page.getByRole('region', { name: '普通活跃委托', exact: true });
-    await expect(orders.locator('article')).toHaveCount(2);
-    for (const details of await orders.getByRole('button', { name: /详情$/ }).all())
+    const orders = page.getByRole('region', { name: '活跃委托', exact: true });
+    await expect(orders.locator('article[data-kind=ordinary]')).toHaveCount(2);
+    for (const details of await orders
+      .locator('article[data-kind=ordinary]')
+      .getByRole('button', { name: /详情$/ })
+      .all())
       await details.click();
-    await expect(orders.getByText('9007199254740993123', { exact: true })).toBeVisible();
+    await expect(
+      orders
+        .locator('article[data-kind=ordinary]')
+        .getByText('9007199254740993123', { exact: true }),
+    ).toBeVisible();
     await expect(orders.getByText('不适用 · 尚未成交', { exact: true })).toBeVisible();
     await expect(orders.getByText('未知 · 未返回', { exact: true }).first()).toBeVisible();
     const details = orders.getByRole('button', { name: 'BTCUSDT 委托 9007199254740993123 详情' });
     await details.focus();
     await page.keyboard.press('Space');
-    await expect(orders.getByText('9007199254740993123', { exact: true })).toBeHidden();
+    await expect(
+      orders
+        .locator('article[data-kind=ordinary]')
+        .getByText('9007199254740993123', { exact: true }),
+    ).toBeHidden();
     await page.keyboard.press('Space');
-    await expect(orders.getByText('9007199254740993123', { exact: true })).toBeVisible();
+    await expect(
+      orders
+        .locator('article[data-kind=ordinary]')
+        .getByText('9007199254740993123', { exact: true }),
+    ).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true,
     );

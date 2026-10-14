@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import OrdinaryOrders from './components/OrdinaryOrders.vue';
+import ActiveOrders from './components/ActiveOrders.vue';
 import CurrentPositions from './components/CurrentPositions.vue';
 import { useAccountPage } from './useAccountPage.ts';
 
@@ -19,6 +19,9 @@ const {
   positions,
   positionsStale,
   positionsStatus,
+  conditionalOrders,
+  conditionalOrdersStale,
+  conditionalOrdersStatus,
   orders,
   ordersStale,
   ordersStatus,
@@ -139,10 +142,13 @@ function time(value: string | undefined) {
       :last="last"
       :funding="funding"
     />
-    <OrdinaryOrders
+    <ActiveOrders
       id="account-orders"
       v-show="view === 'orders'"
       :orders="orders"
+      :conditional-orders="conditionalOrders"
+      :conditional-stale="conditionalOrdersStale"
+      :conditional-status="conditionalOrdersStatus"
       :stale="ordersStale"
       :status="ordersStatus"
       :attempted-at="attemptedAt"
