@@ -1,6 +1,6 @@
 {
-  "date": "2026-09-22",
-  "framework": "native HTML/CSS/JavaScript",
+  "date": "2026-10-14",
+  "framework": "Vue 3 + TypeScript + Vite",
   "font": "existing system CJK stack; local monospace for balances",
   "palette": "shared monochrome login/workbench; semantic colour for errors, warnings and verification",
   "motion": "CSS only; no dependency",
@@ -10,29 +10,32 @@
     "preserve all calculation/state contracts; native select data with custom combobox presentation"
   ],
   "validation": {
+    "command": "pnpm run check --config /tmp/entry-home-sidebar-playwright.config.ts",
+    "reason": "isolated demo port 4181 while concurrent validation uses 4179; repository config unchanged",
     "typecheck": "pass",
-    "tests": "178 passed (including concurrent margin-mode changes)",
+    "lint": "pass",
+    "format": "pass",
+    "build": "pass",
+    "nodeTests": 270,
+    "browserTests": 150,
     "viewports": [
       320,
       375,
       390,
       414,
       768,
+      960,
+      961,
       1280
     ],
-    "browser": "Chromium, isolated local demo; no real account access",
+    "shortViewport": "320x330",
+    "browser": "Chromium and WebKit; local demo only",
     "checks": [
-      "no horizontal overflow or clipped buttons",
-      "plan and result navigation; Enter/Tab and visible focus",
-      "empty draft and ungenerated result states",
-      "single-level market and two-level limit plans",
-      "copy limit price 100",
-      "verified, query failure, stale card and disabled copy",
-      "320x330 keyboard-space simulation",
-      "reduced-motion JavaScript branch via matchMedia stub; CSS fallback inspected",
-      "login components unified with the workbench",
-      "select browser harness: 19 assertions; dynamic options, value restoration, input/change ordering, keyboard and disabled states",
-      "select menus: long options wrap and scroll within a 320px viewport; saved-template application synchronizes visible controls"
+      "home does not query business APIs, including after feature-page return",
+      "drawer forward/reverse Tab cycle, Esc/backdrop/button close and focus restoration",
+      "desktop/mobile breakpoint and current page",
+      "entry section focus, scroll selection, short viewport and reduced motion",
+      "existing form, card invalidation, recovery, account refresh, review notes and plan comparison"
     ],
     "not_tested": [
       "physical iOS keyboard and app switching",
@@ -46,10 +49,10 @@
       "restraint": 5,
       "variety": 4,
       "exceptions": [
-        "project system fonts retained",
-        "project single stylesheet retained instead of tokens.css",
-        "marketing-only gates not applicable"
+        "existing system fonts and single stylesheet retained",
+        "feature internals retained; marketing gates not applicable"
       ]
     }
-  }
+  },
+  "scope": "shared app shell, home, desktop sidebar, mobile drawer, entry section navigation"
 }

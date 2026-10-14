@@ -92,6 +92,25 @@ test('a nav click keeps its module current until the user takes over scrolling',
   await expect(link('账户摘要')).toHaveAttribute('aria-current', 'location');
 });
 
+test('short mobile viewport follows scrolling when section navigation is not sticky', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 320, height: 330 });
+  const link = page.locator('.module-nav__link[href="#account-module"]');
+  await expect(page.locator('.module-nav')).toHaveCSS('position', 'static');
+  await page.evaluate(() =>
+    document
+      .getElementById('account-module')
+      ?.scrollIntoView({ block: 'start', behavior: 'instant' }),
+  );
+  await expect(link).toHaveAttribute('aria-current', 'location');
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+  await expect(page.locator('.module-nav__link[href="#plan-module"]')).toHaveAttribute(
+    'aria-current',
+    'location',
+  );
+});
+
 test('navigation animates scrolling and selection, respecting reduced motion', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const link = page.locator('.module-nav__link[href="#review-module"]');

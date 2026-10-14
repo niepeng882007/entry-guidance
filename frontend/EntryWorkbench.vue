@@ -38,7 +38,8 @@ function scrollKeyReleasesNavigation(event: KeyboardEvent) {
 
 function syncModuleCurrent(modules: HTMLElement[], links: Element[]) {
   const navigation = document.querySelector('.module-nav');
-  const offset = (navigation?.getBoundingClientRect().bottom ?? 0) + 24;
+  const sticky = navigation && getComputedStyle(navigation).position === 'sticky';
+  const offset = (sticky ? navigation.getBoundingClientRect().bottom : 0) + 24;
   const root = document.documentElement;
   const atBottom =
     root.scrollHeight > window.innerHeight + 1 &&
