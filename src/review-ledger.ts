@@ -162,6 +162,7 @@ export class ReviewLedger {
           kind TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL,
           PRIMARY KEY (source, account, symbol, kind, id)
         ) STRICT;
+        CREATE INDEX IF NOT EXISTS history_raw_identity ON history_raw(source, account, kind, id);
         CREATE TABLE IF NOT EXISTS history_sync (
           source TEXT NOT NULL, account TEXT NOT NULL, symbol TEXT NOT NULL, payload TEXT NOT NULL,
           PRIMARY KEY (source, account, symbol)
