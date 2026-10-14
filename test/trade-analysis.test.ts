@@ -20,7 +20,7 @@ async function app(t: TestContext, llm = simulatedModel(), reviewLedgerPath?: st
   const base = `http://127.0.0.1:${address.port}`;
   const response = await fetch(`${base}/login`, { method: 'POST', redirect: 'manual', headers: { Origin: base, 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'password=analysis-test-only' });
   const cookie = response.headers.get('set-cookie')!.split(';')[0]!;
-  const path = `/api/review/trades/${tradeId}/analysis`;
+  const path = tradeId === '$batch' ? '/api/review/analysis' : `/api/review/trades/${tradeId}/analysis`;
   return { server, base, cookie, get: () => fetch(`${base}${path}`, { headers: { Cookie: cookie } }), post: (data: unknown) => fetch(`${base}${path}`, { method: 'POST', headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify(data) }) };
 }
 async function finished(application: Awaited<ReturnType<typeof app>>) {
@@ -33,14 +33,14 @@ async function finished(application: Awaited<ReturnType<typeof app>>) {
 }
 const startInput = { includeNotes: false, regenerate: false, query: '' };
 
-test('logout during a streamed continue body cannot initiate another paid request', async (t) => {
+for (const target of ['BTCUSDT-demo-fill-1', '$batch']) test(`${target}: logout during a streamed continue body cannot initiate another paid request`, async (t) => {
   let calls = 0;
-  const application = await app(t, simulatedModel(1000000, async (body) => { calls++; return modelResponse(body, { text: '{invalid' }); }));
+  const application = await app(t, simulatedModel(1000000, async (body) => { calls++; return modelResponse(body, { text: '{invalid' }); }), undefined, target);
   const task = await (await application.post(startInput)).json(); await finished(application);
   const body = JSON.stringify({ action: 'continue', taskId: task.id });
   let complete!: (response: { status: number; body: string }) => void;
   const result = new Promise<{ status: number; body: string }>((resolve) => { complete = resolve; });
-  const request = httpRequest(`${application.base}/api/review/trades/BTCUSDT-demo-fill-1/analysis`, { method: 'POST', headers: { Cookie: application.cookie, Origin: application.base, 'Content-Type': 'application/json' } }, (response) => {
+  const request = httpRequest(`${application.base}${target === '$batch' ? '/api/review/analysis' : '/api/review/trades/BTCUSDT-demo-fill-1/analysis'}`, { method: 'POST', headers: { Cookie: application.cookie, Origin: application.base, 'Content-Type': 'application/json' } }, (response) => {
     let body = ''; response.on('data', (chunk) => { body += chunk; }); response.on('end', () => complete({ status: response.statusCode!, body }));
   });
   request.write(body.slice(0, 2));
@@ -64,7 +64,7 @@ test('synthesis preserves fact and user classifications while explicitly citing 
   assert.match(task.report!.observations[0]!.refs[0]!, /^(segment|synthesis)-\d+\/observations\/\d+$/);
 });
 
-test('simultaneous reuse requests create one task instead of duplicate paid requests', async (t) => {
+for (const target of ['BTCUSDT-demo-fill-1', '$batch']) test(`${target}: simultaneous reuse requests create one task instead of duplicate paid requests`, async (t) => {
   let metadata = 0, paid = 0, release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const llm = simulatedModel(); const original = llm.transport!;
@@ -73,10 +73,10 @@ test('simultaneous reuse requests create one task instead of duplicate paid requ
     else paid++;
     return original(url, init);
   };
-  const application = await app(t, llm);
+  const application = await app(t, llm, undefined, target);
   const [a, b] = await Promise.all([application.post(startInput), application.post(startInput)]);
   assert.equal((await a.json()).id, (await b.json()).id);
-  await finished(application); assert.equal(paid, 1);
+  await finished(application); assert.equal(paid, target === '$batch' ? 2 : 1);
 });
 
 test('ledger protects report structure, complete coverage and source/account isolation', async (t) => {
@@ -190,15 +190,15 @@ test('saved notes are optional, user evidence cannot masquerade as facts, and or
   assert.equal(second.status, 'failed'); assert.equal(second.snapshot.notes[0]!.freeNote, '用户允许的已保存内容');
 });
 
-test('server interruption is durable and never automatically restarts a paid request', async (t) => {
+for (const target of ['BTCUSDT-demo-fill-1', '$batch']) test(`${target}: server interruption is durable and never automatically restarts a paid request`, async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'analysis-stop-')); t.after(() => rmSync(directory, { recursive: true, force: true }));
   let calls = 0;
   const llm = simulatedModel(1000000, async (_body, signal) => { calls++; return new Promise<Response>((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('stopped')), { once: true })); });
   const path = join(directory, 'demo.sqlite');
-  const application = await app(t, llm, path);
+  const application = await app(t, llm, path, target);
   const task = await (await application.post(startInput)).json(); assert.equal(task.status, 'running');
   await new Promise<void>((resolve) => { application.server.closeAllConnections(); application.server.close(() => resolve()); });
-  const restarted = await app(t, llm, path);
+  const restarted = await app(t, llm, path, target);
   const tasks = (await (await restarted.get()).json()).tasks;
   assert.equal(tasks[0].status, 'interrupted'); assert.equal(calls, 1);
 });
@@ -221,7 +221,7 @@ test('oversized context covers every evidence record and synthesizes only comple
   assert.ok(task.requests.every((request) => request.status === 'complete' && request.usage?.totalTokens === 10));
 });
 
-test('cancelled tasks keep frozen evidence, continue explicitly and reuse a persisted report', async (t) => {
+for (const target of ['BTCUSDT-demo-fill-1', '$batch']) test(`${target}: cancelled tasks keep frozen evidence, continue explicitly and reuse a persisted report`, async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'analysis-http-')); t.after(() => rmSync(directory, { recursive: true, force: true }));
   let waiting = true, calls = 0;
   const llm = simulatedModel(1000000, async (body, signal) => {
@@ -229,7 +229,7 @@ test('cancelled tasks keep frozen evidence, continue explicitly and reuse a pers
     if (waiting) await new Promise<void>((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
     return modelResponse(body);
   });
-  const application = await app(t, llm, join(directory, 'demo.sqlite'));
+  const application = await app(t, llm, join(directory, 'demo.sqlite'), target);
   const first = await (await application.post(startInput)).json() as AnalysisTask;
   assert.equal((await application.post({ action: 'cancel', taskId: first.id })).status, 200);
   const cancelled = await finished(application); assert.equal(cancelled.status, 'cancelled'); assert.equal(cancelled.report, null);
@@ -238,11 +238,11 @@ test('cancelled tasks keep frozen evidence, continue explicitly and reuse a pers
   const complete = await finished(application); assert.equal(complete.status, 'complete');
   assert.deepEqual(complete.snapshot, first.snapshot);
   assert.equal(complete.requests[0]!.attempts[0]!.usage, null);
-  const reused = await (await application.post(startInput)).json(); assert.equal(reused.id, first.id); assert.equal(calls, 2);
+  const reused = await (await application.post(startInput)).json(); assert.equal(reused.id, first.id); assert.equal(calls, target === '$batch' ? 3 : 2);
   await new Promise<void>((resolve) => { application.server.closeAllConnections(); application.server.close(() => resolve()); });
-  const restarted = await app(t, llm, join(directory, 'demo.sqlite'));
+  const restarted = await app(t, llm, join(directory, 'demo.sqlite'), target);
   assert.equal((await (await restarted.get()).json()).tasks[0].status, 'complete');
-  assert.equal(calls, 2);
+  assert.equal(calls, target === '$batch' ? 3 : 2);
 });
 
 test('single trade analysis starts only explicitly and retains its report', async (t) => {
@@ -272,7 +272,7 @@ test('single trade analysis starts only explicitly and retains its report', asyn
   const started = await fetch(`${base}${path}`, { method: 'POST', headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify({ includeNotes: false, regenerate: false, query: '' }) });
   assert.equal(started.status, 202);
   const task = await started.json() as AnalysisTask;
-  assert.equal(task.snapshot.trade.id, 'BTCUSDT-demo-fill-1');
+  assert.equal(task.snapshot.trade!.id, 'BTCUSDT-demo-fill-1');
   assert.equal(task.snapshot.notes.length, 0);
   assert.ok(task.snapshot.missing.some((item) => item.includes('行情')));
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -285,4 +285,154 @@ test('single trade analysis starts only explicitly and retains its report', asyn
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.fail('analysis did not complete');
+});
+
+
+test('batch freezes the full cross-page and multi-symbol range with independent valid and excluded samples', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'batch-range-')); t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'demo.sqlite'); const ids = seedReviewFilters(path);
+  let captured = '';
+  const application = await app(t, simulatedModel(1000000, async (body) => { captured += String(body.input); return modelResponse(body); }), path, '$batch');
+  assert.equal((await application.get()).status, 200);
+  assert.equal((await application.post({ ...startInput, query: 'page=2' })).status, 202);
+  const task = await finished(application);
+  assert.equal(task.status, 'complete'); assert.equal(task.tradeId, '$batch');
+  assert.equal(task.snapshot.trades?.length, 29); assert.equal(task.snapshot.statistics.total, 29);
+  assert.equal(task.snapshot.statistics.pnl.samples, 26); assert.equal(task.snapshot.statistics.pnl.excluded.length, 3);
+  assert.ok(task.snapshot.trades?.some((trade) => trade.id === ids.pending));
+  assert.ok(task.snapshot.trades?.some((trade) => trade.id === ids.open));
+  assert.ok(captured.includes('ETHUSDT') && captured.includes('SOLUSDT'));
+  assert.ok(!captured.includes('demo-account'));
+  const ledger = new ReviewLedger(path, { source: 'demo', accountId: 'demo-account' }); t.after(() => ledger.close());
+  assert.equal(ledger.analysis(task.id)?.snapshot.trades?.length, 29);
+  const invalid = structuredClone(task); invalid.snapshot.trades!.pop();
+  assert.throws(() => ledger.saveAnalysis(invalid), /范围|覆盖|交易/);
+  const omitted = structuredClone(task);
+  omitted.records = omitted.records.filter((row) => row.tradeId !== ids.pending);
+  for (const request of omitted.requests) request.records = request.records.filter((row) => row.tradeId !== ids.pending);
+  assert.throws(() => ledger.saveAnalysis(omitted), /范围|覆盖|交易/);
+});
+
+
+test('batch always finishes through an explicit synthesis citing completed results, even with one evidence segment', async (t) => {
+  const application = await app(t, simulatedModel(), undefined, '$batch');
+  await application.post(startInput); const task = await finished(application);
+  assert.equal(task.status, 'complete'); assert.equal(task.requests.length, 2);
+  assert.equal(task.requests.at(-1)!.stage, 'synthesis');
+  assert.deepEqual(task.requests.at(-1)!.segments, ['segment-1']);
+  assert.match(task.report!.observations[0]!.refs[0]!, /^segment-/);
+});
+
+
+test('100 selected trades are accepted but 101 (even excluded trades) and empty selections are refused before model calls', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'batch-limit-')); t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'demo.sqlite');
+  const ledger = new ReviewLedger(path, { source: 'demo', accountId: 'demo-account' }); t.after(() => ledger.close());
+  const id = ledger.archive((await import('../src/review-ledger.ts')).demoTrade()); const original = ledger.get(id)!;
+  const trades = Array.from({ length: 101 }, (_, index) => index === 0 ? structuredClone(original) : ({ ...structuredClone(original), id: `BTCUSDT-limit-${index}`, status: 'incomplete' as const, netPnl: null, missing: ['成交链缺口'] }));
+  let calls = 0, metadata = 0;
+  const llm = simulatedModel(10000000, async (body) => { calls++; return modelResponse(body); }); const transport = llm.transport!;
+  llm.transport = async (url, init) => { if (String(url).endsWith('/models')) metadata++; return transport(url, init); };
+  const application = await app(t, llm, path, '$batch');
+  await application.get(); ledger.project('BTCUSDT', trades.slice(0, 100));
+  assert.equal((await application.post(startInput)).status, 202);
+  const task = await finished(application); assert.equal(task.snapshot.trades?.length, 100); assert.equal(task.snapshot.statistics.pnl.samples, 1); assert.equal(task.status, 'complete');
+  ledger.project('BTCUSDT', trades);
+  const over = await application.post(startInput); assert.equal(over.status, 400); assert.match((await over.json()).error, /101.*100.*缩小/);
+  assert.equal((await application.post({ ...startInput, query: 'symbol=ETHUSDT' })).status, 400);
+  assert.equal(calls, 2); assert.equal(metadata, 1);
+});
+
+test('batch segments preserve complete trade/time coverage through failure and explicit continue', async (t) => {
+  let calls = 0, fail = true; const seen = new Set<string>();
+  const application = await app(t, simulatedModel(12000, async (body) => {
+    calls++; const input = JSON.parse(String(body.input));
+    if (calls === 2 && fail) throw new Error('network failed');
+    for (const row of input.records) seen.add(row.id);
+    return modelResponse(body);
+  }), undefined, '$batch');
+  const started = await (await application.post(startInput)).json(); const failed = await finished(application);
+  assert.equal(failed.status, 'failed'); assert.equal(failed.report, null); assert.equal(failed.requests[0]!.status, 'complete');
+  fail = false; await application.post({ action: 'continue', taskId: started.id }); const task = await finished(application);
+  assert.equal(task.status, 'complete'); assert.equal(task.requests[0]!.attempts.length, 1);
+  for (const row of task.records) assert.ok(seen.has(row.id), row.path);
+  assert.ok(task.requests.filter((row) => row.stage === 'evidence').some((row) => row.records.some((record) => record.tradeId === 'BTCUSDT-demo-fill-1' && record.time !== null)));
+});
+
+
+test('model style suggestions are separate inferences, reference selected trades and never write personal tags', async (t) => {
+  const application = await app(t, simulatedModel(1000000, async (body) => {
+    const input = JSON.parse(String(body.input));
+    const ref = input.stage === 'evidence' ? input.records.find((row: { tradeId: string }) => row.tradeId === 'BTCUSDT-demo-fill-1').id : input.summaries[0].styleSuggestions[0].id;
+    return modelResponse(body, { text: JSON.stringify({ observations: [{ text: '证据不足，风格需确认', kind: 'inference', timing: 'unknown', refs: [ref] }], evidence: [], improvements: [], nextChecks: [], styleSuggestions: [{ tradeId: 'BTCUSDT-demo-fill-1', name: '顺势', refs: [ref] }] }) });
+  }), undefined, '$batch');
+  await application.post(startInput); const task = await finished(application);
+  assert.equal(task.status, 'complete'); assert.equal(task.report!.styleSuggestions?.[0]?.name, '顺势');
+  const journal = await (await fetch(`${application.base}/api/review/journal`, { headers: { Cookie: application.cookie } })).json();
+  assert.deepEqual(journal.tags, []); assert.deepEqual(journal.notes, []);
+});
+
+
+test('batch cancellation and explicit continue keep the original range, saved notes, tags and all archived market periods while evidence changes', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'batch-frozen-')); t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'demo.sqlite'); const ids = seedReviewFilters(path);
+  const ledger = new ReviewLedger(path, { source: 'demo', accountId: 'demo-account' }); t.after(() => ledger.close());
+  const trade = ledger.get(ids.start)!; const note = ledger.journal().notes.find((row) => row.trade.id === trade.id)!;
+  const fields = { noteId: note.id, version: note.version, basis: trade.noteBasis, entryReason: '原始理由', exitReason: '', executionProblem: '', improvement: '', freeNote: '旧笔记', tagIds: note.tagIds };
+  ledger.saveNote(trade.id, fields);
+  let waiting = true, calls = 0; let entered!: () => void;
+  const gate = new Promise<void>((resolve) => { entered = resolve; });
+  const application = await app(t, simulatedModel(1000000, async (body, signal) => {
+    calls++;
+    if (waiting) { entered(); await new Promise<void>((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true })); }
+    return modelResponse(body);
+  }), path, '$batch');
+  for (const id of ['BTCUSDT-demo-fill-1', trade.id]) assert.equal((await fetch(`${application.base}/api/review/trades/${id}/market?interval=1h`, { headers: { Cookie: application.cookie } })).status, 200);
+  const started = await (await application.post({ ...startInput, includeNotes: true })).json() as AnalysisTask; await gate;
+  const saved = ledger.journal().notes.find((row) => row.id === note.id)!;
+  ledger.saveNote(trade.id, { ...fields, version: saved.version, freeNote: '新笔记' });
+  const tag = ledger.journal().tags.find((row) => row.id === note.tagIds[0])!;
+  ledger.saveTag({ id: tag.id, version: tag.version, active: tag.active, name: '改名后标签' });
+  const others = ledger.list().filter((row) => row.symbol === 'ETHUSDT').map((row) => ledger.get(row.id)!);
+  ledger.project('ETHUSDT', [...others, { ...structuredClone(trade), id: 'ETHUSDT-new-trade' }]);
+  await fetch(`${application.base}/api/review/trades/${trade.id}/market?interval=5m`, { headers: { Cookie: application.cookie } });
+  assert.equal(calls, 1);
+  const cancelled = await (await application.post({ action: 'cancel', taskId: started.id })).json() as AnalysisTask;
+  assert.equal(cancelled.status, 'cancelled'); assert.deepEqual(cancelled.snapshot, started.snapshot);
+  waiting = false; await application.post({ action: 'continue', taskId: started.id }); const complete = await finished(application);
+  assert.equal(complete.status, 'complete'); assert.deepEqual(complete.snapshot, started.snapshot);
+  assert.equal(complete.snapshot.trades?.length, 29); assert.equal(complete.snapshot.markets.length, 2);
+  assert.equal(complete.snapshot.notes.find((row) => row.tradeId === trade.id)?.freeNote, '旧笔记');
+  assert.ok(!complete.snapshot.tags.some((row) => row.name === '改名后标签'));
+  assert.equal(complete.requests[0]!.attempts[0]!.usage, null);
+  await application.post({ ...startInput, query: 'symbol=SOLUSDT', regenerate: true }); const next = await finished(application);
+  assert.equal(next.snapshot.trades?.length, 4); assert.notEqual(next.id, complete.id);
+  assert.equal((await (await application.get()).json()).tasks.length, 2);
+});
+
+for (const fault of ['unselected', 'unrelated', 'truncated']) test(`batch rejects ${fault} model output and keeps the incomplete report and unknown usage`, async (t) => {
+  const application = await app(t, simulatedModel(1000000, async (body) => {
+    if (fault === 'truncated') return modelResponse(body, { status: 'incomplete' });
+    const input = JSON.parse(String(body.input));
+    const ref = fault === 'unrelated' ? input.records.find((row: { tradeId: string }) => row.tradeId === '$scope').id : input.records[0].id;
+    return modelResponse(body, { text: JSON.stringify({ observations: [{ text: '证据不足', kind: 'inference', timing: 'unknown', refs: [ref] }], evidence: [], improvements: [], nextChecks: [], styleSuggestions: [{ tradeId: fault === 'unselected' ? 'foreign-trade' : 'BTCUSDT-demo-fill-1', name: '顺势', refs: [ref] }] }) });
+  }), undefined, '$batch');
+  await application.post(startInput); const task = await finished(application);
+  assert.equal(task.status, 'failed'); assert.equal(task.report, null); assert.equal(task.requests[0]!.attempts[0]!.usage, null);
+});
+
+test('batch HTTP protects login, origin, input filters and single-trade task boundaries without extra model calls', async (t) => {
+  let calls = 0;
+  const application = await app(t, simulatedModel(1000000, async (body) => { calls++; return modelResponse(body); }), undefined, '$batch');
+  const endpoint = `${application.base}/api/review/analysis`;
+  assert.equal((await fetch(endpoint)).status, 401);
+  assert.equal((await fetch(endpoint, { method: 'POST', headers: { Cookie: application.cookie, Origin: 'http://foreign.invalid', 'Content-Type': 'application/json' }, body: JSON.stringify(startInput) })).status, 403);
+  assert.equal((await application.post({ ...startInput, query: 'from=invalid' })).status, 400);
+  assert.equal((await application.post({ ...startInput, query: 'symbol=BTCUSDT&symbol=ETHUSDT' })).status, 400);
+  assert.equal((await application.post({ ...startInput, includeNotes: 'yes' })).status, 400);
+  assert.equal(calls, 0);
+  const response = await application.post(startInput); const task = await response.json(); await finished(application);
+  const single = `${application.base}/api/review/trades/BTCUSDT-demo-fill-1/analysis`;
+  assert.equal((await fetch(single, { method: 'POST', headers: { Cookie: application.cookie, Origin: application.base, 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'continue', taskId: task.id }) })).status, 404);
+  assert.equal((await (await fetch(single, { headers: { Cookie: application.cookie } })).json()).tasks.length, 0);
 });

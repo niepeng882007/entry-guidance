@@ -4,6 +4,8 @@ import { validateReport, segmentSummaries, summaryCitations } from './analysis-m
 export function validateAnalysisTask(value: unknown, trade: { id: string; source: string; accountId: string }): AnalysisTask {
   if (!value || typeof value !== 'object') throw new Error('分析任务格式无效。');
   const task = value as AnalysisTask;
+  const batch = trade.id === '$batch';
+  const frozenTrade = task.snapshot?.trade;
   if (
     task.source !== trade.source ||
     task.accountId !== trade.accountId ||
@@ -12,9 +14,7 @@ export function validateAnalysisTask(value: unknown, trade: { id: string; source
     !/^[a-f0-9-]{36}$/.test(task.id) ||
     !['running', 'complete', 'failed', 'cancelled', 'interrupted'].includes(task.status) ||
     !task.snapshot ||
-    task.snapshot.trade.source !== trade.source ||
-    task.snapshot.trade.id !== trade.id ||
-    task.snapshot.trade.accountId !== trade.accountId ||
+    (batch ? frozenTrade !== null || !Array.isArray(task.snapshot.trades) || !task.snapshot.trades.length || task.snapshot.trades.length > 100 : !frozenTrade || frozenTrade.source !== trade.source || frozenTrade.id !== trade.id || frozenTrade.accountId !== trade.accountId || task.snapshot.trades !== undefined) ||
     !Array.isArray(task.snapshot.missing) ||
     task.snapshot.missing.some((item) => typeof item !== 'string') ||
     !Array.isArray(task.records) ||
@@ -35,6 +35,20 @@ export function validateAnalysisTask(value: unknown, trade: { id: string; source
     !(task.error === null || typeof task.error === 'string')
   )
     throw new Error('分析来源、交易或结构无效。');
+  if (batch) {
+    const selected = task.snapshot.trades!;
+    const ids = new Set(selected.map((row) => row.id));
+    if (ids.size !== selected.length || selected.some((row) => !row || typeof row.id !== 'string' || row.source !== trade.source || row.accountId !== trade.accountId) ||
+      task.snapshot.statistics.total !== selected.length || task.snapshot.statistics.trades.length !== selected.length ||
+      new Set(task.snapshot.statistics.trades.map((row) => row.id)).size !== ids.size ||
+      task.snapshot.statistics.trades.some((row) => !ids.has(row.id)) ||
+      selected.some((trade, index) => !task.records.some((row) => row.tradeId === trade.id && row.path === `/trades/${index}/trade/id` && row.value === trade.id)) ||
+      !Array.isArray(task.snapshot.coverage) || task.snapshot.coverage.length !== selected.length ||
+      new Set(task.snapshot.coverage.map((row) => row.tradeId)).size !== ids.size ||
+      task.snapshot.coverage.some((row) => !ids.has(row.tradeId) || !Array.isArray(row.missing) || row.missing.some((item) => typeof item !== 'string')) ||
+      task.snapshot.notes.some((row) => !row.tradeId || !ids.has(row.tradeId)) || task.snapshot.markets.some((row) => !ids.has(row.tradeId)))
+      throw new Error('批量分析交易范围或证据覆盖无效。');
+  }
   const records = new Map(task.records.map((row) => [row.id, row]));
   const complete = new Map<string, AnalysisTask['requests'][number]>();
   for (const request of task.requests) {
@@ -65,7 +79,7 @@ export function validateAnalysisTask(value: unknown, trade: { id: string; source
       validateReport(request.report, [
         ...request.records,
         ...summaryCitations(segmentSummaries(request.segments.map((id) => complete.get(id)!))),
-      ]);
+      ], task.snapshot.trades?.map((row) => row.id) ?? [task.tradeId]);
     if (request.status === 'complete') {
       if (!request.report) throw new Error('分段结果缺失。');
       complete.set(request.id, request);
@@ -86,6 +100,7 @@ export function validateAnalysisTask(value: unknown, trade: { id: string; source
       task.requests.some((row) => row.status !== 'complete') ||
       task.records.some((row) => !covered.has(row.id)) ||
       roots.length !== 1 ||
+      (batch && roots[0]?.stage !== 'synthesis') ||
       !task.report ||
       JSON.stringify(task.report) !== JSON.stringify(roots[0]!.report)
     )

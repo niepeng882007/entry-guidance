@@ -56,7 +56,9 @@ function tagLabel(id: string) {
   <section v-if="accountId" class="review-page__detail" aria-labelledby="personal-notes-title">
     <h2 id="personal-notes-title" class="section-title">个人笔记 · 用户自述</h2>
     <p class="muted">笔记与风格标签是你确认的记录，独立于交易所事实及订单类型。</p>
-    <p class="muted">模型推测：暂无。分析时是否发送笔记需另行选择。</p>
+    <p class="muted">
+      模型风格推测见复盘报告，只有在此保存后才成为个人标签。分析时是否发送笔记需另行选择。
+    </p>
     <div id="note-status" class="status" role="status" aria-live="polite">
       <p class="status__message">{{ status }}</p>
       <a v-if="relogin" class="button button--text button--link" href="/login">重新登录</a>

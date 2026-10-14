@@ -15,7 +15,7 @@ import { ReviewWriteError } from './review-notes.ts';
 import { HistorySync } from './history-sync.ts';
 import { readTradeMarket, marketView, marketIntervals, type MarketInterval } from './trade-market.ts';
 import { AccountArchive } from './account-archive.ts';
-import { TradeAnalysis } from './trade-analysis.ts';
+import { TradeAnalysis, batchAnalysisId } from './trade-analysis.ts';
 import { AnalysisError, type ModelConfig } from './analysis-model.ts';
 import type { EntryInput } from '../public/draft.js';
 import type { ViteDevServer } from 'vite';
@@ -278,17 +278,19 @@ export function createServer(config: Config) {
       }
     }
     const analysisPath = path?.match(/^\/api\/review\/trades\/([A-Za-z0-9-]{1,160})\/analysis$/);
-    if (analysisPath && ['GET', 'POST'].includes(req.method ?? '')) {
+    const batchAnalysis = path === '/api/review/analysis';
+    if ((analysisPath || batchAnalysis) && ['GET', 'POST'].includes(req.method ?? '')) {
       try {
         if (source === 'binance') await getHistory(await readReviewIdentity(config, AbortSignal.timeout(10_000)));
         const ledger = source === 'demo' ? getReviewLedger() : reviewLedger;
-        const trade = ledger?.get(analysisPath[1]!);
-        if (!ledger || !trade) return send(404, { error: '未找到该账户的交易。' });
+        const trade = batchAnalysis ? null : ledger?.get(analysisPath![1]!);
+        const tradeId = batchAnalysis ? batchAnalysisId : trade?.id;
+        if (!ledger || !tradeId) return send(404, { error: '未找到该账户的交易。' });
         const service = getAnalysis(ledger);
         const session = sessions.get(cookie!);
         if (!session || session.expiresAt <= Date.now() || closing) return send(401, { error: '登录已过期，请重新登录。' });
         const generation = scopeGeneration;
-        if (req.method === 'GET') return send(200, { ...ledger.scope(), tasks: service.list(trade.id) });
+        if (req.method === 'GET') return send(200, { ...ledger.scope(), tasks: service.list(tradeId) });
         if (req.headers['content-type'] !== 'application/json') return send(415, { error: '分析输入格式不支持。' });
         let body = '';
         for await (const chunk of req) { body += chunk.toString(); if (Buffer.byteLength(body) > 8192) return send(413, { error: '分析输入过大。' }); }
@@ -299,16 +301,16 @@ export function createServer(config: Config) {
         if (!input || typeof input !== 'object' || Array.isArray(input)) return send(400, { error: '分析参数无效。' });
         const data = input as Record<string, unknown>;
         if (Object.keys(data).length === 2 && ['cancel', 'continue'].includes(String(data.action)) && typeof data.taskId === 'string') {
-          const task = data.action === 'cancel' ? await service.cancel(data.taskId, trade.id) : service.continue(data.taskId, trade.id);
+          const task = data.action === 'cancel' ? await service.cancel(data.taskId, tradeId) : service.continue(data.taskId, tradeId);
           return send(task.status === 'running' ? 202 : 200, task);
         }
         if (Object.keys(data).length !== 3 || typeof data.includeNotes !== 'boolean' || typeof data.regenerate !== 'boolean' || typeof data.query !== 'string') return send(400, { error: '分析参数无效。' });
         const filters = parseReviewQuery(new URLSearchParams(data.query)).filters;
-        const task = await service.start(trade, filters, data.includeNotes, data.regenerate, () => analysis === service && !closing && generation === scopeGeneration && sessions.get(cookie!) === session && session.expiresAt > Date.now());
+        const task = await service.start(trade ?? null, filters, data.includeNotes, data.regenerate, () => analysis === service && !closing && generation === scopeGeneration && sessions.get(cookie!) === session && session.expiresAt > Date.now());
         const currentSession = sessions.get(cookie!);
         if (!currentSession || currentSession.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
         return send(task.status === 'complete' ? 200 : 202, task);
-      } catch (error) { return send(error instanceof AnalysisError ? error.status : 503, { error: error instanceof AnalysisError || error instanceof ReviewFilterError ? error.message : '分析暂不可用；已有任务保留。' }); }
+      } catch (error) { return send(error instanceof AnalysisError ? error.status : error instanceof ReviewFilterError ? 400 : 503, { error: error instanceof AnalysisError || error instanceof ReviewFilterError ? error.message : '分析暂不可用；已有任务保留。' }); }
     }
     if (req.method !== 'GET' && !(['/api/review/sync', '/api/review/archive'].includes(path ?? '') && req.method === 'POST')) return send(405, { error: '仅支持读取。' });
     if (path?.startsWith('/api/verification?')) {

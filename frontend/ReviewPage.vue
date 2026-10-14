@@ -9,6 +9,7 @@ import ReviewArchive from './components/ReviewArchive.vue';
 import ReviewTradeDetail from './components/ReviewTradeDetail.vue';
 import ReviewNotes from './components/ReviewNotes.vue';
 import ReviewStatistics from './components/ReviewStatistics.vue';
+import TradeAnalysis from './components/TradeAnalysis.vue';
 import { useReviewPage } from './useReviewPage';
 import { useReviewLocation } from './useReviewLocation';
 import { dateRangeError, reviewTime } from './review-records';
@@ -46,6 +47,9 @@ const symbolOptions = computed(() =>
 );
 const hasFilters = computed(
   () => !!(location.value.from || location.value.to || location.value.symbol),
+);
+const analysisScope = computed(() =>
+  list.value?.accountId ? { source: list.value.source, accountId: list.value.accountId } : null,
 );
 const analysisQuery = computed(() => {
   const query = new URLSearchParams();
@@ -295,6 +299,12 @@ watch([lastPage, busy], () => {
           <ReviewStatistics v-if="list && !stale" :statistics="list.statistics" />
           <p v-else class="muted">当前统计需重新读取确认。</p>
         </details>
+        <TradeAnalysis
+          :scope="analysisScope"
+          :query="analysisQuery"
+          :total="total"
+          :unavailable="busy || stale || !!rangeError"
+        />
         <ReviewArchive v-if="expectedSource === 'binance'" :review="review" />
       </section>
 

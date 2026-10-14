@@ -1,9 +1,11 @@
 import { onMounted, onUnmounted, ref, shallowRef, watch, type Ref } from 'vue';
-import type { ReviewTrade } from '../src/review-ledger.ts';
 import type { AnalysisTask } from '../src/trade-analysis.ts';
 import { validateAnalysisTask } from '../src/analysis-contract.ts';
 
-export function useTradeAnalysis(trade: Ref<ReviewTrade>, query: () => string) {
+export function useTradeAnalysis(
+  trade: Ref<{ id: string; source: string; accountId: string } | null>,
+  query: () => string,
+) {
   const tasks = shallowRef<AnalysisTask[]>([]);
   const includeNotes = ref(false);
   const busy = ref(false);
@@ -27,10 +29,18 @@ export function useTradeAnalysis(trade: Ref<ReviewTrade>, query: () => string) {
     }
     const version = sequence;
     const current = trade.value;
+    if (!current) {
+      stale.value = true;
+      return;
+    }
+    const endpoint =
+      current.id === '$batch'
+        ? '/api/review/analysis'
+        : `/api/review/trades/${current.id}/analysis`;
     controller = new AbortController();
     busy.value = true;
     try {
-      const response = await fetch(`/api/review/trades/${current.id}/analysis`, {
+      const response = await fetch(endpoint, {
         method: input ? 'POST' : 'GET',
         credentials: 'same-origin',
         cache: 'no-store',
@@ -83,16 +93,13 @@ export function useTradeAnalysis(trade: Ref<ReviewTrade>, query: () => string) {
       status.value = '页面隐藏或离线；仅保留上次读取状态，后台任务继续。';
     } else void read();
   }
-  watch(
-    () => [trade.value.id, trade.value.accountId, trade.value.source],
-    () => {
-      stopRead();
-      tasks.value = [];
-      includeNotes.value = false;
-      stale.value = true;
-      void read();
-    },
-  );
+  watch([() => trade.value?.id, () => trade.value?.accountId, () => trade.value?.source], () => {
+    stopRead();
+    tasks.value = [];
+    includeNotes.value = false;
+    stale.value = true;
+    void read();
+  });
   onMounted(() => {
     void read();
     document.addEventListener('visibilitychange', visibility);
