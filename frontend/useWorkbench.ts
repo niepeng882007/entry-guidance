@@ -745,7 +745,10 @@ export function useWorkbench(source: string) {
       'verification-status',
       `${result.source === 'demo' ? '模拟数据 · ' : ''}${states[result.status]}`,
     );
-    show('verification-time', `完整查询时间 ${time(result.queriedAt)}；只代表此时点。`);
+    show(
+      'verification-time',
+      `完整查询时间 ${time(result.queriedAt)}；只代表此时点。${result.reviewRetention === 'legacy-unbound' ? '旧方案缺少历史账户身份，未保存复盘关联证据。' : ''}`,
+    );
     ui.verificationCurrent = result.status === 'verified';
     ui.verificationState = result.status;
     ui.issues = result.issues;

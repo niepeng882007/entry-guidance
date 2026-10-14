@@ -112,6 +112,14 @@ export function createServer(config: Config) {
       archiveIssue = { code: error instanceof AccountError ? error.code : 'archive_failed', message: error instanceof AccountError ? error.message : '后台归档暂不可用，已有账本保留。', attemptedAt: new Date().toISOString() };
     }).finally(() => { background = undefined; });
   }
+  async function planLedger(plan: Plan) {
+    if (!plan.reviewAccountId) return null; // Legacy signed plans retain recovery without inventing an account identity.
+    try {
+      if (source === 'demo') return getReviewLedger();
+      await getHistory(plan.reviewAccountId);
+      return reviewLedger!;
+    } catch { throw new AccountError('review_unavailable', '复盘留存失败，本次结果未保存；原方案与已有归档保留，请重试。', 503); }
+  }
   const sessions = new Map<string, { expiresAt: number; generation: number; plans: Map<string, Plan> }>();
   // ponytail: 单人应用共用登录限流；扩展多用户时改为分用户限流。
   let attempts = 0;
@@ -200,6 +208,13 @@ export function createServer(config: Config) {
           const saved = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { version: number; plan: Plan; input: EntryInput };
           if (saved.version !== 1 || saved.plan.source !== source) return send(409, { error: '原方案版本或数据来源不匹配，无法完整核验。' });
           if (!existing.plans.has(saved.plan.id) && existing.plans.size >= 20) return send(409, { error: '当前会话方案数量已达上限，请重新登录后恢复本单。' });
+          if (saved.plan.reviewAccountId) {
+            if (source === 'binance' && await readReviewIdentity(config, AbortSignal.timeout(10_000)) !== saved.plan.reviewAccountId) return send(409, { error: '账户身份与原方案不一致，无法恢复核验；原参数仍可查看。' });
+            const ledger = await planLedger(saved.plan);
+            try { ledger!.savePlan(saved.plan, saved.input); }
+            catch { throw new AccountError('review_unavailable', '复盘留存失败，原方案和已有归档保留，请重试。', 503); }
+          }
+          if (sessions.get(cookie!) !== existing || existing.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
           existing.plans.set(saved.plan.id, saved.plan);
           return send(200, { ...saved.plan, input: saved.input, recovery } satisfies SavedPlan);
         }
@@ -209,6 +224,11 @@ export function createServer(config: Config) {
         const plan = await createPlan(config, input);
         const session = sessions.get(cookie!);
         if (!session || session.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
+        if (generation !== session.generation) return send(409, { error: '已有更新的方案请求，本次结果已作废。' });
+        const ledger = await planLedger(plan);
+        try { ledger!.savePlan(plan, input as EntryInput); }
+        catch { throw new AccountError('review_unavailable', '复盘留存失败，本次方案未保存；已有本单和归档保留，请重试。', 503); }
+        if (sessions.get(cookie!) !== session || session.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
         if (generation !== session.generation) return send(409, { error: '已有更新的方案请求，本次结果已作废。' });
         session.plans.set(plan.id, plan);
         const payload = Buffer.from(JSON.stringify({ version: 1, plan, input })).toString('base64url');
@@ -251,7 +271,15 @@ export function createServer(config: Config) {
       const plan = sessions.get(cookie!)?.plans.get(query.get('planId') ?? '');
       if (!query.has('planId') || query.getAll('planId').length !== 1 || [...query.keys()].some((key) => key !== 'planId' && !(config.mode === 'demo' && key === 'demo')) || query.getAll('demo').length > 1) return send(400, { error: '核验仅接受本次方案 ID；模拟场景仅在模拟模式可用。' });
       if (!plan || query.get('planId') !== plan.id) return send(409, { error: '无法关联原方案，请保留原参数；需要重新确认空仓起点。' });
-      try { return send(200, await verifyPosition(config, plan, query.get('demo') ?? undefined)); }
+      try {
+        const verification = { ...await verifyPosition(config, plan, query.get('demo') ?? undefined), reviewRetention: plan.reviewAccountId ? 'saved' as const : 'legacy-unbound' as const };
+        const currentSession = sessions.get(cookie!);
+        if (!currentSession || currentSession.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
+        const ledger = await planLedger(plan);
+        try { ledger?.saveVerification(plan, verification); }
+        catch { throw new AccountError('review_unavailable', '复盘留存失败，本次核验未保存；原方案与已有归档保留，请重试。', 503); }
+        return send(200, verification);
+      }
       catch (error) {
         if (!(error instanceof AccountError)) throw error;
         return send(error.status, { error: error.message, code: error.code, source: plan.source, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt, scopeConfirmed: error.scopeConfirmed });
@@ -297,7 +325,7 @@ export function createServer(config: Config) {
         if (path === '/api/review/trades') {
           return send(200, {
             source, accountId: source === 'demo' ? 'demo-account' : reviewAccountId ?? null,
-            syncStatus: source === 'demo' ? 'demo' : sync ? 'synced' : 'not-synced',
+            syncStatus: source === 'demo' ? 'demo' : sync?.state() || archive?.state() ? 'synced' : 'not-synced',
             trades: source === 'demo' ? getReviewLedger().list() : reviewLedger?.list() ?? [],
             ...(sync ? { sync: sync.state() } : {}),
             ...(archive?.state() ? { archive: archive.state() } : {}),

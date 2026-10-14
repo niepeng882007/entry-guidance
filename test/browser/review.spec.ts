@@ -328,6 +328,15 @@ test('the real-mode page clearly displays an unsynced empty ledger', async ({ pa
   await expect(page.getByText('0 笔归档交易', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '查看 BTCUSDT 交易详情' })).toHaveCount(0);
   await expect(page.getByText('模拟数据 · 仅用于界面与流程验证')).toHaveCount(0);
+  await page.unroute('**/api/review/trades');
+  await page.route('**/api/review/trades', (route) =>
+    route.fulfill({
+      json: { source: 'binance', accountId: '12345', syncStatus: 'not-synced', trades: [] },
+    }),
+  );
+  await page.getByRole('button', { name: '重新读取', exact: true }).click();
+  await expect(page.getByRole('button', { name: '重新读取', exact: true })).toBeEnabled();
+  await expect(page.locator('#review-status')).toContainText('尚未同步 · 无真实交易归档');
 });
 
 test('real history sync shows progress, gaps and retry without claiming old results are current', async ({

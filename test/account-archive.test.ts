@@ -213,6 +213,7 @@ test('a service stopped mid-discovery resumes automatically without advancing it
   }, path);
   await waiting;
   const progress = await (await app.get()).json();
+  assert.equal(progress.syncStatus, 'synced');
   assert.equal(progress.archive.discovery.completed.length, 0);
   await new Promise<void>((resolve) => { app.server.closeAllConnections(); app.server.close(() => resolve()); });
   await new Promise((resolve) => setImmediate(resolve));

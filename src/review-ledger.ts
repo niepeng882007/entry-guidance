@@ -3,6 +3,9 @@ import { noteBasis, noteBelongsTo, noteInput, tagInput, ReviewWriteError, type R
 import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { comparePlan, type ArchivedPlan, type PlanComparison, type PlanLink } from './plan-comparison.ts';
+import type { Plan, Verification } from './verification.ts';
+import type { EntryInput } from '../public/draft.js';
 import { formatDecimal, parseDecimal } from '../public/draft.js';
 
 export type ReviewIdentity = { source: 'demo' | 'binance'; accountId: string };
@@ -30,10 +33,11 @@ export type ReviewTrade = ReviewIdentity & {
   realizedPnl: string | null; commission: string | null; fundingNet: string | null;
   netPnl: string | null; missing: string[]; evidence: TradeEvidence;
   observedAt?: string; unrealizedPnl?: string | null; unrealizedAt?: string | null;
+  planComparison?: PlanComparison; planLink?: PlanLink;
   exitReason?: 'LIQUIDATION' | 'ADL' | 'unknown';
   noteBasis?: string;
 };
-export type ReviewSummary = Omit<ReviewTrade, 'evidence'>;
+export type ReviewSummary = Omit<ReviewTrade, 'evidence' | 'planComparison'>;
 export type HistorySource = 'trades' | 'history' | 'algoHistory' | 'income' | 'forceOrders';
 export type HistoryPage = { source: HistorySource; startTime: number; endTime: number; page: number; autoCloseType?: 'LIQUIDATION' | 'ADL'; fingerprint?: string };
 export type RawRecord = { kind: HistorySource | 'position'; id: string; time: number; payload: Record<string, unknown> };
@@ -145,6 +149,14 @@ export class ReviewLedger {
           opened_at TEXT NOT NULL, payload TEXT NOT NULL,
           PRIMARY KEY (source, account, id)
         ) STRICT;
+        CREATE TABLE IF NOT EXISTS review_plans (
+          source TEXT NOT NULL, account TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL,
+          PRIMARY KEY (source, account, id)
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS review_verifications (
+          source TEXT NOT NULL, account TEXT NOT NULL, id INTEGER PRIMARY KEY, plan_id TEXT NOT NULL, payload TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS review_verifications_plan ON review_verifications(source, account, plan_id);
         CREATE TABLE IF NOT EXISTS history_raw (
           source TEXT NOT NULL, account TEXT NOT NULL, symbol TEXT NOT NULL,
           kind TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL,
@@ -184,18 +196,50 @@ export class ReviewLedger {
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
+  savePlan(plan: Plan, input: EntryInput) {
+    if (plan.source !== this.identity.source || plan.reviewAccountId !== this.identity.accountId) throw new Error('原方案账户身份未确认。');
+    const payload = JSON.stringify({ plan, input });
+    const previous = this.db.prepare('SELECT payload FROM review_plans WHERE source=? AND account=? AND id=?').get(this.identity.source, this.identity.accountId, plan.id);
+    if (previous && previous.payload !== payload) throw new Error('原方案冲突，保留原参数。');
+    this.db.prepare('INSERT OR IGNORE INTO review_plans VALUES (?, ?, ?, ?)').run(this.identity.source, this.identity.accountId, plan.id, payload);
+  }
+
+  saveVerification(plan: Plan, verification: Verification) {
+    if (plan.reviewAccountId !== this.identity.accountId || plan.source !== this.identity.source || verification.source !== this.identity.source) throw new Error('核验账户身份未确认。');
+    if (!this.db.prepare('SELECT id FROM review_plans WHERE source=? AND account=? AND id=?').get(this.identity.source, this.identity.accountId, plan.id)) throw new Error('缺少原方案。');
+    this.db.prepare('INSERT INTO review_verifications(source, account, plan_id, payload) VALUES (?, ?, ?, ?)').run(this.identity.source, this.identity.accountId, plan.id, JSON.stringify(verification));
+  }
+
   list(): ReviewSummary[] {
+    const plans = this.archivedPlans();
     return this.db.prepare('SELECT payload FROM trades WHERE source=? AND account=? ORDER BY opened_at DESC, id').all(this.identity.source, this.identity.accountId).map((row) => {
-      const { evidence: _evidence, ...summary } = JSON.parse(String(row.payload)) as ReviewTrade;
+      const { evidence: _evidence, planComparison: _comparison, ...summary } = this.withPlan(JSON.parse(String(row.payload)) as ReviewTrade, plans);
       return summary;
     });
   }
 
   get(id: string): ReviewTrade | null {
     const row = this.db.prepare('SELECT payload FROM trades WHERE source=? AND account=? AND id=?').get(this.identity.source, this.identity.accountId, id);
-    if (!row) return null;
-    const trade = JSON.parse(String(row.payload)) as ReviewTrade;
-    return { ...trade, noteBasis: noteBasis(trade) };
+    return row ? this.withPlan(JSON.parse(String(row.payload)) as ReviewTrade) : null;
+  }
+
+  private archivedPlans(): ArchivedPlan[] {
+    const checks = new Map<string, Verification[]>();
+    for (const row of this.db.prepare('SELECT plan_id, payload FROM review_verifications WHERE source=? AND account=? ORDER BY id').all(this.identity.source, this.identity.accountId)) {
+      const id = String(row.plan_id);
+      const records = checks.get(id) ?? [];
+      records.push(JSON.parse(String(row.payload)) as Verification);
+      checks.set(id, records);
+    }
+    return this.db.prepare('SELECT payload FROM review_plans WHERE source=? AND account=?').all(this.identity.source, this.identity.accountId).map((row) => {
+      const record = JSON.parse(String(row.payload)) as Omit<ArchivedPlan, 'verifications'>;
+      return { ...record, verifications: checks.get(record.plan.id) ?? [] };
+    });
+  }
+
+  private withPlan(trade: ReviewTrade, records = this.archivedPlans()): ReviewTrade {
+    const comparison = comparePlan(trade, records);
+    return { ...trade, noteBasis: noteBasis(trade), planComparison: comparison, planLink: { status: comparison.status, reason: comparison.reason, candidatePlanIds: comparison.candidatePlanIds } };
   }
 
   journal(): ReviewJournal {
