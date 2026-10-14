@@ -68,8 +68,7 @@ test('late period responses, offline events and invalid sources cannot replace t
     await route.fulfill({ json: { ...data, accountId: 'wrong-account' } });
   });
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
-  await expect(page.getByRole('button', { name: '查看 BTCUSDT 交易详情' })).toBeEnabled();
-  await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
+  await expect(page.locator('#trade-detail')).toBeVisible();
   await expect(chart).toContainText('行情来源、时点或交易依据不一致');
   await expect(chart.getByRole('group', { name: /K 线、实际成交/ })).toHaveCount(0);
 });

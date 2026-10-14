@@ -28,6 +28,7 @@
 | [src/account-archive.ts](../src/account-archive.ts)；[src/history-sync.ts](../src/history-sync.ts)；[src/review-ledger.ts](../src/review-ledger.ts) | 按 UID 隔离的 SQLite 复盘账本、全账户发现与持续归档、历史分页及保守归并；`src/review-notes.ts` 定义个人记录校验及交易依据关联；`frontend/useReviewPage.ts` 和 `frontend/ReviewPage.vue` 展示进度、缺口与原始证据，`frontend/useReviewNotes.ts` 与 `frontend/components/ReviewNotes.vue` 管理个人笔记、标签与未保存草稿 |
 | [src/plan-comparison.ts](../src/plan-comparison.ts)；[frontend/components/PlanComparison.vue](../frontend/components/PlanComparison.vue) | 依据长期保存的方案与查询证据判断唯一关联，计算并展示固定原计划、实际入场、净亏损与历史止损设置对照；列表和详情使用同一关联口径 |
 | [src/trade-market.ts](../src/trade-market.ts)；[frontend/useTradeMarket.ts](../frontend/useTradeMarket.ts)；[frontend/components/TradeChart.vue](../frontend/components/TradeChart.vue) | 按交易与周期读取、分页留存合约价和标记价历史 K 线，分别记录完整性与缺口；冻结行情、交易事件和止损证据，屏幕抽稀与原始数值分开，迟到响应不覆盖当前周期 |
+| [frontend/ReviewPage.vue](../frontend/ReviewPage.vue)；[frontend/review-records.ts](../frontend/review-records.ts)；[frontend/useReviewLocation.ts](../frontend/useReviewLocation.ts) | Ant Design Vue 表格、北京时间开仓日期与交易对筛选、分页及列表/详情 URL 状态；`ReviewArchive.vue` 收纳同步与原始证据，`ReviewTradeDetail.vue` 展示单笔证据，笔记实例跨页内导航保留草稿 |
 | [src/market.ts](../src/market.ts) | 汇集账户、行情、费率、合约规则及模拟快照 |
 | [public/draft.js](../public/draft.js) | 前后端共用的十进制计算、模板应用、草稿、正式方案和分层数量计算 |
 | [src/verification.ts](../src/verification.ts) | 建立空仓起点、冻结方案，核对实际成交、成本与止损覆盖；复用共享计算模块 |

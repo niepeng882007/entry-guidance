@@ -149,6 +149,7 @@ export function createServer(config: Config) {
     if (req.headers.host !== new URL(origin).host) return send(403, { error: '访问地址不匹配。' });
     if (req.method === 'POST' && req.headers.origin !== origin) return send(403, { error: '请从本应用页面提交。' });
     const path = req.url;
+    const reviewPage = /^\/review(?:\/trades\/[A-Za-z0-9-]{1,160})?(?:\?[^#]*)?$/.test(path ?? '');
     const cookie = req.headers.cookie?.split(';').map((part) => part.trim()).find((part) => part.startsWith('session='))?.slice(8);
     const now = Date.now();
     for (const [token, session] of sessions) if (session.expiresAt <= now) sessions.delete(token);
@@ -181,7 +182,7 @@ export function createServer(config: Config) {
       return redirect('/');
     }
     if (!loggedIn) {
-      if (path === '/' || path === '/entry' || path === '/account' || path === '/review') return redirect('/login');
+      if (path === '/' || path === '/entry' || path === '/account' || reviewPage) return redirect('/login');
       return send(401, { error: '请先登录。' });
     }
     if (path === '/logout' && req.method === 'POST') {
@@ -382,14 +383,16 @@ export function createServer(config: Config) {
         return send(200, { source, accountId: reviewAccountId, symbol, records: records.slice(offset, offset + 100), nextOffset: offset + 100 < records.length ? offset + 100 : null });
       } catch { return send(503, { error: '原始证据读取失败，已有账本保留。' }); }
     }
-    if (path === '/' || path === '/entry' || path === '/account' || path === '/review') {
+    if (path === '/' || path === '/entry' || path === '/account' || reviewPage) {
       let pageKind = 'home';
       let pageTitle = '首页 · 开仓前';
       if (path === '/entry') { pageKind = 'entry'; pageTitle = '开仓卡 · 开仓前'; }
       if (path === '/account') { pageKind = 'account'; pageTitle = '账户快照 · USDT'; }
-      else if (path === '/review') { pageKind = 'review'; pageTitle = '交易记录分析 · 开仓前'; }
+      else if (reviewPage) { pageKind = 'review'; pageTitle = '交易记录分析 · 开仓前'; }
+      // Allow only the two fixed icon styles and the empty style used during their insertion.
+      if (reviewPage && !config.frontend) res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self' 'sha256-DOu86drLfwUr1Wcsx/wxfqAogK7tFvJGjVmF/300H/M=' 'sha256-XQEl0+y9C6bSvZdjhDm8sN21dR91ra/iastsw6Wqpwk=' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
       const page = config.frontend
-        ? await config.frontend.transformIndexHtml(path, readFileSync(new URL('../frontend/index.html', import.meta.url), 'utf8'))
+        ? await config.frontend.transformIndexHtml(path!, readFileSync(new URL('../frontend/index.html', import.meta.url), 'utf8'))
         : frontendPage;
       return html(200, page.replace('{{source}}', config.mode === 'demo' ? '模拟数据 · 仅用于界面与流程验证' : '真实模式 · 数据由 Binance 只读接口查询')
         .replace('{{page}}', pageKind).replace('{{mode}}', source)

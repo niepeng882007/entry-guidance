@@ -109,6 +109,7 @@ for (const two of [false, true])
     });
     await page.goto('/review');
     await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
+    await page.locator('summary').filter({ hasText: '原方案与执行对照' }).click();
     await expect(page.locator('#review-plan-link')).toContainText('原方案：已关联');
     const chart = page.getByRole('region', { name: '行情与交易事件' });
     await expect(chart).toContainText('原计划最终止损');
@@ -166,6 +167,7 @@ test('ambiguous plans retain actual records and explain why execution deviations
   };
   await page.goto('/review');
   await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
+  await page.locator('summary').filter({ hasText: '原方案与执行对照' }).click();
   await expect(page.locator('#review-plan-link')).toContainText('关联歧义');
   await expect(page.locator('#review-net-pnl')).toHaveText('-12.4735 USDT');
   await expect(page.locator('#trade-detail')).toContainText('无法判断');

@@ -145,6 +145,7 @@ test('account archive shows overall, contract and expired discovery progress wit
     return route.fulfill({ status: 202, json: { ...archive, status: 'running' } });
   });
   await page.goto('/review');
+  await page.getByText('归档管理 · 同步进度与原始证据', { exact: true }).click();
   const section = page.getByRole('region', { name: '全账户历史归档' });
   await expect(section).toContainText('1 / 2');
   await expect(page.getByText(/当前没有可归并的成交记录/)).toBeVisible();
@@ -309,7 +310,7 @@ test('leaving review cancels a pending detail and rejects its late response', as
     window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })),
   );
   await expect(page.locator('#review-status')).toContainText('演示归档');
-  await expect(page.getByRole('button', { name: '查看 BTCUSDT 交易详情' })).toBeEnabled();
+  await expect(page.locator('#trade-detail')).toBeVisible();
 });
 
 test('the real-mode page clearly displays an unsynced empty ledger', async ({ page }) => {
@@ -411,6 +412,7 @@ test('real history sync shows progress, gaps and retry without claiming old resu
     await route.fulfill({ status: 202, json: sync });
   });
   await page.goto('/review');
+  await page.getByText('归档管理 · 同步进度与原始证据', { exact: true }).click();
   await expect(page.getByLabel('USDT 永续合约')).toBeVisible();
   await page.getByRole('button', { name: '开始同步' }).click();
   await expect(page.locator('#review-status')).toContainText('正在同步真实历史');
@@ -483,6 +485,7 @@ test('a late sync response after leaving the page cannot restore current progres
     });
   });
   await page.goto('/review');
+  await page.getByText('归档管理 · 同步进度与原始证据', { exact: true }).click();
   await page.getByRole('button', { name: '开始同步' }).click();
   await expect.poll(() => typeof release).toBe('function');
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide')));
@@ -526,7 +529,7 @@ test('complex trade detail shows mixed execution types, shared reversal evidence
   );
   await page.route('**/api/review/trades/*', (route) => route.fulfill({ json: detail }));
   await page.goto('/review');
-  await expect(page.getByText('持仓中', { exact: true })).toBeVisible();
+  await expect(page.locator('.review-table .ant-tag').filter({ hasText: '持仓中' })).toBeVisible();
   await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
   await expect(page.locator('#trade-detail')).toBeFocused();
   await expect(page.locator('#trade-detail')).toContainText('入场类型：混合（限价单、市价单）');
@@ -595,6 +598,7 @@ test.describe('review loading with classic scrollbars', () => {
       release();
       await expect(page.getByText('1 笔归档交易', { exact: true })).toBeVisible();
       expect(await measure()).toEqual(loading);
+      await page.unroute('**/api/review/trades');
       await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
       await expect(page.locator('#trade-detail')).toBeFocused();
       expect(await measure()).toEqual(loading);

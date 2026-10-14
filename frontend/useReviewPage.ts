@@ -386,7 +386,7 @@ function validateArchive(value: unknown, accountId?: string | null): ArchiveProg
   return result;
 }
 
-export function useReviewPage(source: Source) {
+export function useReviewPage(source: Source, selectedTrade: () => string | null) {
   const list = shallowRef<ReviewList | null>(null);
   const trade = shallowRef<ReviewTrade | null>(null);
   const busy = ref(false);
@@ -571,12 +571,14 @@ export function useReviewPage(source: Source) {
                   : '尚未同步 · 无真实交易归档';
       if (
         !id &&
+        !selectedTrade() &&
         evidenceOffset === undefined &&
         (sync.value?.status === 'running' || archive.value?.status === 'running')
       )
         polling = setTimeout(() => void read(), 1000);
-      else if (source === 'binance' && !id && evidenceOffset === undefined)
+      else if (source === 'binance' && !id && !selectedTrade() && evidenceOffset === undefined)
         polling = setTimeout(() => void read(), 5000);
+      return true;
     } catch (error) {
       if (current !== sequence || controller.signal.aborted) return;
       status.value = error instanceof Error ? error.message : '复盘读取失败，请重试。';
@@ -610,8 +612,18 @@ export function useReviewPage(source: Source) {
   function resume() {
     if (document.hidden || !navigator.onLine || relogin.value) return;
     suspended = false;
-    void read();
+    void refresh();
   }
+  async function refresh() {
+    const id = selectedTrade();
+    const loaded = await read();
+    if (!loaded || !id || id !== selectedTrade() || !list.value?.accountId) return;
+    return read(id);
+  }
+  watch(selectedTrade, () => {
+    trade.value = null;
+    void refresh();
+  });
   onMounted(() => {
     const events = new AbortController();
     const options = { signal: events.signal };
@@ -666,7 +678,6 @@ export function useReviewPage(source: Source) {
     readEvidence: (offset = 0) => read(undefined, false, offset),
     startSync: () => read(undefined, true),
     startArchive: () => read(undefined, true, undefined, true),
-    refresh: () => read(),
-    open: (id: string) => read(id),
+    refresh,
   };
 }

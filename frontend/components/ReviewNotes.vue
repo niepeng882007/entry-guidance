@@ -117,7 +117,7 @@ function tagLabel(id: string) {
       </div>
     </form>
     <p v-else class="muted">打开单笔交易详情后填写；持仓中和不完整记录也可保存笔记。</p>
-    <details class="disclosure" open>
+    <details class="disclosure">
       <summary class="disclosure__summary">维护交易风格标签</summary>
       <form class="review-notes__form" @submit.prevent="saveTag()">
         <div class="field">

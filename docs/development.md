@@ -10,6 +10,7 @@
 - `frontend/useWorkbench.ts` 管理响应式字段、展示状态、请求取消与浏览器存储；Vue 组件负责模板和事件绑定。`public/draft.js` 继续供前后端共用，修改时检查两端调用方，服务端独立校验客户端输入。
 - `public/select.js` 保留原生字段契约，`SelectControl.vue` 负责在组件更新后同步及卸载时清理。页面与样式修改遵循 [前端规则](../public/AGENTS.md)。
 - TypeScript 检查后端和共享 JS，`vue-tsc` 检查 Vue 模板及前端 TS。暂用 TypeScript 6.0：当前 `vue-tsc` 与 ESLint 解析器不支持 TypeScript 7。升级需同时验证三者兼容性。
+- 交易记录模块按需加载 Ant Design Vue 4，`frontend/review-theme.ts` 为该库与现有黑白灰主题的映射。Vite 使用组件库官方静态提取入口，将组件 CSS 与缓存映射构建为同源资源；复盘 HTML 的 CSP 仅为固定图标 CSS 增加 hash，未开放任意内联样式。升级组件库后须验证 `test/review.test.ts` 的图标 hash 和 `test/browser/review-table.spec.ts` 的 CSP 检查。前端 `skipLibCheck` 跳过 Ant Design Vue 4 与当前 Vue 泛型不兼容的依赖声明，项目代码及模板继续严格检查；后端检查不变。`pnpm-workspace.yaml` 禁用传递依赖 core-js 的非必要安装脚本。
 
 ## 检查选择
 

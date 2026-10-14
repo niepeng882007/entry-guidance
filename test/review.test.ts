@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { createHmac, scryptSync } from 'node:crypto';
+import { createHash, createHmac, scryptSync } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -31,12 +32,25 @@ test('review is protected and a demo archive survives logout and a server restar
   const page = await app.get('/review');
   assert.equal(page.status, 200);
   assert.match(await page.text(), /data-page="review"/);
-  assert.equal(page.headers.get('content-security-policy'), "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+  const requireAnt = createRequire(import.meta.resolve('ant-design-vue'));
+  const iconStyle: string = requireAnt('@ant-design/icons-vue/lib/utils.js').iconStyles;
+  const { resetIcon } = requireAnt('./style/index.js');
+  const { parseStyle, normalizeStyle } = requireAnt('./_util/cssinjs/hooks/useStyleRegister/index.js');
+  const providerStyle: string = normalizeStyle(parseStyle({ '.anticon': { ...resetIcon(), '.anticon .anticon-icon': { display: 'block' } } })[0]);
+  const hashes = [iconStyle, providerStyle, ''].map((style) => `'sha256-${createHash('sha256').update(style).digest('base64')}'`).join(' ');
+  assert.equal(page.headers.get('content-security-policy'), `default-src 'none'; script-src 'self'; style-src 'self' ${hashes}; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`);
   const list = await (await app.get('/api/review/trades')).json();
   assert.equal(list.source, 'demo');
   assert.equal(list.syncStatus, 'demo');
   assert.equal(list.trades.length, 1);
   const id = list.trades[0].id;
+  for (const path of ['/review?symbol=BTCUSDT&page=2', `/review/trades/${id}?from=2026-10-01`]) {
+    assert.equal((await fetch(`${app.base}${path}`, { redirect: 'manual' })).headers.get('location'), '/login');
+    const response = await app.get(path);
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /data-page="review"/);
+  }
+  for (const path of ['/review/trades/invalid%2Fid', '/review/trades/a/extra']) assert.equal((await app.get(path)).status, 404);
   const detail = await (await app.get(`/api/review/trades/${id}`)).json();
   assert.equal(detail.netPnl, '12.4735');
   assert.equal(detail.evidence.fills.length, 4);

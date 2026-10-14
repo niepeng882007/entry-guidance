@@ -40,6 +40,7 @@ test('personal notes preserve failed edits, save tags and show user statements s
   try {
     await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
     await expect(page.getByRole('heading', { name: '个人笔记 · 用户自述' })).toBeVisible();
+    await page.getByText('维护交易风格标签', { exact: true }).click();
     await page.getByLabel('新标签名称').fill(`顺势-${test.info().project.name}`);
     await page.getByRole('button', { name: '新建标签', exact: true }).click();
     const tag = page.getByLabel(`顺势-${test.info().project.name}`, { exact: true });
@@ -56,7 +57,6 @@ test('personal notes preserve failed edits, save tags and show user statements s
     await expect(page.locator('#note-status')).toContainText('保存失败');
     await expect(page.getByLabel('入场理由', { exact: true })).toHaveValue('突破确认');
     await page.getByRole('button', { name: '重新读取', exact: true }).click();
-    await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
     await expect(page.getByLabel('入场理由', { exact: true })).toHaveValue('突破确认');
     await page.unroute('**/api/review/trades/*/note');
     await page.getByRole('button', { name: '保存笔记', exact: true }).click();
@@ -66,7 +66,6 @@ test('personal notes preserve failed edits, save tags and show user statements s
     await expect(page.getByText('模型推测：暂无。分析时是否发送笔记需另行选择。')).toBeVisible();
     await expect(page.locator('#review-net-pnl')).toHaveText('12.4735 USDT');
     await page.reload();
-    await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
     await expect(page.getByLabel('自由笔记')).toHaveValue(
       '<script>window.noteExecuted = true</script>',
     );
@@ -103,7 +102,6 @@ test('a changed grouping exposes the retained note and its original evidence ins
     ledger.project(changed.symbol, [changed]);
     ledger.close();
     await page.getByRole('button', { name: '重新读取', exact: true }).click();
-    await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
     await expect(page.getByText(/当前草稿的交易依据已变化/)).toBeVisible();
     await expect(page.getByLabel('自由笔记')).toHaveValue('原周期的原因');
     await page.getByText('归属待确认笔记 · 1 条', { exact: true }).click();
@@ -123,6 +121,7 @@ test('conflicting device edits stay in the form and tags can be renamed and reti
   const app = await startNotesPage(page);
   try {
     await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
+    await page.getByText('维护交易风格标签', { exact: true }).click();
     await page.getByLabel('新标签名称').fill('顺势');
     await page.getByRole('button', { name: '新建标签', exact: true }).click();
     await page.getByLabel('顺势', { exact: true }).check();
@@ -244,10 +243,9 @@ test('changing accounts through an unsynced state cannot reuse another account d
     await page.getByLabel('自由笔记').fill('账户 A 的私有草稿');
     account = null;
     await page.getByRole('button', { name: '重新读取', exact: true }).click();
-    await expect(page.getByText('0 笔归档交易', { exact: true })).toBeVisible();
+    await expect(page.getByText('详情暂不可用，请重新读取或返回交易记录。')).toBeVisible();
     account = '54321';
     await page.getByRole('button', { name: '重新读取', exact: true }).click();
-    await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
     await expect(page.getByLabel('自由笔记')).toHaveValue('');
     await expect(page.getByText('账户 A 的私有草稿')).toHaveCount(0);
   } finally {

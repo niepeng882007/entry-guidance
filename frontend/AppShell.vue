@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue';
+import { defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue';
 import EntryWorkbench from './EntryWorkbench.vue';
 import AccountPage from './AccountPage.vue';
-import ReviewPage from './ReviewPage.vue';
+const ReviewPage = defineAsyncComponent(() => import('./ReviewPage.vue'));
 import HomePage from './HomePage.vue';
 import SideNavigation from './components/SideNavigation.vue';
 import type { AppPage } from './navigation';
