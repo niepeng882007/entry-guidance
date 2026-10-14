@@ -151,6 +151,7 @@ test('filter changes, cancellation and page leave reject late list responses', a
     await expect(page.locator('.review-page__record')).toHaveCount(4);
     release!();
     await page.unrouteAll({ behavior: 'wait' });
+    await expect(page.locator('.review-statistics')).toContainText('净盈亏有效 1 笔');
     await expect(page.locator('.review-page__record').filter({ hasText: 'BTCUSDT' })).toHaveCount(
       0,
     );
@@ -173,6 +174,7 @@ test('filter changes, cancellation and page leave reject late list responses', a
       await expect(page.locator('#review-status')).toContainText(
         cancel === 'cancel' ? '读取已取消' : '页面已离开',
       );
+      await expect(page.locator('.review-statistics')).toHaveCount(0);
       await expect(
         page.getByText('上次读取结果 · 当前范围需重新读取确认，详情暂不可打开。'),
       ).toBeVisible();
@@ -240,6 +242,16 @@ test('reading raw evidence cannot make a failed trade list current again', async
           source: 'binance',
           accountId: '12345',
           syncStatus: 'synced',
+          statistics: {
+            ...data.statistics,
+            source: 'binance',
+            accountId: '12345',
+            trades: data.statistics.trades.map((trade: Record<string, unknown>) => ({
+              ...trade,
+              source: 'binance',
+              accountId: '12345',
+            })),
+          },
           trades: data.trades.map((trade: Record<string, unknown>) => ({
             ...trade,
             source: 'binance',
@@ -295,6 +307,7 @@ test('saved note tags update available filters and mark the old list stale witho
     await page.getByLabel('自由笔记').fill('保存后保留表单');
     await page.getByRole('button', { name: '保存笔记', exact: true }).click();
     await expect(page.locator('#note-status')).toContainText('笔记已保存');
+    await expect(page.locator('.review-statistics')).toHaveCount(0);
     await expect(page.getByLabel('自由笔记')).toHaveValue('保存后保留表单');
     await expect(
       page.getByText('上次读取结果 · 当前范围需重新读取确认，详情暂不可打开。'),
@@ -304,6 +317,89 @@ test('saved note tags update available filters and mark the old list stale witho
     await expect(page.locator('.review-page__record')).toHaveCount(1);
     await expect(page.locator('.review-page__record')).toContainText('风格标签：新风格');
   } finally {
+    await app.close();
+  }
+});
+
+test('statistics and charts use the full range, overlap tags, and remain readable at three widths', async ({
+  page,
+}) => {
+  const app = await startFiltersPage(page);
+  try {
+    const panel = page.getByRole('region', { name: '筛选范围表现统计', exact: true });
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText('净盈亏有效 26 笔');
+    await expect(panel).toContainText('285.8375 USDT');
+    await expect(panel).toContainText('时长有效 27 笔');
+    await expect(panel.getByRole('img', { name: '累计交易净盈亏曲线' })).toBeVisible();
+    await expect(panel.locator('.review-statistics__scale')).toContainText('142.39225');
+    const evidence = await panel.locator('.review-statistics__evidence-id').textContent();
+    await page.getByRole('button', { name: '下一页交易', exact: true }).click();
+    await expect(page.locator('.review-page__record')).toHaveCount(9);
+    await expect(panel.locator('.review-statistics__evidence-id')).toHaveText(evidence!);
+    await page.getByLabel('筛选标签：顺势（已停用）').check();
+    await page.getByLabel('筛选标签：回踩').check();
+    await expect(panel).toHaveCount(0);
+    await page.getByRole('button', { name: '应用筛选', exact: true }).click();
+    await expect(panel).toContainText('净盈亏有效 1 笔');
+    await expect(panel).toContainText('-13.5265 USDT');
+    await panel.locator('#statistics-dimension').selectOption('tags');
+    await expect(panel.locator('.review-statistics__group')).toHaveCount(3);
+    await expect(
+      panel.locator('.review-statistics__group').filter({ hasText: '顺势' }),
+    ).toContainText('-13.5265 USDT');
+    await expect(panel).toContainText('各标签组重叠，不能相加');
+    await page.getByRole('button', { name: '清除筛选', exact: true }).click();
+    await expect(panel).toContainText('净盈亏有效 26 笔');
+    for (const width of [320, 390, 1280]) {
+      await page.setViewportSize({ width, height: 844 });
+      await panel.scrollIntoViewIfNeeded();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
+      await panel
+        .getByRole('heading', { name: '累计净盈亏 · USDT', exact: true })
+        .scrollIntoViewIfNeeded();
+      await page.screenshot({ path: test.info().outputPath(`statistics-curve-${width}.png`) });
+      await panel
+        .getByRole('heading', { name: '筛选范围表现统计', exact: true })
+        .scrollIntoViewIfNeeded();
+      await page.screenshot({ path: test.info().outputPath(`statistics-${width}.png`) });
+    }
+    await page.getByLabel('币种筛选', { exact: true }).fill('ADAUSDT');
+    await page.getByRole('button', { name: '应用筛选', exact: true }).click();
+    await expect(panel).toContainText('净盈亏有效 0 笔');
+    await expect(panel).toContainText('没有可判定净盈亏的已结束交易');
+    await expect(panel.getByRole('img', { name: '累计交易净盈亏曲线' })).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test('statistics with a foreign identity or changed totals cannot become current', async ({
+  page,
+}) => {
+  const app = await startFiltersPage(page);
+  try {
+    await expect(page.locator('.review-statistics')).toBeVisible();
+    for (const change of ['identity', 'total', 'money'] as const) {
+      await page.route('**/api/review/trades', async (route) => {
+        const response = await route.fetch();
+        const data = await response.json();
+        if (change === 'identity') data.statistics.accountId = 'foreign';
+        if (change === 'total') data.statistics.trades.pop();
+        if (change === 'money') data.statistics.pnl.netPnl = '999';
+        await route.fulfill({ response, json: data });
+      });
+      await page.getByRole('button', { name: '重新读取', exact: true }).click();
+      await expect(page.locator('#review-status')).toContainText('统计证据');
+      await expect(page.locator('.review-statistics')).toHaveCount(0);
+      await page.unrouteAll();
+      await page.getByRole('button', { name: '重新读取', exact: true }).click();
+      await expect(page.locator('.review-statistics')).toContainText('285.8375 USDT');
+    }
+  } finally {
+    await page.unrouteAll({ behavior: 'wait' });
     await app.close();
   }
 });

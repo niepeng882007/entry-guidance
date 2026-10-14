@@ -27,6 +27,7 @@
 | [src/account.ts](../src/account.ts) | Binance 白名单读取与签名、权限与账户口径校验；`transport` 是测试替换外部响应的边界 |
 | [src/account-archive.ts](../src/account-archive.ts)；[src/history-sync.ts](../src/history-sync.ts)；[src/review-ledger.ts](../src/review-ledger.ts) | 按 UID 隔离的 SQLite 复盘账本、全账户发现与持续归档、历史分页及保守归并；`src/review-notes.ts` 定义个人记录校验及交易依据关联；`frontend/useReviewPage.ts` 和 `frontend/ReviewPage.vue` 展示进度、缺口与原始证据，`frontend/useReviewNotes.ts` 与 `frontend/components/ReviewNotes.vue` 管理个人笔记、标签与未保存草稿 |
 | [src/review-filters.ts](../src/review-filters.ts) | 规范化上海日历日期与组合筛选参数、入场类型及稳定排序；账本 `list(filters)` 返回完整匹配范围，HTTP 以每页 20 条展示 |
+| [src/review-statistics.ts](../src/review-statistics.ts)；[frontend/components/ReviewStatistics.vue](../frontend/components/ReviewStatistics.vue) | 冻结列表筛选全范围统计，按指标保留有效与排除样本，使用 BigInt 计算金额、累计曲线与四类分组；列表响应提供稳定证据指纹及读取时点 |
 | [src/plan-comparison.ts](../src/plan-comparison.ts)；[frontend/components/PlanComparison.vue](../frontend/components/PlanComparison.vue) | 依据长期保存的方案与查询证据判断唯一关联，计算并展示固定原计划、实际入场、净亏损与历史止损设置对照；列表和详情使用同一关联口径 |
 | [src/trade-market.ts](../src/trade-market.ts)；[frontend/useTradeMarket.ts](../frontend/useTradeMarket.ts)；[frontend/components/TradeChart.vue](../frontend/components/TradeChart.vue) | 按交易与周期读取、分页留存合约价和标记价历史 K 线，分别记录完整性与缺口；冻结行情、交易事件和止损证据，屏幕抽稀与原始数值分开，迟到响应不覆盖当前周期 |
 | [src/market.ts](../src/market.ts) | 汇集账户、行情、费率、合约规则及模拟快照 |

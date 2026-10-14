@@ -10,6 +10,7 @@ import type { Plan, Verification } from './verification.ts';
 import type { EntryInput } from '../public/draft.js';
 import { formatDecimal, parseDecimal } from '../public/draft.js';
 import type { MarketArchive } from './trade-market.ts';
+import type { StatisticsEvidence } from './review-statistics.ts';
 
 export type ReviewIdentity = { source: 'demo' | 'binance'; accountId: string };
 export type ReviewOrder = {
@@ -40,7 +41,7 @@ export type ReviewTrade = ReviewIdentity & {
   exitReason?: 'LIQUIDATION' | 'ADL' | 'unknown';
   noteBasis?: string;
 };
-export type ReviewSummary = Omit<ReviewTrade, 'evidence' | 'planComparison'> & { entryType: EntryType; tagIds: string[] };
+export type ReviewSummary = Omit<ReviewTrade, 'evidence' | 'planComparison'> & { entryType: EntryType; tagIds: string[]; durationMs: number | null };
 export type HistorySource = 'trades' | 'history' | 'algoHistory' | 'income' | 'forceOrders';
 export type HistoryPage = { source: HistorySource; startTime: number; endTime: number; page: number; autoCloseType?: 'LIQUIDATION' | 'ADL'; fingerprint?: string };
 export type RawRecord = { kind: HistorySource | 'position'; id: string; time: number; payload: Record<string, unknown> };
@@ -58,7 +59,7 @@ export type ArchiveState = {
   missing: string[]; scopeMissing: string[]; lastSuccessAt: string | null; errorCode?: string;
 };
 export type ArchiveProgress = ArchiveState & ReviewIdentity & { contracts: SyncState[] };
-export type ReviewList = { source: ReviewIdentity['source']; accountId: string | null; syncStatus: 'demo' | 'not-synced' | 'synced'; trades: ReviewSummary[]; filters: ReviewFilters; total: number; page: number; pageSize: number; nextPage: number | null; options: { symbols: string[]; tags: Pick<StyleTag, 'id' | 'name' | 'active'>[] }; sync?: SyncState | null; archive?: ArchiveProgress | null; archiveIssue?: { code: string; message: string; attemptedAt: string } };
+export type ReviewList = { source: ReviewIdentity['source']; accountId: string | null; syncStatus: 'demo' | 'not-synced' | 'synced'; trades: ReviewSummary[]; statistics: StatisticsEvidence; filters: ReviewFilters; total: number; page: number; pageSize: number; nextPage: number | null; options: { symbols: string[]; tags: Pick<StyleTag, 'id' | 'name' | 'active'>[] }; sync?: SyncState | null; archive?: ArchiveProgress | null; archiveIssue?: { code: string; message: string; attemptedAt: string } };
 
 function marketPayload(value: unknown): MarketArchive {
   if (!(value instanceof Uint8Array)) throw new Error('行情归档格式无效。');
@@ -230,7 +231,9 @@ export class ReviewLedger {
     return this.db.prepare('SELECT payload FROM trades WHERE source=? AND account=?').all(this.identity.source, this.identity.accountId).map((row) => {
       const trade = this.withPlan(JSON.parse(String(row.payload)) as ReviewTrade, plans);
       const { evidence: _evidence, planComparison: _comparison, ...summary } = trade;
-      return { ...summary, entryType: entryType(trade), tagIds: [...new Set(notes.filter((note) => noteBelongsTo(note, trade)).flatMap((note) => note.tagIds))].sort() };
+      const elapsed = trade.openedAt && trade.closedAt ? Date.parse(trade.closedAt) - Date.parse(trade.openedAt) : null;
+      const durationMs = trade.status !== 'open' && trade.evidence.fillsComplete && trade.evidence.startPosition === '0' && trade.evidence.endPosition === '0' && elapsed !== null && Number.isSafeInteger(elapsed) && elapsed >= 0 ? elapsed : null;
+      return { ...summary, durationMs, entryType: entryType(trade), tagIds: [...new Set(notes.filter((note) => noteBelongsTo(note, trade)).flatMap((note) => note.tagIds))].sort() };
     }).filter((trade) => matchesReview(trade, filters)).sort(sortReview);
   }
 

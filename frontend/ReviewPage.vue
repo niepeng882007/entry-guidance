@@ -11,6 +11,7 @@ import type { ReviewTrade } from '../src/review-ledger.ts';
 import PlanComparison from './components/PlanComparison.vue';
 import ReviewNotes from './components/ReviewNotes.vue';
 import TradeChart from './components/TradeChart.vue';
+import ReviewStatistics from './components/ReviewStatistics.vue';
 import { computed, nextTick } from 'vue';
 import { useReviewPage } from './useReviewPage.ts';
 const { source, expectedSource } = defineProps<{
@@ -422,6 +423,7 @@ async function focusFill(index: number) {
         </div>
       </form>
     </details>
+    <ReviewStatistics v-if="list && !stale" :statistics="list.statistics" />
     <div class="section-heading">
       <h2 class="section-title">{{ list ? `${list.total} 笔归档交易` : '交易列表' }}</h2>
       <button
@@ -438,8 +440,7 @@ async function focusFill(index: number) {
       上次读取结果 · 当前范围需重新读取确认，详情暂不可打开。
     </p>
     <p v-if="list" class="muted">
-      当前筛选共 {{ list.total }} 笔；每页最多
-      {{ list.pageSize }} 笔。后续统计、分析与导出使用完整筛选范围。
+      当前筛选共 {{ list.total }} 笔；每页最多 {{ list.pageSize }} 笔。表现统计使用完整筛选范围。
     </p>
     <p v-if="list && !list.trades.length" class="muted">
       {{

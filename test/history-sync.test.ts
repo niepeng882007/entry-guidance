@@ -239,7 +239,11 @@ test('history refuses an unverifiable account before reading or archiving histor
   const response = await app.sync();
   assert.equal(response.status, 502);
   assert.equal((await response.json()).code, 'unverified_identity');
-  assert.deepEqual(await (await app.get('/api/review/trades')).json(), {
+  const { statistics, ...emptyList } = await (await app.get('/api/review/trades')).json();
+  assert.equal(statistics.pnl.samples, 0);
+  assert.equal(statistics.pnl.netPnl, null);
+  assert.equal(statistics.accountId, null);
+  assert.deepEqual(emptyList, {
     source: 'binance', accountId: null, syncStatus: 'not-synced', trades: [],
     filters: defaultReviewFilters(), total: 0, page: 1, pageSize: 20, nextPage: null, options: { symbols: [], tags: [] },
   });
