@@ -1,3 +1,4 @@
+import type { ReviewJournal } from '../src/review-notes.ts';
 import {
   defaultReviewFilters,
   parseReviewQuery,
@@ -383,7 +384,7 @@ export function useReviewPage(source: Source) {
     trade.value = null;
     const requestedPage = page.value;
     let requestedFilters: ReviewFilters;
-    stale.value = true;
+    if (!id && evidenceOffset === undefined) stale.value = true;
     status.value = id ? '正在读取交易详情…' : startSync ? '正在发起历史同步…' : '正在读取归档…';
     try {
       requestedFilters = parseReviewQuery(reviewQuery(filters, requestedPage)).filters;
@@ -558,7 +559,6 @@ export function useReviewPage(source: Source) {
         list.value = next as ReviewList;
         stale.value = false;
       }
-      if (!startSync && (id || evidenceOffset !== undefined)) stale.value = false;
       if (!startSync)
         status.value =
           source === 'demo'
@@ -599,6 +599,21 @@ export function useReviewPage(source: Source) {
     },
     { flush: 'sync' },
   );
+
+  function journalSaved(journal: ReviewJournal) {
+    if (journal.source !== source || journal.accountId !== list.value?.accountId) return;
+    sequence++;
+    pending?.abort();
+    pending = undefined;
+    clearTimeout(polling);
+    busy.value = false;
+    filterOptions.value = {
+      ...filterOptions.value,
+      tags: journal.tags.map(({ id, name, active }) => ({ id, name, active })),
+    };
+    stale.value = true;
+    status.value = '个人记录已更新，请重新读取交易列表；当前笔记输入保留。';
+  }
 
   function applyFilters() {
     page.value = 1;
@@ -695,6 +710,7 @@ export function useReviewPage(source: Source) {
     page,
     stale,
     applyFilters,
+    journalSaved,
     clearFilters,
     changePage,
     cancelRead,

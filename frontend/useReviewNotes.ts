@@ -218,6 +218,7 @@ export function useReviewNotes(
       JSON.stringify(content(value)) === value.saved
         ? '笔记已保存。'
         : '提交的笔记已保存；后续编辑尚未保存。';
+    return result;
   }
   async function saveTag(active?: boolean) {
     const selected = editingTag.value;
@@ -233,6 +234,7 @@ export function useReviewNotes(
       tagName.value = '';
       status.value =
         (active ?? selected?.active ?? true) ? '标签已保存。' : '标签已停用，历史关联保留。';
+      return journal.value;
     }
   }
   function editTag(tag: StyleTag) {

@@ -123,6 +123,8 @@ test('conflicting device edits stay in the form and tags can be renamed and reti
   const app = await startNotesPage(page);
   try {
     await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
+    await expect(page.locator('#trade-detail')).toBeFocused();
+    await expect(page.getByLabel('自由笔记')).toBeVisible();
     await page.getByLabel('新标签名称').fill('顺势');
     await page.getByRole('button', { name: '新建标签', exact: true }).click();
     await page.getByLabel('顺势', { exact: true }).check();

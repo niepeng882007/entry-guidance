@@ -22,6 +22,7 @@ const {
   page,
   stale,
   applyFilters,
+  journalSaved,
   clearFilters,
   changePage,
   cancelRead,
@@ -575,7 +576,12 @@ async function show(id: string) {
         </article>
       </details>
     </section>
-    <ReviewNotes :source="expectedSource" :account-id="list?.accountId ?? null" :trade="trade" />
+    <ReviewNotes
+      :source="expectedSource"
+      :account-id="list?.accountId ?? null"
+      :trade="trade"
+      @journal-saved="journalSaved"
+    />
     <p class="footnote">
       一笔交易可包含多张订单和多条成交。归档独立于当前本单；退出登录、清除本单和服务重启保留历史。
     </p>

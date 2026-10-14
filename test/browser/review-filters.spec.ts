@@ -217,3 +217,93 @@ test('failed or mismatched list responses cannot pass as the selected range', as
     await app.close();
   }
 });
+
+test('reading raw evidence cannot make a failed trade list current again', async ({ page }) => {
+  const app = await startFiltersPage(page);
+  try {
+    await page.route('**/review', async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({
+        response,
+        body: (await response.text()).replace('data-mode="demo"', 'data-mode="binance"'),
+      });
+    });
+    let failed = false;
+    await page.route('**/api/review/trades', async (route) => {
+      if (failed) return route.fulfill({ status: 503, json: { error: 'controlled failure' } });
+      const response = await route.fetch();
+      const data = await response.json();
+      await route.fulfill({
+        response,
+        json: {
+          ...data,
+          source: 'binance',
+          accountId: '12345',
+          syncStatus: 'synced',
+          trades: data.trades.map((trade: Record<string, unknown>) => ({
+            ...trade,
+            source: 'binance',
+            accountId: '12345',
+          })),
+        },
+      });
+    });
+    await page.route('**/api/review/journal', (route) =>
+      route.fulfill({ json: { source: 'binance', accountId: '12345', notes: [], tags: [] } }),
+    );
+    await page.route('**/api/review/evidence?**', (route) =>
+      route.fulfill({
+        json: {
+          source: 'binance',
+          accountId: '12345',
+          symbol: 'BTCUSDT',
+          records: [],
+          nextOffset: null,
+        },
+      }),
+    );
+    await page.reload();
+    await expect(page.locator('.review-page__record')).toHaveCount(20);
+    failed = true;
+    await page.getByRole('button', { name: '重新读取', exact: true }).click();
+    await expect(page.locator('#review-status')).toContainText('读取失败');
+    await page.getByRole('button', { name: '查看所选合约原始证据' }).click();
+    await expect(page.getByRole('heading', { name: 'BTCUSDT · 原始历史证据' })).toBeVisible();
+    await expect(
+      page.getByText('上次读取结果 · 当前范围需重新读取确认，详情暂不可打开。'),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: '查看 ETHUSDT 交易详情' }).first(),
+    ).toBeDisabled();
+  } finally {
+    await page.unrouteAll();
+    await app.close();
+  }
+});
+
+test('saved note tags update available filters and mark the old list stale without hiding the editor', async ({
+  page,
+}) => {
+  const app = await startFiltersPage(page);
+  try {
+    await expect(page.locator('.review-page__record')).toHaveCount(20);
+    await page.getByRole('button', { name: '查看 ETHUSDT 交易详情' }).first().click();
+    await page.getByLabel('新标签名称').fill('新风格');
+    await page.getByRole('button', { name: '新建标签', exact: true }).click();
+    await expect(page.getByLabel('筛选标签：新风格', { exact: true })).toBeVisible();
+    await page.getByLabel('新风格', { exact: true }).check();
+    await page.getByLabel('自由笔记').fill('保存后保留表单');
+    await page.getByRole('button', { name: '保存笔记', exact: true }).click();
+    await expect(page.locator('#note-status')).toContainText('笔记已保存');
+    await expect(page.getByLabel('自由笔记')).toHaveValue('保存后保留表单');
+    await expect(
+      page.getByText('上次读取结果 · 当前范围需重新读取确认，详情暂不可打开。'),
+    ).toBeVisible();
+    await page.getByLabel('筛选标签：新风格', { exact: true }).check();
+    await page.getByRole('button', { name: '应用筛选', exact: true }).click();
+    await expect(page.locator('.review-page__record')).toHaveCount(1);
+    await expect(page.locator('.review-page__record')).toContainText('风格标签：新风格');
+  } finally {
+    await app.close();
+  }
+});

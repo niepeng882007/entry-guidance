@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { ReviewJournal } from '../../src/review-notes.ts';
 import type { ReviewTrade } from '../../src/review-ledger.ts';
 import { useReviewNotes } from '../useReviewNotes.ts';
 const props = defineProps<{
@@ -16,17 +17,26 @@ const {
   busy,
   relogin,
   refresh,
-  save,
+  save: saveNoteContent,
   tagName,
   editingTag,
   editTag,
-  saveTag,
+  saveTag: saveStyleTag,
   reloadSaved,
 } = useReviewNotes(
   props.source,
   () => props.accountId,
   () => props.trade,
 );
+const emit = defineEmits<{ 'journal-saved': [journal: ReviewJournal] }>();
+async function save() {
+  const journal = await saveNoteContent();
+  if (journal) emit('journal-saved', journal);
+}
+async function saveTag(active?: boolean) {
+  const journal = await saveStyleTag(active);
+  if (journal) emit('journal-saved', journal);
+}
 const fields = [
   { key: 'entryReason', label: '入场理由' },
   { key: 'exitReason', label: '退出理由（用户自述）' },
