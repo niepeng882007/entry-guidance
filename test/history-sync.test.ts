@@ -607,6 +607,14 @@ test('a first visible reversal retains an incomplete old fragment and a distinct
   assert.equal(next.side, 'short');
   assert.equal(next.commission, '0.1');
   assert.equal(next.realizedPnl, '0');
+  const oldDetail = await (await app.get(`/api/review/trades/${old.id}`)).json();
+  const nextDetail = await (await app.get(`/api/review/trades/${next.id}`)).json();
+  const save = (id: string, basis: string, freeNote: string) => fetch(`${app.base}/api/review/trades/${id}/note`, {
+    method: 'POST', headers: { Cookie: app.cookie, Origin: app.base, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ noteId: null, version: 0, basis, entryReason: '', exitReason: '', executionProblem: '', improvement: '', freeNote, tagIds: [] }),
+  });
+  assert.equal((await save(old.id, oldDetail.noteBasis, '旧周期片段')).status, 200);
+  assert.equal((await save(next.id, nextDetail.noteBasis, '反手新周期')).status, 200);
   sourceFills.push(fills[0]!);
   sourceOrders.push(orders[0]!);
   await app.sync();
@@ -614,6 +622,11 @@ test('a first visible reversal retains an incomplete old fragment and a distinct
   assert.equal(supplemented.trades.length, 2);
   assert.equal(supplemented.trades.find((trade: { status: string }) => trade.status === 'closed').netPnl, '9.8');
   assert.equal(supplemented.trades.find((trade: { status: string }) => trade.status === 'open').id, next.id);
+  const journal = await (await app.get('/api/review/journal')).json();
+  assert.equal(journal.notes.find((note: { freeNote: string }) => note.freeNote === '旧周期片段').binding, 'pending');
+  const stable = journal.notes.find((note: { freeNote: string }) => note.freeNote === '反手新周期');
+  assert.equal(stable.binding, 'current');
+  assert.equal(stable.trade.id, next.id);
 });
 
 test('realized PnL on a reconstructed opening fill contradicts a complete starting chain', async (t) => {

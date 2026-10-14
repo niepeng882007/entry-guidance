@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { noteBasis, noteBelongsTo, noteInput, tagInput, ReviewWriteError, type ReviewJournal, type ReviewNote, type StyleTag } from './review-notes.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -29,6 +31,7 @@ export type ReviewTrade = ReviewIdentity & {
   netPnl: string | null; missing: string[]; evidence: TradeEvidence;
   observedAt?: string; unrealizedPnl?: string | null; unrealizedAt?: string | null;
   exitReason?: 'LIQUIDATION' | 'ADL' | 'unknown';
+  noteBasis?: string;
 };
 export type ReviewSummary = Omit<ReviewTrade, 'evidence'>;
 export type HistorySource = 'trades' | 'history' | 'algoHistory' | 'income' | 'forceOrders';
@@ -124,6 +127,14 @@ export class ReviewLedger {
       if (path !== ':memory:') chmodSync(path, 0o600);
       this.db.exec(`
         PRAGMA foreign_keys = ON;
+        CREATE TABLE IF NOT EXISTS review_notes (
+          source TEXT NOT NULL, account TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL,
+          PRIMARY KEY (source, account, id)
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS style_tags (
+          source TEXT NOT NULL, account TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL,
+          PRIMARY KEY (source, account, id)
+        ) STRICT;
         CREATE TABLE IF NOT EXISTS evidence (
           source TEXT NOT NULL, account TEXT NOT NULL, symbol TEXT NOT NULL,
           kind TEXT NOT NULL, id TEXT NOT NULL, trade_id TEXT NOT NULL, payload TEXT NOT NULL,
@@ -182,7 +193,61 @@ export class ReviewLedger {
 
   get(id: string): ReviewTrade | null {
     const row = this.db.prepare('SELECT payload FROM trades WHERE source=? AND account=? AND id=?').get(this.identity.source, this.identity.accountId, id);
-    return row ? JSON.parse(String(row.payload)) as ReviewTrade : null;
+    if (!row) return null;
+    const trade = JSON.parse(String(row.payload)) as ReviewTrade;
+    return { ...trade, noteBasis: noteBasis(trade) };
+  }
+
+  journal(): ReviewJournal {
+    const { source, accountId } = this.identity;
+    const tags = this.db.prepare('SELECT payload FROM style_tags WHERE source=? AND account=? ORDER BY id').all(source, accountId).map((row) => JSON.parse(String(row.payload)) as StyleTag);
+    const notes = this.db.prepare('SELECT payload FROM review_notes WHERE source=? AND account=? ORDER BY id').all(source, accountId).map((row) => {
+      const note = JSON.parse(String(row.payload)) as ReviewNote;
+      return { ...note, binding: noteBelongsTo(note, this.get(note.trade.id)) ? 'current' as const : 'pending' as const };
+    });
+    return { ...this.identity, notes, tags };
+  }
+
+  saveNote(tradeId: string, value: unknown): ReviewJournal {
+    const input = noteInput(value);
+    const { source, accountId } = this.identity;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const trade = this.get(tradeId);
+      if (!trade) throw new ReviewWriteError(404, '未找到该来源的归档交易。');
+      if (trade.noteBasis !== input.basis) throw new ReviewWriteError(409, '交易依据已变化，请重新读取；当前输入保留。');
+      const journal = this.journal();
+      const previous = input.noteId === null ? undefined : journal.notes.find((note) => note.id === input.noteId);
+      if (input.noteId !== null && (!previous || previous.trade.id !== tradeId)) throw new ReviewWriteError(404, '未找到该账户的笔记。');
+      if (previous && (previous.version !== input.version || previous.binding !== 'current') || !previous && journal.notes.some((note) => note.trade.id === tradeId && note.binding === 'current')) throw new ReviewWriteError(409, '笔记已被更新或归属已变化，请重新读取；当前输入保留。');
+      for (const id of input.tagIds) {
+        const tag = journal.tags.find((tag) => tag.id === id);
+        if (!tag || !tag.active && !previous?.tagIds.includes(id)) throw new ReviewWriteError(400, '标签不存在或已停用；当前输入保留。');
+      }
+      const { noteId: _id, basis: _basis, version, ...content } = input;
+      const note: ReviewNote = { ...content, id: previous?.id ?? randomUUID(), version: version + 1, updatedAt: new Date().toISOString(), trade, binding: 'current' };
+      this.db.prepare('INSERT INTO review_notes VALUES (?, ?, ?, ?) ON CONFLICT(source, account, id) DO UPDATE SET payload=excluded.payload').run(source, accountId, note.id, JSON.stringify(note));
+      this.db.exec('COMMIT');
+      return this.journal();
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
+  saveTag(value: unknown): ReviewJournal {
+    const input = tagInput(value);
+    const { source, accountId } = this.identity;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const { tags } = this.journal();
+      const previous = input.id === null ? undefined : tags.find((tag) => tag.id === input.id);
+      if (input.id !== null && !previous) throw new ReviewWriteError(404, '未找到该账户的标签。');
+      if (previous && previous.version !== input.version) throw new ReviewWriteError(409, '标签已被其他设备更新，请重新读取；当前输入保留。');
+      if (tags.some((tag) => tag.id !== input.id && tag.name === input.name)) throw new ReviewWriteError(409, '同名标签已存在，请使用已有标签。');
+      if (!previous && tags.length >= 100) throw new ReviewWriteError(400, '标签最多 100 个，请维护已有标签。');
+      const tag: StyleTag = { ...input, id: previous?.id ?? randomUUID(), version: input.version + 1, updatedAt: new Date().toISOString() };
+      this.db.prepare('INSERT INTO style_tags VALUES (?, ?, ?, ?) ON CONFLICT(source, account, id) DO UPDATE SET payload=excluded.payload').run(source, accountId, tag.id, JSON.stringify(tag));
+      this.db.exec('COMMIT');
+      return this.journal();
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
   sync(symbol?: string): SyncState | null {

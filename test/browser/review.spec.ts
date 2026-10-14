@@ -1,5 +1,78 @@
 import { test, expect } from '@playwright/test';
 
+test('opening a trade during background archiving keeps a note draft visible', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('个人访问密码').fill('browser-test-only');
+  await page.getByRole('button', { name: '进入账户' }).click();
+  const original = await (await page.request.get('/api/review/trades')).json();
+  const detail = await (
+    await page.request.get(`/api/review/trades/${original.trades[0].id}`)
+  ).json();
+  Object.assign(detail, { source: 'binance', accountId: '12345' });
+  const range = {
+    source: 'income',
+    startTime: Date.parse('2026-10-01'),
+    endTime: Date.parse('2026-10-07'),
+    page: 1,
+  };
+  const contract = {
+    symbol: 'BTCUSDT',
+    status: 'running',
+    startTime: range.startTime,
+    endTime: range.endTime,
+    pages: 1,
+    records: 2,
+    pending: [range],
+    completed: [],
+    missing: [],
+    lastSuccessAt: null,
+  };
+  const archive = {
+    source: 'binance',
+    accountId: '12345',
+    status: 'running',
+    startTime: range.startTime,
+    endTime: range.endTime,
+    discovery: { ...contract, symbol: '*', status: 'complete', pending: [] },
+    symbols: ['BTCUSDT'],
+    pendingSymbols: ['BTCUSDT'],
+    completedSymbols: [],
+    missing: [],
+    scopeMissing: ['历史完整性逐笔确认'],
+    lastSuccessAt: null,
+    contracts: [contract],
+  };
+  await page.route('**/review', async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      body: (await response.text()).replace('data-mode="demo"', 'data-mode="binance"'),
+    });
+  });
+  await page.route('**/api/review/trades', (route) =>
+    route.fulfill({
+      json: {
+        source: 'binance',
+        accountId: '12345',
+        syncStatus: 'synced',
+        trades: [detail],
+        archive,
+      },
+    }),
+  );
+  await page.route('**/api/review/trades/*', (route) => route.fulfill({ json: detail }));
+  await page.route('**/api/review/journal', (route) =>
+    route.fulfill({ json: { source: 'binance', accountId: '12345', notes: [], tags: [] } }),
+  );
+  await page.clock.install();
+  await page.goto('/review');
+  await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
+  await page.getByLabel('入场理由', { exact: true }).fill('后台归档期间仍在编辑');
+  await page.clock.runFor(3000);
+  await expect(page.locator('#trade-detail')).toBeVisible();
+  await expect(page.getByLabel('入场理由', { exact: true })).toHaveValue('后台归档期间仍在编辑');
+});
+
 test('account archive shows overall, contract and expired discovery progress with immediate sync', async ({
   page,
 }) => {
@@ -91,7 +164,7 @@ test('account archive shows overall, contract and expired discovery progress wit
   }
   await section.getByRole('button', { name: '立即同步全账户' }).click();
   await expect(section.getByRole('button', { name: '立即同步全账户' })).toBeDisabled();
-  await expect(page.getByRole('status')).toContainText('全账户归档正在运行');
+  await expect(page.locator('#review-status')).toContainText('全账户归档正在运行');
 });
 
 test('a user opens one archived trade and expands linked orders, fills and PnL', async ({
@@ -188,14 +261,14 @@ test('review handles expired login, failed reads and invalid source without show
     }),
   );
   await page.goto('/review');
-  await expect(page.getByRole('status')).toContainText('来源或同步状态无效');
+  await expect(page.locator('#review-status')).toContainText('来源或同步状态无效');
   await expect(page.getByRole('button', { name: '查看 BTCUSDT 交易详情' })).toHaveCount(0);
   await page.unroute('**/api/review/trades');
   await page.route('**/api/review/trades', (route) =>
     route.fulfill({ status: 503, json: { error: '受控失败' } }),
   );
   await page.getByRole('button', { name: '重新读取' }).click();
-  await expect(page.getByRole('status')).toContainText('读取失败');
+  await expect(page.locator('#review-status')).toContainText('读取失败');
   await page.unroute('**/api/review/trades');
   await page.route('**/api/review/trades', (route) =>
     route.fulfill({ status: 401, json: { error: '过期' } }),
@@ -224,12 +297,12 @@ test('leaving review cancels a pending detail and rejects its late response', as
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide')));
   release();
   await page.unrouteAll({ behavior: 'wait' });
-  await expect(page.getByRole('status')).toContainText('页面已离开');
+  await expect(page.locator('#review-status')).toContainText('页面已离开');
   await expect(page.locator('#trade-detail')).toHaveCount(0);
   await page.evaluate(() =>
     window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })),
   );
-  await expect(page.getByRole('status')).toContainText('演示归档');
+  await expect(page.locator('#review-status')).toContainText('演示归档');
   await expect(page.getByRole('button', { name: '查看 BTCUSDT 交易详情' })).toBeEnabled();
 });
 
@@ -251,7 +324,7 @@ test('the real-mode page clearly displays an unsynced empty ledger', async ({ pa
     }),
   );
   await page.goto('/review');
-  await expect(page.getByRole('status')).toContainText('尚未同步 · 无真实交易归档');
+  await expect(page.locator('#review-status')).toContainText('尚未同步 · 无真实交易归档');
   await expect(page.getByText('0 笔归档交易', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '查看 BTCUSDT 交易详情' })).toHaveCount(0);
   await expect(page.getByText('模拟数据 · 仅用于界面与流程验证')).toHaveCount(0);
@@ -323,15 +396,15 @@ test('real history sync shows progress, gaps and retry without claiming old resu
   await page.goto('/review');
   await expect(page.getByLabel('USDT 永续合约')).toBeVisible();
   await page.getByRole('button', { name: '开始同步' }).click();
-  await expect(page.getByRole('status')).toContainText('正在同步真实历史');
+  await expect(page.locator('#review-status')).toContainText('正在同步真实历史');
   await expect(page.getByRole('button', { name: '开始同步' })).toBeDisabled();
-  await expect(page.getByRole('status')).toContainText('同步失败');
+  await expect(page.locator('#review-status')).toContainText('同步失败');
   await expect(page.getByText('同步缺口：Binance 限流，请稍后再试。')).toBeVisible();
   await page.getByText('待补查区间', { exact: true }).click();
   await expect(page.getByText(/history ·/)).toBeVisible();
   failed = false;
   await page.getByRole('button', { name: '开始同步' }).click();
-  await expect(page.getByRole('status')).toContainText('历史读取结束');
+  await expect(page.locator('#review-status')).toContainText('历史读取结束');
   await expect(page.getByText('同步缺口：Binance 限流，请稍后再试。')).toHaveCount(0);
   for (const width of [320, 390, 1280]) {
     await page.setViewportSize({ width, height: 844 });
@@ -397,7 +470,7 @@ test('a late sync response after leaving the page cannot restore current progres
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide')));
   release();
   await page.unrouteAll({ behavior: 'wait' });
-  await expect(page.getByRole('status')).toContainText('页面已离开');
+  await expect(page.locator('#review-status')).toContainText('页面已离开');
   await expect(page.getByText(/已读取 \d+ 页/)).toHaveCount(0);
 });
 
