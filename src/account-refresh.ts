@@ -1,4 +1,4 @@
-import { AccountError, binanceTransport, type AccountConfig, type Transport } from './account.ts';
+import { AccountError, binanceTransport, signBinanceRequest, type AccountConfig, type ReadPriority, type Transport } from './account.ts';
 
 // A subscriber owns its wait, not the shared upstream request.
 export class SharedRead<T> {
@@ -92,17 +92,22 @@ export function coordinateAccountReads(config: AccountConfig) {
       '/fapi/v1/openOrders': single ? 1 : 40, '/fapi/v1/openAlgoOrders': single ? 1 : 40,
       '/fapi/v2/ticker/price': single ? 1 : 2, '/fapi/v1/premiumIndex': single ? 1 : 10,
       '/fapi/v1/klines': 2, '/fapi/v1/markPriceKlines': 2,
+      '/fapi/v1/time': 1, '/fapi/v1/userTrades': 5, '/fapi/v1/allOrders': 5,
+      '/fapi/v1/allAlgoOrders': 5, '/fapi/v1/income': 30, '/fapi/v1/forceOrders': single ? 20 : 50,
+      '/fapi/v1/ticker/bookTicker': single ? 2 : 5, '/fapi/v1/leverageBracket': 1,
+      '/fapi/v1/commissionRate': 20, '/fapi/v1/positionSide/dual': 30,
     };
     return weights[url.pathname] ?? 0;
   };
-  const defer = (until: number, message: string) => {
+  const defer = (until: number, message: string, shared = true) => {
     const error = new AccountError('rate_limited', message, 429);
     error.retryAt = new Date(until).toISOString(); error.attemptedAt = new Date().toISOString();
+    if (!shared) return error;
     if (!blocked?.retryAt || Date.parse(blocked.retryAt) < until) blocked = error;
     return blocked;
   };
   const check = () => { if (blocked?.retryAt && Date.parse(blocked.retryAt) > Date.now()) throw blocked; };
-  const guarded: Transport = async (url, headers, signal) => {
+  const dispatch: Transport = async (url, headers, signal, priority = 'foreground') => {
     signal.throwIfAborted();
     check();
     const futures = url.hostname === 'fapi.binance.com';
@@ -110,11 +115,15 @@ export function coordinateAccountReads(config: AccountConfig) {
       for (const budget of budgets.values()) {
         const window = Math.floor(Date.now() / budget.duration);
         if (budget.window !== window) { budget.window = window; budget.used = 0; }
+        if (priority === 'archive' && budget.used + weight(url) > Math.floor(budget.limit * 0.75))
+          throw defer((window + 1) * budget.duration, '后台归档读取额度暂不足，已为账户与核验保留余量，下一轮补查。', false);
         if (budget.used + weight(url) > budget.limit)
           throw defer((window + 1) * budget.duration, 'Binance 当前 IP 读取额度不足，已退避至额度窗口结束。');
       }
       for (const budget of budgets.values()) budget.used += weight(url);
     }
+    // Re-sign after queueing; the original request may have waited beyond recvWindow.
+    if (url.searchParams.has('signature')) signBinanceRequest(config, url);
     const response = await upstream(url, headers, signal);
     if (response.status === 429 || response.status === 418) {
       const retry = Object.entries(response.headers ?? {}).find(([key]) => key.toLowerCase() === 'retry-after')?.[1];
@@ -148,9 +157,39 @@ export function coordinateAccountReads(config: AccountConfig) {
     }
     return response;
   };
+  type Job = { run: () => void };
+  const queue: Record<ReadPriority, Job[]> = { foreground: [], archive: [] };
+  let active = false, nextArchiveAt = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const pump = () => {
+    if (active) return;
+    clearTimeout(timer);
+    let next = queue.foreground.shift();
+    if (!next && queue.archive.length) {
+      const until = nextArchiveAt;
+      if (until > Date.now()) { timer = setTimeout(pump, until - Date.now()); return; }
+      next = queue.archive.shift();
+    }
+    if (next) { active = true; next.run(); }
+  };
+  const guarded: Transport = (url, headers, signal, priority = 'foreground') => new Promise((resolve, reject) => {
+    const cancel = () => {
+      const index = queue[priority].indexOf(job);
+      if (index >= 0) { queue[priority].splice(index, 1); reject(signal.reason); pump(); }
+    };
+    const job: Job = { run: () => {
+      signal.removeEventListener('abort', cancel);
+      void dispatch(url, headers, signal, priority).then(resolve, reject).finally(() => {
+        if (priority === 'archive' && !config.transport) nextArchiveAt = Date.now() + 1000;
+        active = false; pump();
+      });
+    } };
+    queue[priority].push(job); signal.addEventListener('abort', cancel, { once: true });
+    if (signal.aborted) cancel(); else pump();
+  });
   const failures = new Map<string, { error: AccountError; count: number }>();
   const pending = new Map<string, SharedRead<Awaited<ReturnType<Transport>>>>();
-  const transport: Transport = async (url, headers, signal) => {
+  const transport: Transport = async (url, headers, signal, priority = 'foreground') => {
     check();
     const key = `${url.origin}${url.pathname}?${[...url.searchParams].filter(([name]) => !['timestamp', 'signature', 'recvWindow'].includes(name)).map(([name, value]) => `${name}=${value}`).join('&')}`;
     const failure = failures.get(key);
@@ -159,7 +198,7 @@ export function coordinateAccountReads(config: AccountConfig) {
     if (!slot) {
       slot = new SharedRead(async (sharedSignal) => {
         try {
-          const response = await guarded(url, headers, sharedSignal);
+          const response = await guarded(url, headers, sharedSignal, priority);
           if (response.status >= 500) throw new AccountError('upstream_error', 'Binance 读取失败，分项已退避。');
           failures.delete(key);
           return response;

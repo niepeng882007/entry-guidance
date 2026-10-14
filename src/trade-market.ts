@@ -147,7 +147,7 @@ export async function readTradeMarket(config: AccountConfig, ledger: ReviewLedge
             const price = 60000 + Math.round(Math.sin(time / step / 8) * 300) + (source === 'mark' ? 20 : 0);
             rows.push({ openTime: time, closeTime: time + step - 1, open: String(price), high: String(price + 100), low: String(price - 100), close: String(price + 30), queriedAt, final: time + step - 1 < Date.parse(queriedAt) });
           }
-        } else rows = candles(await readBinance(config, source === 'contract' ? 'klines' : 'markKlines', signal, trade.symbol, undefined, { interval, startTime: start, endTime: end }), start, end, step, queriedAt);
+        } else rows = candles(await readBinance(config, source === 'contract' ? 'klines' : 'markKlines', signal, trade.symbol, undefined, 'foreground', { interval, startTime: start, endTime: end }), start, end, step, queriedAt);
         const merged = new Map(series.candles.map((row) => [row.openTime, row]));
         for (const row of rows) merged.set(row.openTime, row);
         series.candles = [...merged.values()].sort((a, b) => a.openTime - b.openTime);
