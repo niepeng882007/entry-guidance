@@ -72,6 +72,8 @@
 /* Base：仅页面默认值、焦点与原生隐藏语义使用全局选择器。 */
 * { box-sizing: border-box; }
 html, body { overflow-x: clip; }
+/* Keep the viewport width stable when async content adds a vertical scrollbar. */
+html { overflow-y: scroll; }
 body { margin: 0; }
 p { margin: 0 0 var(--space-12); }
 :focus { outline: none; }
