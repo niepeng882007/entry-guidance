@@ -1,3 +1,4 @@
+import { navigate } from './navigation';
 import { test, expect } from '@playwright/test';
 
 test('a user opens one archived trade and expands linked orders, fills and PnL', async ({
@@ -6,9 +7,10 @@ test('a user opens one archived trade and expands linked orders, fills and PnL',
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
-  await page.getByRole('link', { name: '交易复盘', exact: true }).click();
+  await page.goto('/entry');
+  await navigate(page, '交易记录分析');
   await expect(page).toHaveURL('/review');
-  await expect(page.getByRole('heading', { name: '交易复盘', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '交易记录分析', exact: true })).toBeVisible();
   await expect(page.getByText('模拟数据 · 仅用于界面与流程验证')).toBeVisible();
   await expect(page.getByText('1 笔归档交易', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
@@ -37,8 +39,8 @@ test('a user opens one archived trade and expands linked orders, fills and PnL',
     );
     await page.screenshot({ path: test.info().outputPath(`review-${width}.png`), fullPage: true });
   }
-  await page.getByRole('link', { name: '账户快照', exact: true }).click();
-  await page.getByRole('link', { name: '交易复盘', exact: true }).click();
+  await navigate(page, '账户快照');
+  await navigate(page, '交易记录分析');
   await expect(page.getByText('1 笔归档交易', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '退出登录' }).click();
   await page.goto('/review');
@@ -51,6 +53,7 @@ test('clearing the current plan leaves archived trades available after relogin',
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await page.goto('/entry');
   await page.locator('#symbol-trigger').click();
   await page
     .locator('#symbol-options')
@@ -69,16 +72,17 @@ test('clearing the current plan leaves archived trades available after relogin',
   }
   await page.locator('#generate').click();
   await expect(page.locator('#entry-card')).toHaveAttribute('data-current', 'true');
-  await page.getByRole('link', { name: '交易复盘', exact: true }).click();
+  await navigate(page, '交易记录分析');
   await expect(page.getByText('1 笔归档交易', { exact: true })).toBeVisible();
-  await page.getByRole('link', { name: '返回工作台' }).click();
+  await navigate(page, '开仓卡');
   page.once('dialog', (dialog) => dialog.accept());
   await page.locator('#clear-trade').click();
   await expect(page.locator('#recovery-status')).toContainText('已清除本单');
   await page.getByRole('button', { name: '退出登录' }).click();
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
-  await page.getByRole('link', { name: '交易复盘', exact: true }).click();
+  await page.goto('/entry');
+  await navigate(page, '交易记录分析');
   await expect(page.getByText('1 笔归档交易', { exact: true })).toBeVisible();
 });
 
@@ -88,6 +92,7 @@ test('review handles expired login, failed reads and invalid source without show
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await page.goto('/entry');
   await page.route('**/api/review/trades', (route) =>
     route.fulfill({
       json: { source: 'binance', accountId: 'wrong', syncStatus: 'demo', trades: [] },
@@ -115,6 +120,7 @@ test('leaving review cancels a pending detail and rejects its late response', as
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await page.goto('/entry');
   await page.goto('/review');
   await expect(page.getByText('1 笔归档交易', { exact: true })).toBeVisible();
   let release!: () => void;
@@ -143,6 +149,7 @@ test('the real-mode page clearly displays an unsynced empty ledger', async ({ pa
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await page.goto('/entry');
   // The backend real-mode contract is independently verified by the HTTP tests.
   await page.route('**/review', async (route) => {
     const response = await route.fetch();
@@ -169,6 +176,7 @@ test('real history sync shows progress, gaps and retry without claiming old resu
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await page.goto('/entry');
   await page.route('**/review', async (route) => {
     const response = await route.fetch();
     await route.fulfill({
@@ -263,6 +271,7 @@ test('a late sync response after leaving the page cannot restore current progres
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await page.goto('/entry');
   await page.route('**/review', async (route) => {
     const response = await route.fetch();
     await route.fulfill({
@@ -313,6 +322,7 @@ test('complex trade detail shows mixed execution types, shared reversal evidence
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await page.goto('/entry');
   const list = await (await page.request.get('/api/review/trades')).json();
   const detail = await (await page.request.get(`/api/review/trades/${list.trades[0].id}`)).json();
   Object.assign(detail, {

@@ -5,6 +5,7 @@ async function login(page: Page) {
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await page.goto('/entry');
   await expect(page.locator('#status')).toHaveText('模拟查询成功');
 }
 
@@ -87,8 +88,8 @@ test('a nav click keeps its module current until the user takes over scrolling',
   expect(traveling.followed).toBe('#plan-module');
   expect(traveling.y).toBe(0);
 
-  await page.locator('.module-nav__brand').click();
-  await expect(link('账户快照')).toHaveAttribute('aria-current', 'location');
+  await link('账户摘要').click();
+  await expect(link('账户摘要')).toHaveAttribute('aria-current', 'location');
 });
 
 test('navigation animates scrolling and selection, respecting reduced motion', async ({ page }) => {
@@ -550,6 +551,7 @@ test('reload and re-login restore the signed original plan and reverify it', asy
   await page.locator('#relogin a').click();
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await page.goto('/entry');
   await expect(page.locator('#verification')).toHaveAttribute('data-state', 'needs-action');
   await expect(page.locator('#card-quantity')).toHaveText(quantity!);
   await expect(page.locator('[data-copy="quantity"]')).toBeDisabled();

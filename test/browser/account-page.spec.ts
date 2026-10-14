@@ -1,9 +1,11 @@
+import { navigate } from './navigation';
 import { test, expect, type Page } from '@playwright/test';
 
 async function login(page: Page) {
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await page.goto('/entry');
   await expect(page.locator('#status')).toHaveText('模拟查询成功');
 }
 
@@ -22,7 +24,7 @@ test('asset page opens from the workbench, displays details and supports return 
   await expect(page.getByText('280.00000000 USDT', { exact: true })).toBeVisible();
   await expect(page.getByText('37.52460000 USDT', { exact: true })).toBeVisible();
   await expect(page.getByText('6.00000000 USDT', { exact: true })).toBeVisible();
-  await page.getByRole('link', { name: '返回工作台' }).click();
+  await navigate(page, '开仓卡');
   await expect(page.locator('#equity')).toHaveText('1237.65000000');
   await page.goto('/account');
   await page.getByRole('button', { name: '退出登录' }).click();

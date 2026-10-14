@@ -51,6 +51,11 @@ test('anonymous visitors cannot open the account page or read account data', asy
   assert.equal(assetsPage.status, 303);
   assert.equal(assetsPage.headers.get('location'), '/login');
   assert.equal((await fetch(`${base}/api/account/assets`)).status, 401);
+  for (const path of ['/entry', '/review']) {
+    const response = await fetch(`${base}${path}`, { redirect: 'manual' });
+    assert.equal(response.status, 303);
+    assert.equal(response.headers.get('location'), '/login');
+  }
 });
 
 test('built frontend assets require login and only explicit build filenames are served', async (t) => {
@@ -60,6 +65,15 @@ test('built frontend assets require login and only explicit build filenames are 
   const page = await (await fetch(base, { headers: { Cookie: cookie } })).text();
   assert.match(page, /id="app"/);
   assert.match(page, /模拟数据/);
+  assert.match(page, /data-page="home"/);
+  assert.match(page, /首页 · 开仓前/);
+  for (const [path, kind, title] of [['/entry', 'entry', '开仓卡'], ['/review', 'review', '交易记录分析']]) {
+    const response = await fetch(`${base}${path}`, { headers: { Cookie: cookie } });
+    assert.equal(response.status, 200);
+    const content = await response.text();
+    assert.ok(content.includes(`data-page="${kind}"`));
+    assert.ok(content.includes(`<title>${title} · 开仓前</title>`));
+  }
   const assets = Array.from(page.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g), (match) => match[1]!);
   assert.ok(assets.some((path) => path.endsWith('.js')));
   assert.ok(assets.some((path) => path.endsWith('.css')));

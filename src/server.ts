@@ -144,7 +144,7 @@ export function createServer(config: Config) {
       return redirect('/');
     }
     if (!loggedIn) {
-      if (path === '/' || path === '/account' || path === '/review') return redirect('/login');
+      if (path === '/' || path === '/entry' || path === '/account' || path === '/review') return redirect('/login');
       return send(401, { error: '请先登录。' });
     }
     if (path === '/logout' && req.method === 'POST') {
@@ -258,11 +258,12 @@ export function createServer(config: Config) {
         return send(200, { source, accountId: reviewAccountId, symbol, records: records.slice(offset, offset + 100), nextOffset: offset + 100 < records.length ? offset + 100 : null });
       } catch { return send(503, { error: '原始证据读取失败，已有账本保留。' }); }
     }
-    if (path === '/' || path === '/account' || path === '/review') {
-      let pageKind = 'workbench';
-      let pageTitle = '开仓卡 · 开仓前';
+    if (path === '/' || path === '/entry' || path === '/account' || path === '/review') {
+      let pageKind = 'home';
+      let pageTitle = '首页 · 开仓前';
+      if (path === '/entry') { pageKind = 'entry'; pageTitle = '开仓卡 · 开仓前'; }
       if (path === '/account') { pageKind = 'account'; pageTitle = '账户快照 · USDT'; }
-      else if (path === '/review') { pageKind = 'review'; pageTitle = '交易复盘'; }
+      else if (path === '/review') { pageKind = 'review'; pageTitle = '交易记录分析 · 开仓前'; }
       const page = config.frontend
         ? await config.frontend.transformIndexHtml(path, readFileSync(new URL('../frontend/index.html', import.meta.url), 'utf8'))
         : frontendPage;
