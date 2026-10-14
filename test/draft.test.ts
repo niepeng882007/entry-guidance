@@ -176,6 +176,7 @@ test('limit prices require explicit valid rules and exact ticks, with side-speci
 
 function responses(): Record<string, unknown> {
   return {
+    '/api/v3/account': { uid: 12345 },
     '/sapi/v1/account/apiRestrictions': { enableReading: true, enableWithdrawals: false, enableInternalTransfer: false, enableMargin: false, enableFutures: false, permitsUniversalTransfer: false, enableVanillaOptions: false, enableFixApiTrade: false, enableSpotAndMarginTrading: false, enablePortfolioMarginTrading: false },
     '/sapi/v1/portfolio/account': { code: -21001 },
     '/fapi/v2/account': { canTrade: true, multiAssetsMargin: false, assets: [{ asset: 'USDT', walletBalance: '1025', unrealizedProfit: '-25', marginBalance: '1000', availableBalance: '5' }], positions: [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0', isolated: true }] },

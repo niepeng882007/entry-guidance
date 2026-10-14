@@ -136,7 +136,161 @@ function validateDetail(value: unknown, source: Source, accountId: string): Revi
       }
     }
   }
+  if (data.planComparison !== undefined) validateComparison(data.planComparison, data);
   return data as ReviewTrade;
+}
+
+function validateComparison(value: unknown, trade: Record<string, unknown>) {
+  const data = object(value);
+  const strings = (value: unknown) =>
+    Array.isArray(value) && value.every((item) => typeof item === 'string');
+  const stamp = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value));
+  if (
+    !['linked', 'ambiguous', 'unlinked'].includes(String(data.status)) ||
+    typeof data.reason !== 'string' ||
+    !strings(data.candidatePlanIds) ||
+    !strings(data.limitations) ||
+    !Array.isArray(data.verifications) ||
+    !Array.isArray(data.stopChecks)
+  )
+    throw new Error('原方案关联证据无效。');
+  for (const field of ['quantityDifference', 'priceDifference', 'confirmedLoss', 'budgetExcess'])
+    amount(data[field]);
+  if (data.status !== 'linked') {
+    if (
+      data.plan !== null ||
+      data.input !== null ||
+      data.actualEntry !== null ||
+      data.verifications.length ||
+      data.stopChecks.length ||
+      [
+        'quantityDifference',
+        'priceDifference',
+        'confirmedLoss',
+        'budgetExcess',
+        'entryTypeDeviation',
+      ].some((field) => data[field] !== null)
+    )
+      throw new Error('未关联方案不能显示已确认偏差。');
+    return;
+  }
+  const plan = object(data.plan);
+  const execution = object(plan.execution);
+  object(data.input);
+  if (
+    plan.source !== trade.source ||
+    plan.reviewAccountId !== trade.accountId ||
+    plan.symbol !== trade.symbol ||
+    plan.side !== trade.side ||
+    typeof plan.id !== 'string' ||
+    !stamp(plan.startedAt) ||
+    !Array.isArray(data.candidatePlanIds) ||
+    data.candidatePlanIds.length !== 1 ||
+    data.candidatePlanIds[0] !== plan.id ||
+    !['MARKET', 'LIMIT'].includes(String(execution.entryType)) ||
+    !data.verifications.length ||
+    data.stopChecks.length !== data.verifications.length
+  )
+    throw new Error('原方案来源、账户或交易关联无效。');
+  for (const field of [
+    'budget',
+    'quantity',
+    'referencePrice',
+    'stopPrice',
+    'leverage',
+    'funding',
+    'slippagePercent',
+  ]) {
+    amount(plan[field]);
+    if (plan[field] === null) throw new Error('原方案参数缺失。');
+  }
+  // Fee and price estimates preserve the plan's precision beyond the 8-decimal money boundary.
+  for (const field of ['entryFee', 'exitFee', 'entryEstimate', 'exitEstimate'])
+    if (typeof plan[field] !== 'string' || !/^\d+(?:\.\d+)?$/.test(plan[field]))
+      throw new Error('原费用假设无效。');
+  if (plan.takerRate !== undefined) amount(plan.takerRate);
+  if (plan.nearStop !== null) {
+    const near = object(plan.nearStop);
+    for (const field of ['price', 'quantity', 'percent']) {
+      amount(near[field]);
+      if (near[field] === null) throw new Error('原近端止损参数缺失。');
+    }
+  }
+  if (data.entryTypeDeviation !== null && typeof data.entryTypeDeviation !== 'boolean')
+    throw new Error('入场方式偏差无效。');
+  if (data.actualEntry !== null) {
+    const entry = object(data.actualEntry);
+    amount(entry.quantity);
+    amount(entry.price);
+    if (
+      entry.quantity === null ||
+      entry.price === null ||
+      !stamp(entry.firstAt) ||
+      !stamp(entry.lastAt) ||
+      !Array.isArray(entry.types) ||
+      !entry.types.every((type) => type === null || typeof type === 'string')
+    )
+      throw new Error('实际入场对照无效。');
+  }
+  if (trade.netPnl === null && (data.confirmedLoss !== null || data.budgetExcess !== null))
+    throw new Error('净盈亏待确认时不能判断超预算。');
+  for (const [index, value] of data.verifications.entries()) {
+    const check = object(value);
+    if (
+      check.source !== trade.source ||
+      !stamp(check.queriedAt) ||
+      !['waiting', 'ended', 'incomplete', 'needs-action', 'verified'].includes(
+        String(check.status),
+      ) ||
+      !strings(check.issues)
+    )
+      throw new Error('历史核验来源或时点无效。');
+    for (const field of [
+      'quantity',
+      'entryPrice',
+      'leverage',
+      'paidCommission',
+      'paidFunding',
+      'plannedLoss',
+    ])
+      if (check[field] !== undefined) amount(check[field]);
+    const stopCheck = object(data.stopChecks[index]);
+    if (stopCheck.queriedAt !== check.queriedAt || !strings(stopCheck.deviations))
+      throw new Error('止损偏差查询时点不一致。');
+    if (check.reviewEvidence !== undefined) {
+      const evidence = object(check.reviewEvidence);
+      if (
+        !Number.isSafeInteger(evidence.startTime) ||
+        !Number.isSafeInteger(evidence.endTime) ||
+        Number(evidence.startTime) !== Date.parse(String(plan.startedAt)) ||
+        Number(evidence.endTime) < Number(evidence.startTime) ||
+        typeof evidence.snapshotConsistent !== 'boolean' ||
+        !Array.isArray(evidence.stops) ||
+        !Array.isArray(evidence.fills) ||
+        !Array.isArray(evidence.historicalStops)
+      )
+        throw new Error('核验读取范围或证据无效。');
+      if (check.status === 'verified' && !evidence.snapshotConsistent)
+        throw new Error('快照不一致时不能显示历史核验通过。');
+      for (const value of [...evidence.stops, ...evidence.historicalStops]) {
+        const stop = object(value);
+        for (const field of ['id', 'status', 'type', 'side', 'positionSide', 'workingType'])
+          if (typeof stop[field] !== 'string') throw new Error('历史止损设置无效。');
+        for (const field of ['quantity', 'executedQuantity', 'triggerPrice']) {
+          amount(stop[field]);
+          if (stop[field] === null) throw new Error('历史止损数量或价格缺失。');
+        }
+        for (const field of ['algo', 'closePosition', 'reduceOnly', 'priceProtect'])
+          if (typeof stop[field] !== 'boolean') throw new Error('历史止损语义无效。');
+        if (
+          !Number.isSafeInteger(stop.updateTime) ||
+          Number(stop.updateTime) < 0 ||
+          (evidence.snapshotConsistent && Number(stop.updateTime) > Number(evidence.endTime))
+        )
+          throw new Error('历史止损设置时间无效。');
+      }
+    }
+  }
 }
 
 function validateSync(value: unknown): SyncState {

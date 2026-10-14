@@ -98,3 +98,27 @@ test('review addition preserves existing demo recovery.v1 signatures with config
   const recovery = `${payload}.${createHmac('sha256', key).update(payload).digest('base64url')}`;
   assert.equal((await post('/api/plan/recover', { recovery })).status, 200);
 });
+
+
+test('legacy signed recovery remains usable but cannot retroactively claim an account or saved review evidence', async (t) => {
+  const app = await start(t, { mode: 'demo' });
+  const post = (path: string, value: unknown) => fetch(`${app.base}${path}`, {
+    method: 'POST', headers: { Cookie: app.cookie, Origin: app.base, 'Content-Type': 'application/json' }, body: JSON.stringify(value),
+  });
+  const plan = await (await post('/api/plan', {
+    symbol: 'BTCUSDT', side: 'long', budgetMode: 'amount', budget: '10', stopMode: 'percent', stop: '2', slippage: '0.1', funding: '0', leverage: '5', minimumBuffer: '1', fundingCap: '',
+  })).json();
+  const record = JSON.parse(Buffer.from(plan.recovery.split('.')[0], 'base64url').toString('utf8'));
+  delete record.plan.reviewAccountId;
+  delete record.plan.takerRate;
+  record.plan.id = 'legacy-plan-without-identity';
+  const payload = Buffer.from(JSON.stringify(record)).toString('base64url');
+  const key = scryptSync('review-test-only', JSON.stringify(['entry-guidance.recovery.v1', 'demo', '', '']), 32);
+  const recovery = `${payload}.${createHmac('sha256', key).update(payload).digest('base64url')}`;
+  const response = await post('/api/plan/recover', { recovery });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).reviewAccountId, undefined);
+  const check = await (await app.get(`/api/verification?planId=${record.plan.id}&demo=protected`)).json();
+  assert.equal(check.status, 'verified');
+  assert.equal(check.reviewRetention, 'legacy-unbound');
+});

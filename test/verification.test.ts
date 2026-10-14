@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { once } from 'node:events';
 import { test, type TestContext } from 'node:test';
 import { createServer } from '../src/server.ts';
@@ -279,12 +282,14 @@ function fixture() {
   const now = Date.now() - 1000;
   const position = { symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0', entryPrice: '0', liquidationPrice: '0', leverage: '10', marginType: 'isolated', isolatedWallet: '0', updateTime: now };
   const data: Record<string, unknown> = {
+    '/api/v3/account': { uid: 12345 },
     '/fapi/v1/time': { serverTime: now },
     '/sapi/v1/account/apiRestrictions': { enableReading: true, enableWithdrawals: false, enableInternalTransfer: false, enableMargin: false, enableFutures: false, permitsUniversalTransfer: false, enableVanillaOptions: false, enableFixApiTrade: false, enableSpotAndMarginTrading: false, enablePortfolioMarginTrading: false },
     '/sapi/v1/portfolio/account': { code: -21001 },
     '/fapi/v2/account': { canTrade: true, multiAssetsMargin: false, assets: [{ asset: 'USDT', walletBalance: '1000', unrealizedProfit: '0', marginBalance: '1000', availableBalance: '1000' }], positions: [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0', isolated: true }] },
     '/fapi/v1/positionSide/dual': { dualSidePosition: false },
     '/fapi/v2/positionRisk': [position],
+    '/fapi/v1/forceOrders': [],
     '/fapi/v1/openOrders': [], '/fapi/v1/openAlgoOrders': [],
     '/fapi/v1/userTrades': [], '/fapi/v1/allOrders': [], '/fapi/v1/income': [], '/fapi/v1/allAlgoOrders': [],
     '/fapi/v1/commissionRate': { symbol: 'BTCUSDT', takerCommissionRate: '0.001' },
@@ -303,21 +308,25 @@ function fixture() {
   return { data, position, now };
 }
 
-async function start(t: TestContext, f = fixture(), mode: 'real' | 'demo' = 'real', apiKey = 'test-key') {
+async function start(t: TestContext, f = fixture(), mode: 'real' | 'demo' = 'real', apiKey = 'test-key', reviewLedgerPath?: string) {
   const requests: URL[] = [];
-  const server = createServer({ password: 'test-password-only', mode, apiKey, apiSecret: 'test-secret', transport: async (url, headers, signal) => {
+  const server = createServer({ password: 'test-password-only', mode, reviewLedgerPath, apiKey, apiSecret: 'test-secret', transport: async (url, headers, signal) => {
     requests.push(url);
     assert.ok(url.pathname in f.data, `Unexpected endpoint ${url.pathname}`);
     const isPublic = ['/fapi/v1/time', '/fapi/v1/exchangeInfo', '/fapi/v1/ticker/bookTicker', '/fapi/v1/premiumIndex', '/fapi/v2/ticker/price'].includes(url.pathname);
     assert.equal(headers['X-MBX-APIKEY'], isPublic ? undefined : apiKey);
     const source = f.data[url.pathname];
-    const body: unknown = typeof source === 'function' ? await source(signal) : source;
+    let body: unknown = typeof source === 'function' ? await source(signal) : source;
+    if (reviewLedgerPath && Array.isArray(body) && url.searchParams.has('startTime')) {
+      const begin = Number(url.searchParams.get('startTime')), end = Number(url.searchParams.get('endTime'));
+      body = body.filter((row) => (row.createTime ?? row.time) >= begin && (row.createTime ?? row.time) <= end);
+    }
     if (body instanceof Error) throw body;
     return { status: url.pathname.includes('/portfolio/') ? 400 : 200, body: structuredClone(body) };
   } });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(async () => { if (server.listening) { server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); } });
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
   const base = `http://127.0.0.1:${address.port}`;
@@ -877,4 +886,248 @@ test('TradFi perpetual contract can be verified when contractType is TRADIFI_PER
   const invalid = await (await app.read(path)).json();
   assert.equal(invalid.status, 'incomplete');
   assert.match(invalid.issues.join(' '), /当前合约状态或规则无法确认/);
+});
+
+
+test('saved verification exposes timestamped fill and stop evidence without changing the original plan', async (t) => {
+  const app = await start(t);
+  const response = await app.create();
+  assert.equal(response.status, 200);
+  const plan = await response.json();
+  assert.equal(plan.reviewAccountId, '12345');
+  const original = structuredClone(plan);
+  app.data['/fapi/v1/openAlgoOrders'] = [fill(app)];
+  const checked = await app.read(`/api/verification?planId=${plan.id}`);
+  assert.equal(checked.status, 200);
+  const verification = await checked.json();
+  assert.equal(verification.status, 'verified');
+  assert.equal(verification.reviewEvidence.entryOrderId, '10');
+  assert.deepEqual(verification.reviewEvidence.fills.map((item: { id: string }) => item.id), ['1', '2']);
+  assert.equal(verification.reviewEvidence.stops[0].triggerPrice, '98');
+  assert.equal(verification.reviewEvidence.stops[0].workingType, 'MARK_PRICE');
+  assert.equal(verification.reviewEvidence.endTime, app.now + 200);
+  const recovered = await (await app.post('/api/plan/recover', { recovery: plan.recovery })).json();
+  assert.deepEqual(recovered, original);
+});
+
+
+async function reviewSynced(app: Awaited<ReturnType<typeof start>>) {
+  assert.equal((await app.post('/api/review/sync', { symbol: 'BTCUSDT' })).status, 202);
+  for (let i = 0; i < 500; i++) {
+    const data = await (await app.read('/api/review/trades')).json();
+    if (data.sync?.status !== 'running') return data;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('sync did not finish');
+}
+function closeTrade(app: Awaited<ReturnType<typeof start>>, price = '35') {
+  const time = app.now + 300;
+  (app.data['/fapi/v1/userTrades'] as unknown[]).push({ symbol: 'BTCUSDT', id: 3, orderId: 11, side: 'SELL', positionSide: 'BOTH', time, price, qty: '0.4', commission: '0.014', commissionAsset: 'USDT', realizedPnl: '-26' });
+  (app.data['/fapi/v1/allOrders'] as unknown[]).push({ symbol: 'BTCUSDT', orderId: 11, side: 'SELL', positionSide: 'BOTH', type: 'MARKET', origType: 'STOP_MARKET', status: 'FILLED', time, updateTime: time, origQty: '0.4', executedQty: '0.4', reduceOnly: true, closePosition: false });
+  app.data['/fapi/v1/income'] = [];
+  app.data['/fapi/v1/openAlgoOrders'] = [];
+  app.data['/fapi/v1/time'] = { serverTime: Date.now() };
+  Object.assign(app.position, { positionAmt: '0', entryPrice: '0', liquidationPrice: '0', updateTime: time });
+}
+
+test('review links direct fill evidence, preserves fixed plan and old checks through logout, restart and regrouping, and separates excess loss from intent', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'comparison-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'real.sqlite');
+  let app = await start(t, fixture(), 'real', 'test-key', path);
+  const plan = await (await app.create()).json();
+  app.data['/fapi/v1/openAlgoOrders'] = [fill(app)];
+  const verification = await (await app.read(`/api/verification?planId=${plan.id}`)).json();
+  closeTrade(app);
+  const list = await reviewSynced(app);
+  assert.equal(list.sync.status, 'complete', JSON.stringify(list.sync.missing));
+  assert.equal(list.trades.length, 1);
+  const id = list.trades[0].id;
+  const detail = await (await app.read(`/api/review/trades/${id}`)).json();
+  assert.equal(detail.planComparison.status, 'linked');
+  assert.equal(detail.planComparison.plan.budget, '20');
+  assert.equal(detail.planComparison.plan.stopPrice, '98');
+  assert.equal(detail.planComparison.actualEntry.quantity, '0.4');
+  assert.equal(detail.planComparison.actualEntry.price, '100');
+  assert.equal(detail.planComparison.confirmedLoss, '26.054');
+  assert.equal(detail.planComparison.budgetExcess, '6.054');
+  assert.equal(detail.planComparison.verifications[0].queriedAt, verification.queriedAt);
+  assert.match(detail.planComparison.limitations.join(' '), /查询时点.*未记录.*未知/);
+  assert.match(detail.planComparison.limitations.join(' '), /不能.*违规.*动机/);
+  await app.login();
+  await new Promise<void>((resolve) => { app.server.closeAllConnections(); app.server.close(() => resolve()); });
+  app = await start(t, { data: app.data, position: app.position, now: app.now }, 'real', 'test-key', path);
+  assert.deepEqual((await (await app.read(`/api/review/trades/${id}`)).json()).planComparison, detail.planComparison);
+  await reviewSynced(app);
+  assert.deepEqual((await (await app.read(`/api/review/trades/${id}`)).json()).planComparison, detail.planComparison);
+});
+
+
+test('multiple plans sharing the same verified fills remain ambiguous; a never-verified plan is not guessed by time', async (t) => {
+  for (const verified of [true, false]) await t.test(verified ? 'ambiguous' : 'unlinked', async (t) => {
+    const directory = mkdtempSync(join(tmpdir(), 'comparison-match-'));
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    const app = await start(t, fixture(), 'real', 'test-key', join(directory, 'real.sqlite'));
+    const plans = [await (await app.create()).json(), await (await app.create()).json()];
+    app.data['/fapi/v1/openAlgoOrders'] = [fill(app)];
+    if (verified) for (const plan of plans) assert.equal((await app.read(`/api/verification?planId=${plan.id}`)).status, 200);
+    closeTrade(app);
+    const list = await reviewSynced(app);
+    const comparison = (await (await app.read(`/api/review/trades/${list.trades[0].id}`)).json()).planComparison;
+    assert.equal(comparison.status, verified ? 'ambiguous' : 'unlinked');
+    assert.equal(list.trades[0].planLink.status, comparison.status);
+    assert.equal(comparison.plan, null);
+    assert.equal(comparison.budgetExcess, null);
+    assert.equal(comparison.candidatePlanIds.length, verified ? 2 : 0);
+  });
+});
+
+test('two-level comparison records quantity and trigger deviations and keeps partial exits distinct from original quantity', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'comparison-two-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const app = await start(t, fixture(), 'real', 'test-key', join(directory, 'real.sqlite'));
+  const plan = await (await app.create(twoInput)).json();
+  const final = fill(app);
+  const near = { ...final, algoId: 21, closePosition: false, reduceOnly: true, quantity: '0.3', triggerPrice: '99' };
+  app.data['/fapi/v1/openAlgoOrders'] = [final, near];
+  app.data['/fapi/v1/allAlgoOrders'] = [final, near];
+  const first = await (await app.read(`/api/verification?planId=${plan.id}`)).json();
+  assert.equal(first.status, 'needs-action');
+  const list = await reviewSynced(app);
+  const comparison = (await (await app.read(`/api/review/trades/${list.trades[0].id}`)).json()).planComparison;
+  assert.equal(comparison.status, 'linked');
+  assert.equal(comparison.plan.nearStop.quantity, '0.2');
+  assert.match(comparison.stopChecks[0].deviations.join(' '), /数量.*0.3.*0.2/);
+  assert.equal(comparison.budgetExcess, null);
+});
+
+
+test('two-level partial-exit review preserves the original size and records remaining exposure and unknown final loss', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'comparison-partial-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const app = await start(t, fixture(), 'real', 'test-key', join(directory, 'real.sqlite'));
+  const plan = await (await app.create({ ...twoInput, entryType: 'LIMIT', limitPrice: '100' })).json();
+  const final = fill(app);
+  app.data['/fapi/v1/allOrders'] = [{ ...limitOrder(app), status: 'CANCELED', executedQty: '0.4' }, { symbol: 'BTCUSDT', orderId: 11, side: 'SELL', positionSide: 'BOTH', type: 'MARKET', origType: 'STOP_MARKET', status: 'FILLED', origQty: '0.2', executedQty: '0.2', reduceOnly: true, closePosition: false, time: app.now + 150, updateTime: app.now + 150 }];
+  (app.data['/fapi/v1/userTrades'] as unknown[]).push({ symbol: 'BTCUSDT', id: 3, orderId: 11, side: 'SELL', positionSide: 'BOTH', qty: '0.2', price: '99', commission: '0.0198', commissionAsset: 'USDT', realizedPnl: '-0.2', time: app.now + 150 });
+  const near = { ...final, algoId: 21, algoStatus: 'FINISHED', closePosition: false, reduceOnly: true, quantity: '0.2', triggerPrice: '99', actualOrderId: '11', triggerTime: app.now + 150, updateTime: app.now + 150 };
+  app.data['/fapi/v1/allAlgoOrders'] = [final, near];
+  app.data['/fapi/v1/income'] = [{ symbol: 'BTCUSDT', incomeType: 'REALIZED_PNL', income: '-0.2', asset: 'USDT', tradeId: '3', tranId: 124, time: app.now + 150 }];
+  app.data['/fapi/v1/openAlgoOrders'] = [final];
+  app.position.positionAmt = '0.2';
+  app.position.updateTime = app.now + 150;
+  const response = await app.read(`/api/verification?planId=${plan.id}`);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).status, 'verified');
+  app.data['/fapi/v1/time'] = () => ({ serverTime: Date.now() });
+  const list = await reviewSynced(app);
+  const detail = await (await app.read(`/api/review/trades/${list.trades[0].id}`)).json();
+  assert.equal(detail.status, 'open', JSON.stringify(detail.missing));
+  assert.equal(detail.planComparison.status, 'linked');
+  assert.equal(detail.planComparison.plan.quantity, '0.495');
+  assert.equal(detail.planComparison.plan.nearStop.quantity, '0.3');
+  assert.equal(detail.planComparison.actualEntry.quantity, '0.4');
+  assert.equal(detail.planComparison.quantityDifference, '-0.095');
+  assert.equal(detail.planComparison.verifications[0].quantity, '0.2');
+  assert.equal(detail.planComparison.verifications[0].nearStatus, '已执行');
+  assert.equal(detail.planComparison.verifications[0].reviewEvidence.historicalStops.find((stop: { id: string }) => stop.id === '21').actualOrderId, '11');
+  assert.equal(detail.planComparison.budgetExcess, null);
+});
+
+test('missing net costs do not hide the linked plan or imply a zero final loss', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'comparison-costs-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const app = await start(t, fixture(), 'real', 'test-key', join(directory, 'real.sqlite'));
+  const plan = await (await app.create()).json();
+  app.data['/fapi/v1/openAlgoOrders'] = [fill(app)];
+  await app.read(`/api/verification?planId=${plan.id}`);
+  closeTrade(app);
+  (app.data['/fapi/v1/userTrades'] as Record<string, unknown>[])[2]!.commissionAsset = 'BNB';
+  const list = await reviewSynced(app);
+  const detail = await (await app.read(`/api/review/trades/${list.trades[0].id}`)).json();
+  assert.equal(detail.status, 'incomplete');
+  assert.equal(detail.netPnl, null);
+  assert.equal(detail.planComparison.status, 'linked');
+  assert.equal(detail.planComparison.confirmedLoss, null);
+  assert.equal(detail.planComparison.budgetExcess, null);
+});
+
+test('unverifiable UID or a different UID prevents saving a new verification and retains the original plan for retry', async (t) => {
+  const app = await start(t);
+  const plan = await (await app.create()).json();
+  app.data['/fapi/v1/openAlgoOrders'] = [fill(app)];
+  for (const uid of [undefined, 67890]) {
+    app.data['/api/v3/account'] = { uid };
+    const response = await app.read(`/api/verification?planId=${plan.id}`);
+    assert.ok(response.status >= 400);
+    const data = await response.json();
+    assert.equal(data.status, undefined);
+    assert.equal(data.code, 'unverified_identity');
+  }
+  app.data['/api/v3/account'] = { uid: 12345 };
+  assert.equal((await (await app.read(`/api/verification?planId=${plan.id}`)).json()).status, 'verified');
+});
+
+test('a failed plan archive reports bounded failure instead of a successful plan or private data', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'comparison-write-failure-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const app = await start(t, fixture(), 'real', 'test-key', directory);
+  const response = await app.create();
+  assert.equal(response.status, 503);
+  const data = await response.json();
+  assert.equal(data.code, 'review_unavailable');
+  assert.equal(data.quantity, undefined);
+  assert.doesNotMatch(JSON.stringify(data), /comparison-write-failure|test-key|test-secret/);
+});
+
+
+test('a reconciled entry using another order type can be compared without treating an incomplete verification as protection', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'comparison-entry-type-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const app = await start(t, fixture(), 'real', 'test-key', join(directory, 'real.sqlite'));
+  const plan = await (await app.create()).json();
+  app.data['/fapi/v1/openAlgoOrders'] = [fill(app)];
+  Object.assign((app.data['/fapi/v1/allOrders'] as Record<string, unknown>[])[0]!, { type: 'LIMIT', origType: 'LIMIT', price: '100' });
+  const check = await (await app.read(`/api/verification?planId=${plan.id}`)).json();
+  assert.equal(check.status, 'incomplete');
+  closeTrade(app);
+  const list = await reviewSynced(app);
+  const comparison = (await (await app.read(`/api/review/trades/${list.trades[0].id}`)).json()).planComparison;
+  assert.equal(comparison.status, 'linked');
+  assert.equal(comparison.entryTypeDeviation, true);
+  assert.equal(comparison.plan.execution.entryType, 'MARKET');
+  assert.deepEqual(comparison.actualEntry.types, ['LIMIT']);
+  assert.equal(comparison.verifications[0].status, 'incomplete');
+});
+
+
+test('recorded entry price and stop trigger differences do not rewrite the fixed original plan', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'comparison-prices-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const app = await start(t, fixture(), 'real', 'test-key', join(directory, 'real.sqlite'));
+  const plan = await (await app.create()).json();
+  const stop = fill(app);
+  stop.triggerPrice = '97.5';
+  app.data['/fapi/v1/openAlgoOrders'] = [stop];
+  (app.data['/fapi/v1/userTrades'] as Record<string, unknown>[])[1]!.price = '102';
+  app.position.entryPrice = '101.5';
+  await app.read(`/api/verification?planId=${plan.id}`);
+  app.data['/fapi/v1/time'] = () => ({ serverTime: Date.now() });
+  const list = await reviewSynced(app);
+  const comparison = (await (await app.read(`/api/review/trades/${list.trades[0].id}`)).json()).planComparison;
+  assert.equal(comparison.status, 'linked');
+  assert.equal(comparison.actualEntry.price, '101.5');
+  assert.equal(comparison.priceDifference, '1.5');
+  assert.equal(comparison.plan.referencePrice, '100');
+  assert.equal(comparison.plan.stopPrice, '98');
+  assert.match(comparison.stopChecks[0].deviations.join(' '), /触发价 97.5.*98/);
+});
+
+test('an account identity change during plan generation cannot leave a usable saved plan', async (t) => {
+  const app = await start(t);
+  let calls = 0;
+  app.data['/api/v3/account'] = () => ({ uid: ++calls === 1 ? 12345 : 67890 });
+  const response = await app.create();
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).code, 'unverified_identity');
 });

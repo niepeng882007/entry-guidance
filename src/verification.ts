@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { AccountError, object, readAccount, readBinance, type AccountConfig } from './account.ts';
+import { AccountError, object, readAccount, readBinance, readReviewIdentity, type AccountConfig } from './account.ts';
 import { readMarket } from './market.ts';
 import { generateEntryPlan, recheckEntryPlan, parseDecimal, formatDecimal, splitStopQuantity, type EntryInput, type Snapshot } from '../public/draft.js';
+
+import type { ReviewFill } from './review-ledger.ts';
 
 type Config = AccountConfig & { mode?: 'real' | 'demo' };
 const SCALE = 100_000_000n;
@@ -10,10 +12,21 @@ const abs = (value: bigint) => value < 0n ? -value : value;
 const max = (a: bigint, b: bigint) => a > b ? a : b;
 const ceil = (value: bigint, denominator: bigint) => (value + denominator - 1n) / denominator;
 const serialize = (value: unknown) => JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? item.toString() : item);
-export type Plan = ReturnType<typeof generateEntryPlan> & { id: string; startedAt: string; account: Snapshot['account'] };
+export type Plan = ReturnType<typeof generateEntryPlan> & { id: string; startedAt: string; account: Snapshot['account']; reviewAccountId?: string; takerRate?: string };
+export type RecordedStop = {
+  id: string; algo: boolean; status: string; type: string; side: string; positionSide: string;
+  quantity: string; executedQuantity: string; triggerPrice: string; workingType: string;
+  closePosition: boolean; reduceOnly: boolean; priceProtect: boolean; updateTime: number;
+  timeInForce: string; goodTillDate: number; actualOrderId: string | null; triggerTime: number;
+};
+export type VerificationEvidence = {
+  startTime: number; endTime: number; entryOrderId: string | null; snapshotConsistent: boolean;
+  fills: ReviewFill[]; stops: RecordedStop[]; historicalStops: RecordedStop[];
+};
 export type Verification = {
   status: 'waiting' | 'ended' | 'incomplete' | 'needs-action' | 'verified';
   source: 'demo' | 'binance'; queriedAt: string; issues: string[];
+  reviewRetention?: 'saved' | 'legacy-unbound';
   quantity?: string; entryPrice?: string; liquidationPrice?: string; leverage?: string;
   side?: 'long' | 'short' | 'flat';
   orderId?: string; plannedLoss?: string; excess?: string; liquidationBuffer?: string;
@@ -22,6 +35,7 @@ export type Verification = {
   paidCommission?: string; paidFunding?: string; remainingFunding?: string; exitFee?: string; coverage?: string;
   nearQuantity?: string; nearActualPercent?: string; nearStatus?: string; realizedPnl?: string;
   account?: Snapshot['account'];
+  reviewEvidence?: VerificationEvidence;
   entryCheck?: {
     status: 'ready' | 'needs-action' | 'incomplete'; queriedAt: string; issue: string;
     liquidationPrice?: string; liquidationBuffer?: string; plannedLoss?: string; fundingRequired?: string;
@@ -100,6 +114,7 @@ export async function createPlan(config: Config, value: unknown): Promise<Plan> 
     || optional.some((key) => data[key] !== undefined && (typeof data[key] !== 'string' || data[key].length > 34))) throw new AccountError('invalid_input', '本次计划输入缺失或格式无效。', 400);
   const input = data as EntryInput;
   const signal = AbortSignal.timeout(10_000);
+  const reviewAccountId = config.mode === 'demo' ? 'demo-account' : await readReviewIdentity(config, signal);
   const start = config.mode === 'demo' ? Date.now() : await serverTime(config, signal);
   const snapshot = await readMarket(config, input.symbol, signal);
   if (config.mode !== 'demo') {
@@ -108,13 +123,16 @@ export async function createPlan(config: Config, value: unknown): Promise<Plan> 
     const trades = rows(await readBinance(config, 'trades', signal, input.symbol, { startTime: start, endTime: end }));
     if (state.position.quantity !== 0n || !state.position.isolated || state.orders.length || state.algoOrders.length || trades.length) throw new AccountError('unconfirmed_start', '生成期间持仓、成交或挂单发生变化，无法确认本单空仓起点，请处理后重新生成。');
   }
-  try { return { ...generateEntryPlan(input, snapshot), id: randomUUID(), startedAt: new Date(start).toISOString(), account: snapshot.account }; }
+  if (config.mode !== 'demo' && await readReviewIdentity(config, signal) !== reviewAccountId) throw new AccountError('unverified_identity', '生成期间账户身份改变，未保存新方案；已有本单与归档保留。', 409);
+  try { return { ...generateEntryPlan(input, snapshot), reviewAccountId, takerRate: snapshot.takerRate, id: randomUUID(), startedAt: new Date(start).toISOString(), account: snapshot.account }; }
   catch (error) { throw new AccountError('invalid_plan', error instanceof Error ? error.message : '无法生成正式方案。', 400); }
 }
 
 export async function verifyPosition(config: Config, plan: Plan, demo = 'missing-stop'): Promise<Verification> {
   if (config.mode === 'demo') return verifyDemo(config, plan, demo);
   const signal = AbortSignal.timeout(10_000);
+  const uid = await readReviewIdentity(config, signal);
+  if (plan.reviewAccountId && uid !== plan.reviewAccountId) throw new AccountError('unverified_identity', '账户身份与原方案不一致，已停止核验和新增归档。', 409);
   const account = await readAccount(config, undefined, signal);
   const before = await readState(config, plan.symbol, signal);
   const end = await serverTime(config, signal);
@@ -127,6 +145,7 @@ export async function verifyPosition(config: Config, plan: Plan, demo = 'missing
   ]);
   const after = await readState(config, plan.symbol, signal);
   if (serialize(before) !== serialize(after)) throw new AccountError('inconsistent_snapshot', '查询期间持仓或挂单发生变化，本次快照不一致，请重新刷新核验。');
+  if (await readReviewIdentity(config, signal) !== uid) throw new AccountError('unverified_identity', '查询期间账户身份改变，已停止核验和新增归档。', 409);
   return recheckBeforeEntry(config, plan, { ...evaluate(plan, after, { trades: rows(tradeData), history: rows(historyData), algoHistory: rows(algoHistory), income: rows(incomeData), exchange: object(exchangeData), fee: object(feeData), mark: object(markData), start: period.startTime, end }), account }, signal);
 }
 
@@ -207,10 +226,32 @@ async function verifyDemo(config: Config, plan: Plan, scenario: string): Promise
 type State = Awaited<ReturnType<typeof readState>>;
 type Records = { trades: Record<string, unknown>[]; history: Record<string, unknown>[]; algoHistory: Record<string, unknown>[]; income: Record<string, unknown>[]; exchange: Record<string, unknown>; fee: Record<string, unknown>; mark: Record<string, unknown>; start: number; end: number };
 
+function recordStop(order: State['orders'][number]): RecordedStop {
+  return {
+    id: order.id, algo: order.algo, status: String(order.status), type: String(order.type), side: String(order.side), positionSide: String(order.positionSide),
+    quantity: formatDecimal(order.quantity), executedQuantity: formatDecimal(order.executed), triggerPrice: formatDecimal(order.stop), workingType: String(order.workingType),
+    closePosition: order.close, reduceOnly: order.reduce, priceProtect: order.protect, updateTime: order.updateTime,
+    timeInForce: String(order.timeInForce), goodTillDate: order.goodTillDate, actualOrderId: order.actualOrderId, triggerTime: order.triggerTime,
+  };
+}
+
 function evaluate(plan: Plan, state: State, data: Records): Verification {
   const { position } = state;
   const quantity = abs(position.quantity);
   const result: Verification = { status: 'incomplete', source: plan.source, queriedAt: new Date().toISOString(), issues: [], quantity: formatDecimal(quantity), side: position.quantity === 0n ? 'flat' : position.quantity > 0n ? 'long' : 'short', entryPrice: formatDecimal(position.entry), liquidationPrice: formatDecimal(position.liquidation), leverage: formatDecimal(position.leverage) };
+  result.reviewEvidence = { startTime: data.start, endTime: data.end, entryOrderId: null,
+    snapshotConsistent: position.updateTime <= data.end && (quantity === 0n || position.updateTime > 0) && [...state.orders, ...state.algoOrders].every((order) => order.updateTime <= data.end),
+    fills: [], stops: [...state.orders, ...state.algoOrders].filter((order) => order.type === 'STOP_MARKET' || order.type === 'STOP').map(recordStop), historicalStops: [] };
+  try { result.reviewEvidence.historicalStops = normalizeOrders(data.algoHistory, plan.symbol, true).map(recordStop); }
+  catch { /* The verifier below reports malformed historical data; no trustworthy settings can be recorded. */ }
+
+  try {
+    result.reviewEvidence.fills = data.trades.map((row) => ({
+      id: id(row.id), orderId: id(row.orderId), symbol: String(row.symbol), side: row.side as ReviewFill['side'], positionSide: row.positionSide as ReviewFill['positionSide'],
+      quantity: formatDecimal(amount(row.qty, '成交数量')), price: formatDecimal(amount(row.price, '成交价格')), time: new Date(stamp(row.time)).toISOString(),
+      realizedPnl: formatDecimal(amount(row.realizedPnl, '已实现盈亏', true)), commission: formatDecimal(amount(row.commission, '成交手续费')), commissionAsset: String(row.commissionAsset),
+    }));
+  } catch { result.reviewEvidence.fills = []; }
   const incomplete = (message: string) => { result.issues.push(message); return result; };
   if (position.updateTime > data.end || (quantity > 0n && position.updateTime === 0) || [...state.orders, ...state.algoOrders].some((order) => order.updateTime > data.end)) return incomplete('持仓或挂单时间与本次查询不一致，请重新刷新。');
   // ponytail: one bounded history window; refuse a full page instead of silently truncating. Add pagination for longer/multi-order workflows.
@@ -321,6 +362,8 @@ function evaluate(plan: Plan, state: State, data: Records): Verification {
   const entry = data.history.filter((order) => orderIds.has(id(order.orderId)));
   if (orderIds.size !== 1 || entry.length !== 1) return incomplete('本单起点后无法确认唯一开仓订单，不猜测多笔订单的归属。');
   const order = entry[0]!;
+  // A reconciled fill chain establishes identity independently of whether execution followed the plan.
+  if (position.quantity === direction * (total - closed)) result.reviewEvidence.entryOrderId = id(order.orderId);
   const matchesEntry = plan.execution.entryType === 'LIMIT' ? order === limitOrder
     : order.type === 'MARKET' && order.origType === 'MARKET' && order.side === entrySide && order.positionSide === 'BOTH' && !flag(order.reduceOnly) && !flag(order.closePosition) && order.status === 'FILLED';
   if (!matchesEntry) return incomplete('未确认本单的唯一同方向开仓订单，无法完整核验。');
