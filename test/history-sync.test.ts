@@ -46,7 +46,10 @@ function fixture(overrides: Partial<Record<string, unknown>> = {}): Transport {
     let body = bodies[url.pathname];
     if (Array.isArray(body) && url.searchParams.has('startTime')) {
       const start = Number(url.searchParams.get('startTime')), end = Number(url.searchParams.get('endTime'));
-      body = body.filter((row) => row.time >= start && row.time <= end);
+      body = body.filter((row) => {
+        const time = url.pathname === '/fapi/v1/allAlgoOrders' ? row.createTime : row.time;
+        return time >= start && time <= end;
+      });
     }
     return { status: 200, body };
   };
@@ -387,4 +390,237 @@ test('retry enriches unknown costs and income but rejects changes to previously 
   data = await finished(app);
   assert.equal(data.sync.status, 'failed');
   assert.equal(data.trades[0].netPnl, '9.6');
+});
+
+
+test('staged entry and adding after a reduction stay in one reconciled cycle', async (t) => {
+  const staged = [
+    { ...fills[0]!, id: 10, orderId: 20, qty: '2', commission: '0.2' },
+    { ...fills[0]!, id: 11, orderId: 21, qty: '1', commission: '0.1', time: opened + 1000 },
+    { ...fills[1]!, id: 12, orderId: 22, qty: '1', realizedPnl: '5', commission: '0.1', time: opened + 2000 },
+    { ...fills[0]!, id: 13, orderId: 23, qty: '1', commission: '0.1', time: opened + 3000 },
+    { ...fills[1]!, id: 14, orderId: 24, qty: '3', realizedPnl: '15', commission: '0.3' },
+  ];
+  const app = await start(t, fixture({ '/fapi/v1/userTrades': staged,
+    '/fapi/v1/allOrders': staged.map((fill) => ({ ...orders[0]!, orderId: fill.orderId, side: fill.side, origQty: fill.qty, executedQty: fill.qty, time: fill.time })),
+    '/fapi/v1/income': [] }));
+  await app.sync();
+  const data = await finished(app);
+  assert.equal(data.trades.length, 1);
+  assert.equal(data.trades[0].status, 'closed');
+  assert.equal(data.trades[0].netPnl, '19.2');
+  const detail = await (await app.get(`/api/review/trades/${data.trades[0].id}`)).json();
+  assert.deepEqual(detail.evidence.fills.map((fill: { quantity: string }) => fill.quantity), ['2', '1', '1', '1', '3']);
+});
+
+
+test('one-way reversal shares original evidence and allocates fee remainder to the new cycle', async (t) => {
+  const reversed = [
+    { ...fills[0]!, id: 20, orderId: 30, qty: '1', commission: '0.01' },
+    { ...fills[1]!, id: 21, orderId: 31, qty: '3', realizedPnl: '10', commission: '0.1' },
+    { ...fills[0]!, id: 22, orderId: 32, qty: '2', realizedPnl: '6', commission: '0.02', time: closed + 1000 },
+  ];
+  const app = await start(t, fixture({ '/fapi/v1/userTrades': reversed,
+    '/fapi/v1/allOrders': reversed.map((fill) => ({ ...orders[0]!, orderId: fill.orderId, side: fill.side, origQty: fill.qty, executedQty: fill.qty, time: fill.time })), '/fapi/v1/income': [
+      { symbol: 'BTCUSDT', incomeType: 'COMMISSION', tranId: 5, tradeId: '21', time: closed, income: '-0.1', asset: 'USDT' },
+    ] }));
+  await app.sync();
+  let data = await finished(app);
+  assert.equal(data.trades.length, 2);
+  const long = data.trades.find((trade: { side: string }) => trade.side === 'long');
+  const short = data.trades.find((trade: { side: string }) => trade.side === 'short');
+  assert.equal(long.status, 'closed');
+  assert.equal(short.status, 'closed');
+  assert.equal(long.commission, '0.04333333');
+  assert.equal(short.commission, '0.08666667');
+  assert.equal(long.netPnl, '9.95666667');
+  assert.equal(short.netPnl, '5.91333333');
+  const left = await (await app.get(`/api/review/trades/${long.id}`)).json();
+  const right = await (await app.get(`/api/review/trades/${short.id}`)).json();
+  assert.equal(left.evidence.fills[1].id, '21');
+  assert.equal(right.evidence.fills[0].id, '21');
+  assert.equal(left.evidence.fills[1].quantity, '1');
+  assert.equal(right.evidence.fills[0].quantity, '2');
+  assert.equal(left.evidence.fills[1].realizedPnl, '10');
+  assert.equal(right.evidence.fills[0].realizedPnl, '0');
+  assert.equal(right.evidence.raw.find((row: { kind: string; id: string }) => row.kind === 'trades' && row.id === '21').payload.qty, '3');
+  await app.sync();
+  data = await finished(app);
+  assert.deepEqual(data.trades.map((trade: { netPnl: string }) => trade.netPnl).sort(), ['5.91333333', '9.95666667']);
+});
+
+
+test('hedge long and short cycles reconcile independently even with simultaneous fills', async (t) => {
+  const hedged = [
+    { ...fills[0]!, id: 101, orderId: 201, positionSide: 'LONG', qty: '2', commission: '0.02' },
+    { ...fills[1]!, id: 102, orderId: 202, positionSide: 'SHORT', qty: '1', commission: '0.01', realizedPnl: '0', time: opened },
+    { ...fills[1]!, id: 103, orderId: 203, positionSide: 'LONG', qty: '2', commission: '0.02', realizedPnl: '8' },
+    { ...fills[0]!, id: 104, orderId: 204, positionSide: 'SHORT', qty: '1', commission: '0.01', realizedPnl: '3', time: closed + 1000 },
+  ];
+  const app = await start(t, fixture({ '/fapi/v1/userTrades': [...hedged].reverse(),
+    '/fapi/v1/allOrders': hedged.map((fill) => ({ ...orders[0]!, orderId: fill.orderId, side: fill.side, positionSide: fill.positionSide, origQty: fill.qty, executedQty: fill.qty, time: fill.time })),
+    '/fapi/v1/income': [], '/fapi/v2/positionRisk': [
+      { symbol: 'BTCUSDT', positionSide: 'LONG', positionAmt: '0' },
+      { symbol: 'BTCUSDT', positionSide: 'SHORT', positionAmt: '0' },
+    ] }));
+  await app.sync();
+  const data = await finished(app);
+  assert.equal(data.trades.length, 2);
+  const long = data.trades.find((trade: { side: string }) => trade.side === 'long');
+  const short = data.trades.find((trade: { side: string }) => trade.side === 'short');
+  assert.equal(long.status, 'closed');
+  assert.equal(short.status, 'closed');
+  assert.equal(long.netPnl, '7.96');
+  assert.equal(short.netPnl, '2.98');
+  const detail = await (await app.get(`/api/review/trades/${short.id}`)).json();
+  assert.deepEqual(detail.evidence.fills.map((fill: { id: string }) => fill.id), ['102', '104']);
+});
+
+
+test('an open cycle carries funding through the query boundary and separates snapshot unrealized PnL', async (t) => {
+  const app = await start(t, fixture({ '/fapi/v1/userTrades': [fills[0]], '/fapi/v1/allOrders': [orders[0]],
+    '/fapi/v2/positionRisk': [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '1', unRealizedProfit: '7.25', marginType: 'isolated', leverage: '20' }],
+    '/fapi/v1/income': [{ symbol: 'BTCUSDT', incomeType: 'FUNDING_FEE', tranId: 9, time: closed + 1000, income: '-0.25', asset: 'USDT' }] }));
+  await app.sync();
+  const data = await finished(app);
+  const trade = data.trades[0];
+  assert.equal(trade.status, 'open');
+  assert.equal(trade.closedAt, null);
+  assert.equal(trade.netPnl, null);
+  assert.equal(trade.realizedPnl, '0');
+  assert.equal(trade.fundingNet, '-0.25');
+  assert.equal(trade.unrealizedPnl, '7.25');
+  assert.ok(Date.parse(trade.observedAt) >= data.sync.endTime);
+  assert.equal(trade.groupingVersion, 2);
+});
+
+
+test('funding without position-side evidence cannot confirm either overlapping hedge cycle', async (t) => {
+  const hedged = [
+    { ...fills[0]!, id: 301, orderId: 401, positionSide: 'LONG' },
+    { ...fills[1]!, id: 302, orderId: 402, positionSide: 'SHORT', realizedPnl: '0', time: opened + 1000 },
+    { ...fills[1]!, id: 303, orderId: 403, positionSide: 'LONG' },
+    { ...fills[0]!, id: 304, orderId: 404, positionSide: 'SHORT', realizedPnl: '3', time: closed + 1000 },
+  ];
+  const app = await start(t, fixture({ '/fapi/v1/userTrades': hedged,
+    '/fapi/v1/allOrders': hedged.map((fill) => ({ ...orders[0]!, orderId: fill.orderId, side: fill.side, positionSide: fill.positionSide, time: fill.time })),
+    '/fapi/v1/income': [{ symbol: 'BTCUSDT', incomeType: 'FUNDING_FEE', tranId: 33, time: opened + 2000, income: '-0.5', asset: 'USDT' }],
+    '/fapi/v2/positionRisk': [{ symbol: 'BTCUSDT', positionSide: 'LONG', positionAmt: '0' }, { symbol: 'BTCUSDT', positionSide: 'SHORT', positionAmt: '0' }] }));
+  await app.sync();
+  const data = await finished(app);
+  assert.equal(data.trades.length, 2);
+  for (const trade of data.trades) {
+    assert.equal(trade.netPnl, null);
+    assert.equal(trade.fundingNet, null);
+    assert.ok(trade.missing.includes('资金费无法唯一归属'));
+    const detail = await (await app.get(`/api/review/trades/${trade.id}`)).json();
+    assert.equal(detail.evidence.funding[0].amount, '-0.5');
+  }
+});
+
+
+test('same-millisecond close and reopen use exact trade IDs and share an order without losing quantities', async (t) => {
+  const simultaneous = [
+    { ...fills[0]!, id: '90071992547409930', orderId: 601 },
+    { ...fills[1]!, id: '90071992547409931', orderId: 602 },
+    { ...fills[1]!, id: '90071992547409932', orderId: 602, realizedPnl: '0' },
+    { ...fills[0]!, id: '90071992547409933', orderId: 603, realizedPnl: '4', time: closed + 1000 },
+  ];
+  const app = await start(t, fixture({ '/fapi/v1/userTrades': [...simultaneous].reverse(),
+    '/fapi/v1/allOrders': [
+      { ...orders[0]!, orderId: 601 },
+      { ...orders[1]!, orderId: 602, origQty: '2', executedQty: '2' },
+      { ...orders[0]!, orderId: 603, time: closed + 1000 },
+    ], '/fapi/v1/income': [] }));
+  await app.sync();
+  const data = await finished(app);
+  assert.deepEqual(data.trades.map((trade: { netPnl: string }) => trade.netPnl).sort(), ['3.8', '9.8']);
+  const short = data.trades.find((trade: { side: string }) => trade.side === 'short');
+  const detail = await (await app.get(`/api/review/trades/${short.id}`)).json();
+  assert.equal(detail.evidence.fills[0].id, '90071992547409932');
+  assert.equal(detail.evidence.orders[0].quantity, '1');
+});
+
+test('funding at a reversal boundary remains attributable evidence rather than double-counted income', async (t) => {
+  const reversed = [fills[0]!, { ...fills[1]!, qty: '2' }, { ...fills[0]!, id: 3, orderId: 13, time: closed + 1000, realizedPnl: '5' }];
+  const app = await start(t, fixture({ '/fapi/v1/userTrades': reversed,
+    '/fapi/v1/allOrders': reversed.map((fill) => ({ ...orders[0]!, orderId: fill.orderId, side: fill.side, origQty: fill.qty, executedQty: fill.qty, time: fill.time })),
+    '/fapi/v1/income': [{ symbol: 'BTCUSDT', incomeType: 'FUNDING_FEE', tranId: 8, time: closed, income: '-1', asset: 'USDT' }] }));
+  await app.sync();
+  const data = await finished(app);
+  assert.equal(data.trades.length, 2);
+  assert.ok(data.trades.every((trade: { fundingNet: string | null; netPnl: string | null }) => trade.fundingNet === null && trade.netPnl === null));
+});
+
+test('a failed resync retains the closed reversal allocation and exposes its remaining opening quantity', async (t) => {
+  const reversed = [fills[0]!, { ...fills[1]!, qty: '3', commission: '0.1' }];
+  let failPosition = false;
+  const base = fixture({ '/fapi/v1/userTrades': reversed,
+    '/fapi/v1/allOrders': reversed.map((fill) => ({ ...orders[0]!, orderId: fill.orderId, side: fill.side, origQty: fill.qty, executedQty: fill.qty, time: fill.time })),
+    '/fapi/v1/income': [], '/fapi/v2/positionRisk': [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '-2' }] });
+  const app = await start(t, async (url, headers, signal) => failPosition && url.pathname === '/fapi/v2/positionRisk' ? { status: 503, body: {} } : base(url, headers, signal));
+  await app.sync();
+  let data = await finished(app);
+  const closedTrade = data.trades.find((trade: { status: string }) => trade.status === 'closed');
+  assert.equal(closedTrade.commission, '0.13333333');
+  failPosition = true;
+  await app.sync();
+  data = await finished(app);
+  assert.equal(data.trades.length, 2);
+  assert.equal(data.trades.find((trade: { id: string }) => trade.id === closedTrade.id).netPnl, '9.86666667');
+  const fragment = data.trades.find((trade: { status: string }) => trade.status === 'incomplete');
+  const detail = await (await app.get(`/api/review/trades/${fragment.id}`)).json();
+  assert.equal(detail.evidence.fills[0].quantity, '2');
+  assert.equal(detail.commission, '0.06666667');
+  assert.equal(detail.realizedPnl, '0');
+});
+
+
+test('conditional execution types retain their linked algo order rather than only the child market order', async (t) => {
+  const app = await start(t, fixture({ '/fapi/v1/allAlgoOrders': [{ symbol: 'BTCUSDT', algoId: 800, actualOrderId: '12', orderType: 'STOP_MARKET', side: 'SELL', positionSide: 'BOTH', createTime: closed - 1000 }] }));
+  await app.sync();
+  const data = await finished(app);
+  const detail = await (await app.get(`/api/review/trades/${data.trades[0].id}`)).json();
+  assert.equal(detail.evidence.orders[1].type, 'STOP_MARKET');
+  assert.equal(detail.evidence.orders[1].algoId, '800');
+  assert.ok(detail.evidence.raw.some((row: { kind: string; id: string }) => row.kind === 'algoHistory' && row.id === '800'));
+});
+
+
+test('a first visible reversal retains an incomplete old fragment and a distinct reliable new cycle', async (t) => {
+  const reversal = { ...fills[1]!, qty: '2', commission: '0.2' };
+  const sourceFills = [reversal];
+  const sourceOrders = [{ ...orders[1]!, origQty: '2', executedQty: '2' }];
+  const app = await start(t, fixture({ '/fapi/v1/userTrades': sourceFills,
+    '/fapi/v1/allOrders': sourceOrders,
+    '/fapi/v1/income': [], '/fapi/v2/positionRisk': [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '-1' }] }));
+  await app.sync();
+  const data = await finished(app);
+  assert.equal(data.sync.status, 'complete');
+  assert.equal(data.trades.length, 2);
+  assert.equal(new Set(data.trades.map((trade: { id: string }) => trade.id)).size, 2);
+  const old = data.trades.find((trade: { status: string }) => trade.status === 'incomplete');
+  const next = data.trades.find((trade: { status: string }) => trade.status === 'open');
+  assert.equal(old.openedAt, null);
+  assert.equal(old.realizedPnl, '10');
+  assert.equal(old.commission, '0.1');
+  assert.equal(next.side, 'short');
+  assert.equal(next.commission, '0.1');
+  assert.equal(next.realizedPnl, '0');
+  sourceFills.push(fills[0]!);
+  sourceOrders.push(orders[0]!);
+  await app.sync();
+  const supplemented = await finished(app);
+  assert.equal(supplemented.trades.length, 2);
+  assert.equal(supplemented.trades.find((trade: { status: string }) => trade.status === 'closed').netPnl, '9.8');
+  assert.equal(supplemented.trades.find((trade: { status: string }) => trade.status === 'open').id, next.id);
+});
+
+test('realized PnL on a reconstructed opening fill contradicts a complete starting chain', async (t) => {
+  const app = await start(t, fixture({ '/fapi/v1/userTrades': [{ ...fills[0]!, realizedPnl: '5' }, fills[1]!] }));
+  await app.sync();
+  const data = await finished(app);
+  assert.equal(data.trades[0].status, 'incomplete');
+  assert.equal(data.trades[0].netPnl, null);
+  assert.equal(data.trades[0].openedAt, null);
 });

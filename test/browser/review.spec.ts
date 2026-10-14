@@ -306,3 +306,63 @@ test('a late sync response after leaving the page cannot restore current progres
   await expect(page.getByRole('status')).toContainText('页面已离开');
   await expect(page.getByText(/已读取 \d+ 页/)).toHaveCount(0);
 });
+
+test('complex trade detail shows mixed execution types, shared reversal evidence and dated open PnL', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.getByLabel('个人访问密码').fill('browser-test-only');
+  await page.getByRole('button', { name: '进入账户' }).click();
+  const list = await (await page.request.get('/api/review/trades')).json();
+  const detail = await (await page.request.get(`/api/review/trades/${list.trades[0].id}`)).json();
+  Object.assign(detail, {
+    groupingVersion: 2,
+    status: 'open',
+    closedAt: null,
+    netPnl: null,
+    observedAt: '2026-10-10T13:00:00Z',
+    unrealizedPnl: '7.25',
+    unrealizedAt: '2026-10-10T13:00:01Z',
+  });
+  detail.evidence.endPosition = '0.002';
+  detail.evidence.fills[0].event = 'entry';
+  detail.evidence.fills[0].allocation = 'open';
+  detail.evidence.fills[1].event = 'add';
+  detail.evidence.fills[1].orderId = 'demo-order-4';
+  detail.evidence.orders.push({ ...detail.evidence.orders[0], id: 'demo-order-4', type: 'MARKET' });
+  detail.evidence.fills[2].event = 'reduce';
+  detail.evidence.fills[3].event = 'reduce';
+  detail.evidence.funding[0].attribution = 'ambiguous';
+  detail.missing = ['资金费无法唯一归属'];
+  detail.fundingNet = null;
+  await page.route('**/api/review/trades', (route) =>
+    route.fulfill({ json: { ...list, trades: [detail] } }),
+  );
+  await page.route('**/api/review/trades/*', (route) => route.fulfill({ json: detail }));
+  await page.goto('/review');
+  await expect(page.getByText('持仓中', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
+  await expect(page.locator('#trade-detail')).toBeFocused();
+  await expect(page.locator('#trade-detail')).toContainText('入场类型：混合（限价单、市价单）');
+  await expect(page.locator('#trade-detail')).toContainText('退出类型：混合（市价单、未知）');
+  await expect(page.locator('#trade-detail')).toContainText('查询时点浮动盈亏');
+  await expect(page.locator('#trade-detail')).toContainText('7.25 USDT');
+  await expect(page.locator('#trade-detail')).toContainText('12 小时 59 分钟');
+  await expect(page.locator('#review-net-pnl')).toHaveText('待确认');
+  await page.getByText('逐笔成交 · 4 条', { exact: true }).click();
+  await expect(page.locator('.review-fill').first()).toContainText('反手开仓分配');
+  await expect(page.locator('.review-fill').first()).toContainText('原始成交：demo-fill-1');
+  await expect(page.locator('.review-fill').nth(1)).toContainText('加仓');
+  await page.getByText('资金费流水 · 2 条', { exact: true }).click();
+  await expect(page.locator('.review-funding').first()).toContainText('归属待确认');
+  for (const width of [320, 390, 1280]) {
+    await page.setViewportSize({ width, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await page.screenshot({
+      path: test.info().outputPath(`complex-review-${width}.png`),
+      fullPage: true,
+    });
+  }
+});

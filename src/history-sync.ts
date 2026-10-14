@@ -4,6 +4,7 @@ import { formatDecimal, parseDecimal } from '../public/draft.js';
 import { ReviewLedger, type HistoryPage, type HistorySource, type RawRecord, type ReviewFill, type ReviewIdentity, type ReviewTrade, type SyncState } from './review-ledger.ts';
 
 const day = 86_400_000;
+type PositionAnchor = { positions: Partial<Record<ReviewFill['positionSide'], bigint>>; raw: RawRecord[]; at: number; stable: ReviewFill['positionSide'][] };
 const sources: HistorySource[] = ['trades', 'history', 'algoHistory', 'income', 'forceOrders'];
 const fail = (message: string): never => { throw new AccountError('invalid_history', message); };
 function id(value: unknown): string {
@@ -165,7 +166,7 @@ export class HistorySync {
       catch { /* Keep committed evidence and progress when the filesystem is unavailable. */ }
     }
   }
-  private async anchor(state: SyncState): Promise<bigint | null> {
+  private async anchor(state: SyncState): Promise<PositionAnchor | null> {
     const signal = () => AbortSignal.any([this.controller.signal, AbortSignal.timeout(10_000)]);
     const before = timestamp(object(await readBinance(this.config, 'time', signal())).serverTime);
     const response = await readBinance(this.config, 'positions', signal(), state.symbol);
@@ -176,106 +177,157 @@ export class HistorySync {
     if (positions.some((row) => row.symbol !== state.symbol)) return fail('持仓合约不一致。');
     const raw: RawRecord[] = positions.map((row) => ({ kind: 'position', id: `${after}-${String(row.positionSide)}`, time: after, payload: row }));
     this.ledger.saveSync(state, raw);
-    if (positions.length !== 1 || positions[0]!.positionSide !== 'BOTH') return null;
-    let position = money(positions[0]!.positionAmt);
+    const modes = positions.map((row) => String(row.positionSide));
+    if (!(modes.length === 1 && modes[0] === 'BOTH') && !(modes.length === 2 && modes.includes('LONG') && modes.includes('SHORT'))) return null;
+    const amounts: PositionAnchor['positions'] = {};
+    for (const row of positions) {
+      const mode = row.positionSide as ReviewFill['positionSide'];
+      const amount = money(row.positionAmt);
+      if ((mode === 'LONG' && amount < 0n) || (mode === 'SHORT' && amount > 0n)) return null;
+      amounts[mode] = amount;
+    }
+    let stable = modes as ReviewFill['positionSide'][];
     if (after > state.endTime) {
       const page: HistoryPage = { source: 'trades', startTime: state.endTime + 1, endTime: after, page: 1 };
       const tail = normalize('trades', await readBinance(this.config, 'trades', signal(), state.symbol, { startTime: page.startTime, endTime: page.endTime }), state.symbol, page);
       if (tail.length >= 1000) return null;
       this.ledger.saveSync(state, tail);
-      if (tail.some((row) => row.time >= before || row.payload.positionSide !== 'BOTH')) return null;
-      for (const row of tail) position -= money(row.payload.qty, false) * (row.payload.side === 'BUY' ? 1n : -1n);
+      if (tail.some((row) => row.time >= before || amounts[row.payload.positionSide as ReviewFill['positionSide']] === undefined)) return null;
+      stable = stable.filter((mode) => !tail.some((row) => row.payload.positionSide === mode));
+      for (const row of tail) {
+        const mode = row.payload.positionSide as ReviewFill['positionSide'];
+        amounts[mode] = amounts[mode]! - money(row.payload.qty, false) * (row.payload.side === 'BUY' ? 1n : -1n);
+      }
     }
-    return position;
+    return { positions: amounts, raw, at: after, stable };
   }
-  private project(state: SyncState, anchor: bigint | null) {
+  private project(state: SyncState, anchor: PositionAnchor | null) {
     const raw = this.ledger.raw(state.symbol);
     const selected = raw.filter((row) => row.kind === 'trades' && row.time <= state.endTime).sort((a, b) => a.time - b.time || (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
-    let fills: ReviewFill[] = selected.map(({ id: fillId, time, payload: row }) => ({ id: fillId, orderId: id(row.orderId), symbol: state.symbol,
+    const fills: ReviewFill[] = selected.map(({ id: fillId, time, payload: row }) => ({ id: fillId, orderId: id(row.orderId), symbol: state.symbol,
       side: row.side as ReviewFill['side'], positionSide: row.positionSide as ReviewFill['positionSide'], quantity: String(row.qty), price: String(row.price),
       time: new Date(time).toISOString(), realizedPnl: typeof row.realizedPnl === 'string' ? row.realizedPnl : null, commission: typeof row.commission === 'string' ? row.commission : null, commissionAsset: typeof row.commissionAsset === 'string' ? row.commissionAsset : null }));
     if (!fills.length) return;
-    const firstTime = selected[0]!.time;
-    const reliable = anchor !== null && fills.every((fill) => fill.positionSide === 'BOTH') && covered(state, 'trades', firstTime, state.endTime);
-    const old = !reliable ? this.ledger.list().filter((trade) => trade.symbol === state.symbol && trade.status === 'closed').map((trade) => this.ledger.get(trade.id)!) : [];
-    const archivedIds = new Set(old.flatMap((trade) => trade.evidence.fills.map((fill) => fill.id)));
-    if (!reliable) fills = fills.filter((fill) => !archivedIds.has(fill.id));
-    if (!fills.length) return;
-    let position: bigint | null = reliable ? anchor! - fills.reduce((sum, fill) => sum + money(fill.quantity, false) * (fill.side === 'BUY' ? 1n : -1n), 0n) : null;
-    const groups: { fills: ReviewFill[]; start: bigint | null; end: bigint | null }[] = [];
-    let group = { fills: [] as ReviewFill[], start: position, end: position };
-    for (const fill of fills) {
-      group.fills.push(fill);
-      if (position !== null) position += money(fill.quantity, false) * (fill.side === 'BUY' ? 1n : -1n);
-      group.end = position;
-      if (position === 0n) { groups.push(group); group = { fills: [], start: position, end: position }; }
+    const coverage = covered(state, 'trades', selected[0]!.time, state.endTime);
+    const groups: { mode: ReviewFill['positionSide']; reliable: boolean; fills: ReviewFill[]; start: bigint | null; end: bigint | null }[] = [];
+    const old = this.ledger.list().filter((trade) => trade.symbol === state.symbol && trade.status === 'closed').map((trade) => this.ledger.get(trade.id)!);
+    const preserved: ReviewTrade[] = [];
+    for (const mode of ['BOTH', 'LONG', 'SHORT'] as const) {
+      let lane = fills.filter((fill) => fill.positionSide === mode);
+      let reliable = coverage && anchor?.positions[mode] !== undefined;
+      let position: bigint | null = reliable ? anchor!.positions[mode]! - lane.reduce((sum, fill) => sum + money(fill.quantity, false) * (fill.side === 'BUY' ? 1n : -1n), 0n) : null;
+      if (position !== null) {
+        let chain = position;
+        for (const fill of lane) {
+          const delta = money(fill.quantity, false) * (fill.side === 'BUY' ? 1n : -1n);
+          if ((chain === 0n || chain * delta > 0n) && fill.realizedPnl !== null && money(fill.realizedPnl) !== 0n) reliable = false;
+          if ((mode === 'LONG' && chain < 0n) || (mode === 'SHORT' && chain > 0n)) reliable = false;
+          chain += delta;
+          if ((mode === 'LONG' && chain < 0n) || (mode === 'SHORT' && chain > 0n)) reliable = false;
+        }
+      }
+      const previous = old.filter((trade) => trade.evidence.fills[0]?.positionSide === mode);
+      if (!reliable || !lane.length) {
+        preserved.push(...previous);
+        lane = lane.flatMap((fill) => {
+          const assigned = previous.flatMap((trade) => trade.evidence.fills.filter((item) => item.id === fill.id));
+          const quantity = money(fill.quantity, false) - assigned.reduce((sum, item) => sum + money(item.quantity, false), 0n);
+          if (quantity <= 0n) return [];
+          if (!assigned.length) return [fill];
+          return [{ ...fill, allocation: 'open' as const, quantity: formatDecimal(quantity), realizedPnl: '0',
+            commission: fill.commission === null || assigned.some((item) => item.commission === null) ? null : formatDecimal(money(fill.commission, false) - assigned.reduce((sum, item) => sum + money(item.commission, false), 0n)) }];
+        });
+      }
+      if (!lane.length) continue;
+      if (!reliable) position = null;
+      let group = { mode, reliable, fills: [] as ReviewFill[], start: position, end: position };
+      for (const fill of lane) {
+        const delta = money(fill.quantity, false) * (fill.side === 'BUY' ? 1n : -1n);
+        const next = position === null ? null : position + delta;
+        if (position !== null && next !== null && position * next < 0n) {
+          const closing = position < 0n ? -position : position;
+          const quantity = money(fill.quantity, false);
+          const closeFee = fill.commission === null ? null : money(fill.commission, false) * closing / quantity;
+          group.fills.push({ ...fill, quantity: formatDecimal(closing), commission: closeFee === null ? null : formatDecimal(closeFee), allocation: 'close', event: 'exit' });
+          group.end = 0n;
+          groups.push(group);
+          group = { mode, reliable, start: 0n, end: next, fills: [{ ...fill, quantity: formatDecimal(quantity - closing), realizedPnl: '0',
+            commission: closeFee === null ? null : formatDecimal(money(fill.commission, false) - closeFee), allocation: 'open', event: 'entry' }] };
+        } else {
+          group.fills.push({ ...fill, event: position === null ? undefined : position === 0n ? 'entry' : next === 0n ? 'exit' : position * delta > 0n ? 'add' : 'reduce' });
+          group.end = next;
+          if (next === 0n) { groups.push(group); group = { mode, reliable, fills: [], start: 0n, end: 0n }; }
+        }
+        position = next;
+      }
+      if (group.fills.length) groups.push(group);
     }
-    if (group.fills.length) groups.push(group);
-    const trades = groups.map(({ fills, start, end }): ReviewTrade => {
+    const trades = groups.map(({ mode, reliable, fills, start, end }): ReviewTrade => {
       const first = fills[0]!, last = fills.at(-1)!;
-      const from = Date.parse(first.time), to = Date.parse(last.time);
+      const from = start === 0n ? Date.parse(first.time) : Math.min(state.startTime, Date.parse(first.time));
+      const to = end === 0n ? Date.parse(last.time) : state.endTime;
       const missing = new Set<string>();
       if (!reliable) missing.add('成交链或查询时点持仓不可对账，起点待确认');
       if (start !== 0n) missing.add('缺少可靠空仓起点');
-      if (end !== 0n) missing.add('缺少完整退出或退出时点');
-      let exiting = false, complex = false;
-      for (const fill of fills) {
-        if (fill.side !== first.side) exiting = true;
-        if (fill.positionSide !== 'BOTH' || (fill.side === first.side && (exiting || fill.orderId !== first.orderId))) complex = true;
-      }
-      // A reversal may cross zero inside a fill; this task keeps the whole fragment for task 03.
-      let chain = start;
-      for (const fill of fills) {
-        if (chain !== null) {
-          chain += money(fill.quantity, false) * (fill.side === 'BUY' ? 1n : -1n);
-          if (start === 0n && (first.side === 'BUY' ? chain < 0n : chain > 0n)) complex = true;
-        }
-      }
-      if (complex) missing.add('复杂成交链待交易周期归并');
+      if (!reliable && end !== 0n) missing.add('缺少完整退出或退出时点');
       const linkedOrders = [...new Set(fills.map((fill) => fill.orderId))].map((orderId) => {
         const row = raw.find((row) => row.kind === 'history' && row.id === orderId)?.payload;
         const matching = fills.filter((fill) => fill.orderId === orderId);
+        const algos = raw.filter((record) => record.kind === 'algoHistory' && String(record.payload.actualOrderId) === orderId);
+        const algo = algos.length === 1 ? algos[0] : undefined;
+        const validAlgo = algo && algo.payload.side === matching[0]!.side && algo.payload.positionSide === matching[0]!.positionSide && algo.time <= Date.parse(matching[0]!.time);
+        if (algos.length && !validAlgo) missing.add(`订单 ${orderId} 条件订单关联无法确认`);
+        const type = algos.length ? validAlgo && typeof algo.payload.orderType === 'string' ? algo.payload.orderType : null : typeof row?.origType === 'string' ? row.origType : typeof row?.type === 'string' ? row.type : null;
+        const original = selected.filter((fill) => String(fill.payload.orderId) === orderId);
         if (!row) missing.add(`订单 ${orderId} 元数据缺失`);
         else {
           const executed = typeof row.executedQty === 'string' && /^\d{1,24}(\.\d{1,8})?$/.test(row.executedQty) ? money(row.executedQty, false) : null;
-          if (row.side !== matching[0]!.side || row.positionSide !== matching[0]!.positionSide || executed !== matching.reduce((sum, fill) => sum + money(fill.quantity, false), 0n)) missing.add(`订单 ${orderId} 与成交无法对账`);
+          if (row.side !== matching[0]!.side || row.positionSide !== matching[0]!.positionSide || executed !== original.reduce((sum, fill) => sum + money(fill.payload.qty, false), 0n)) missing.add(`订单 ${orderId} 与成交无法对账`);
         }
-        return { id: orderId, symbol: state.symbol, side: matching[0]!.side, type: row && typeof row.type === 'string' ? row.type : null,
+        return { id: orderId, symbol: state.symbol, side: matching[0]!.side, type, ...(validAlgo ? { algoId: algo.id } : {}),
           quantity: formatDecimal(matching.reduce((sum, fill) => sum + money(fill.quantity, false), 0n)), time: row ? new Date(timestamp(row.time)).toISOString() : matching[0]!.time };
       });
       const income = raw.filter((row) => row.kind === 'income');
-      const funding = income.filter((row) => row.payload.incomeType === 'FUNDING_FEE' && row.time >= from && row.time <= to).map((row) => ({ id: row.id, symbol: state.symbol, time: new Date(row.time).toISOString(), amount: typeof row.payload.income === 'string' ? row.payload.income : null, asset: typeof row.payload.asset === 'string' ? row.payload.asset : null }));
+      const funding = income.filter((row) => row.payload.incomeType === 'FUNDING_FEE' && row.time >= from && row.time <= to).map((row) => {
+        const candidates = groups.filter((group) => (group.start === 0n ? Date.parse(group.fills[0]!.time) : state.startTime) <= row.time && (group.end === 0n ? Date.parse(group.fills.at(-1)!.time) : state.endTime) >= row.time);
+        const unseenPosition = anchor && Object.entries(anchor.positions).some(([side, amount]) => amount !== 0n && !groups.some((group) => group.mode === side));
+        const confirmed = reliable && candidates.length === 1 && !unseenPosition && row.time !== from && !(end === 0n && row.time === to);
+        return { id: row.id, symbol: state.symbol, time: new Date(row.time).toISOString(), amount: typeof row.payload.income === 'string' ? row.payload.income : null,
+          asset: typeof row.payload.asset === 'string' ? row.payload.asset : null, attribution: confirmed ? 'confirmed' as const : 'ambiguous' as const };
+      });
       const fundingComplete = covered(state, 'income', from, to);
       if (!fundingComplete) missing.add('资金费区间未确认完整');
-      if (funding.some((fee) => groups.filter((group) => Date.parse(group.fills[0]!.time) <= Date.parse(fee.time) && Date.parse(group.fills.at(-1)!.time) >= Date.parse(fee.time)).length > 1)) missing.add('资金费无法唯一归属');
+      if (funding.some((fee) => fee.attribution === 'ambiguous')) missing.add('资金费无法唯一归属');
       const realized = fills.some((fill) => fill.realizedPnl === null) ? null : fills.reduce((sum, fill) => sum + money(fill.realizedPnl), 0n);
       const commission = fills.every((fill) => fill.commissionAsset === 'USDT' && fill.commission !== null) ? fills.reduce((sum, fill) => sum + money(fill.commission, false), 0n) : null;
-      const fundingNet = fundingComplete && funding.every((fee) => fee.asset === 'USDT' && fee.amount !== null) ? funding.reduce((sum, fee) => sum + money(fee.amount), 0n) : null;
+      const fundingNet = reliable && start === 0n && fundingComplete && funding.every((fee) => fee.attribution === 'confirmed' && fee.asset === 'USDT' && fee.amount !== null) ? funding.reduce((sum, fee) => sum + money(fee.amount), 0n) : null;
       if (realized === null) missing.add('已实现盈亏缺失');
       if (commission === null) missing.add('手续费缺失或非 USDT，缺少可靠换算');
       if (fundingNet === null) missing.add('资金费缺失或非 USDT，归属待确认');
-      for (const fill of fills) {
+      for (const allocated of fills) {
+        const fill = selected.find((row) => row.id === allocated.id)!.payload;
         for (const kind of ['REALIZED_PNL', 'COMMISSION']) {
-          const entries = income.filter((row) => row.payload.incomeType === kind && String(row.payload.tradeId) === fill.id);
-          if (entries.length && (entries.some((row) => row.payload.income === null || row.payload.income === undefined || row.payload.asset !== (kind === 'COMMISSION' ? fill.commissionAsset : 'USDT')) || fill.commission === null || fill.realizedPnl === null || entries.reduce((sum, row) => sum + money(row.payload.income), 0n) !== (kind === 'COMMISSION' ? -money(fill.commission, false) : money(fill.realizedPnl)))) missing.add('成交费用或已实现盈亏与收入流水不一致');
+          const entries = income.filter((row) => row.payload.incomeType === kind && String(row.payload.tradeId) === String(fill.id));
+          if (entries.length && (entries.some((row) => row.payload.income === null || row.payload.income === undefined || row.payload.asset !== (kind === 'COMMISSION' ? fill.commissionAsset : 'USDT')) || fill.commission == null || fill.realizedPnl == null || entries.reduce((sum, row) => sum + money(row.payload.income), 0n) !== (kind === 'COMMISSION' ? -money(fill.commission, false) : money(fill.realizedPnl)))) missing.add('成交费用或已实现盈亏与收入流水不一致');
         }
       }
-      const forced = raw.filter((row) => row.kind === 'forceOrders' && fills.some((fill) => fill.side !== first.side && fill.orderId === String(row.payload.orderId)));
+      const forced = raw.filter((row) => row.kind === 'forceOrders' && fills.some((fill) => (fill.event === 'reduce' || fill.event === 'exit') && fill.orderId === String(row.payload.orderId)));
       const reason = forced.map((row) => row.payload.autoCloseType);
+      const snapshot = reliable && end !== 0n && anchor?.stable.includes(mode) ? anchor.raw.find((row) => row.payload.positionSide === mode) : undefined;
+      const unrealized = snapshot && typeof snapshot.payload.unRealizedProfit === 'string' && /^-?\d{1,24}(\.\d{1,8})?$/.test(snapshot.payload.unRealizedProfit) ? formatDecimal(money(snapshot.payload.unRealizedProfit)) : null;
       return {
-        ...this.identity, id: `binance-${createHash('sha256').update(state.symbol).digest('hex').slice(0, 32)}-${first.id}`, groupingVersion: 1, symbol: state.symbol, baseAsset: state.symbol.slice(0, -4),
-        side: start === 0n ? (first.side === 'BUY' ? 'long' : 'short') : start !== null ? (start > 0n ? 'long' : 'short') : null,
-        status: missing.size ? 'incomplete' : 'closed', openedAt: start === 0n ? first.time : null, closedAt: end === 0n ? last.time : null,
+        observedAt: new Date(state.endTime).toISOString(), unrealizedPnl: unrealized, unrealizedAt: unrealized === null ? null : new Date(anchor!.at).toISOString(),
+        ...this.identity, id: `binance-${createHash('sha256').update(state.symbol).digest('hex').slice(0, 32)}-${first.id}${first.allocation === 'open' ? '-open' : ''}`, groupingVersion: 2, symbol: state.symbol, baseAsset: state.symbol.slice(0, -4),
+        side: mode === 'LONG' ? 'long' : mode === 'SHORT' ? 'short' : start === 0n ? (first.side === 'BUY' ? 'long' : 'short') : start !== null ? (start > 0n ? 'long' : 'short') : null,
+        status: reliable && start === 0n && end !== 0n ? 'open' : missing.size ? 'incomplete' : 'closed', openedAt: start === 0n ? first.time : null, closedAt: end === 0n ? last.time : null,
         realizedPnl: realized === null ? null : formatDecimal(realized), commission: commission === null ? null : formatDecimal(commission), fundingNet: fundingNet === null ? null : formatDecimal(fundingNet),
-        netPnl: missing.size ? null : formatDecimal(realized! - commission! + fundingNet!), missing: [...missing],
+        netPnl: missing.size || end !== 0n ? null : formatDecimal(realized! - commission! + fundingNet!), missing: [...missing],
         exitReason: reason.includes('LIQUIDATION') ? 'LIQUIDATION' : reason.includes('ADL') ? 'ADL' : 'unknown',
         evidence: { symbol: state.symbol, baseAsset: state.symbol.slice(0, -4), startPosition: start === null ? null : formatDecimal(start), endPosition: end === null ? null : formatDecimal(end),
           fillsComplete: reliable, fundingComplete, fills, orders: linkedOrders, funding,
           raw: raw.filter((row) => row.kind === 'position' || (row.kind === 'trades' ? fills.some((fill) => fill.id === row.id) : row.kind === 'history' ? linkedOrders.some((order) => order.id === row.id) : row.kind === 'algoHistory' ? linkedOrders.some((order) => order.id === String(row.payload.actualOrderId)) : row.time >= from && row.time <= to)) },
       };
     });
-    if (!reliable) {
-      this.ledger.project(state.symbol, [...old, ...trades]);
-    } else this.ledger.project(state.symbol, trades);
+    this.ledger.project(state.symbol, [...preserved, ...trades]);
   }
 }
