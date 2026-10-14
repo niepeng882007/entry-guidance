@@ -11,6 +11,7 @@ import { createPlan, verifyPosition, type Plan } from './verification.ts';
 import { ReviewLedger, demoTrade, type ReviewList } from './review-ledger.ts';
 import { ReviewWriteError } from './review-notes.ts';
 import { HistorySync } from './history-sync.ts';
+import { readTradeMarket, marketView, marketIntervals, type MarketInterval } from './trade-market.ts';
 import type { EntryInput } from '../public/draft.js';
 import type { ViteDevServer } from 'vite';
 
@@ -281,6 +282,35 @@ export function createServer(config: Config) {
         if (error instanceof AccountError) return send(error.status, { error: error.message, code: error.code, scopeConfirmed: error.scopeConfirmed, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt });
         return send(503, { error: '复盘同步暂不可用，已有账本保留。' });
       }
+    }
+    const marketPath = path?.match(/^\/api\/review\/trades\/([A-Za-z0-9-]{1,160})\/market\?/);
+    const rawMarketPath = path?.match(/^\/api\/review\/market\/([a-f0-9]{64})\?/);
+    if (marketPath || rawMarketPath) {
+      const query = new URL(path!, origin).searchParams;
+      const interval = query.get('interval') ?? '';
+      const priceSource = query.get('source') ?? '';
+      const offset = Number(query.get('offset') ?? '0');
+      if (marketPath ? !Object.hasOwn(marketIntervals, interval) || query.getAll('interval').length !== 1 || [...query.keys()].some((key) => key !== 'interval')
+        : !['contract', 'mark'].includes(priceSource) || !Number.isSafeInteger(offset) || offset < 0 || query.getAll('source').length !== 1 || query.getAll('offset').length > 1 || [...query.keys()].some((key) => !['source', 'offset'].includes(key))) return send(400, { error: '行情查询参数无效。' });
+      const controller = new AbortController();
+      const cancel = () => { if (!res.writableEnded) controller.abort(); };
+      res.once('close', cancel);
+      try {
+        if (source === 'binance') await getHistory(await readReviewIdentity(config, AbortSignal.timeout(10_000)));
+        const ledger = source === 'demo' ? getReviewLedger() : reviewLedger!;
+        const trade = marketPath ? ledger.get(marketPath[1]!) : null;
+        if (marketPath && !trade) return send(404, { error: '未找到该来源的归档交易。' });
+        const archive = marketPath ? await readTradeMarket(config, ledger, trade!, interval as MarketInterval, AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)])) : ledger.market(rawMarketPath![1]!);
+        const currentSession = sessions.get(cookie!);
+        if (!currentSession || currentSession.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
+        if (!archive) return send(404, { error: '未找到该来源的行情证据。' });
+        if (marketPath) return send(200, marketView(archive));
+        const series = archive.series[priceSource as 'contract' | 'mark'];
+        return send(200, { snapshotId: archive.snapshotId, source, accountId: archive.accountId, interval: archive.interval, priceSource, endpoint: series.endpoint, queriedAt: archive.queriedAt, rawCount: series.candles.length, candles: series.candles.slice(offset, offset + 499), nextOffset: offset + 499 < series.candles.length ? offset + 499 : null });
+      } catch (error) {
+        if (error instanceof AccountError) return send(error.status, { error: error.message, code: error.code });
+        return send(503, { error: '行情归档暂不可用，已知证据保留，请重试。' });
+      } finally { res.off('close', cancel); }
     }
     if (path === '/api/review/trades' || path?.startsWith('/api/review/trades/')) {
       try {

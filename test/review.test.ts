@@ -69,6 +69,36 @@ test('real review explicitly remains unsynced and never opens a demo ledger or c
   assert.equal((await fetch(`${app.base}/api/review/trades`, { method: 'POST', headers: { Cookie: app.cookie, Origin: app.base } })).status, 405);
 });
 
+test('market evidence is protected, source-labelled and persists across restart', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'review-market-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const config = { mode: 'demo' as const, reviewLedgerPath: join(directory, 'demo.sqlite'), transport: async () => { throw new Error('demo must not query Binance'); } };
+  let app = await start(t, config);
+  const path = '/api/review/trades/BTCUSDT-demo-fill-1/market?interval=15m';
+  assert.equal((await fetch(`${app.base}${path}`)).status, 401);
+  const response = await app.get(path);
+  assert.equal(response.status, 200);
+  const chart = await response.json();
+  assert.equal(chart.source, 'demo');
+  assert.equal(chart.interval, '15m');
+  assert.equal(chart.series.contract.complete, true);
+  assert.equal(chart.series.mark.complete, true);
+  assert.equal(chart.events[0].price, '60000');
+  assert.equal(chart.events[0].event, 'entry');
+  assert.equal(chart.events[2].event, 'reduce');
+  assert.equal(chart.events[3].event, 'exit');
+  assert.equal(chart.series.contract.candles.length, 69);
+  assert.notEqual(chart.series.contract.candles[0].close, chart.series.mark.candles[0].close);
+  await new Promise<void>((resolve) => { app.server.closeAllConnections(); app.server.close(() => resolve()); });
+  app = await start(t, config);
+  const reopened = await (await app.get(path)).json();
+  assert.equal(reopened.snapshotId, chart.snapshotId);
+  assert.equal(reopened.queriedAt, chart.queriedAt);
+  assert.equal((await app.get(path.replace('15m', '2m'))).status, 400);
+  assert.equal((await app.get(`${path}&url=https://other.invalid`)).status, 400);
+  assert.equal((await app.get(path.replace('BTCUSDT-demo-fill-1', 'missing'))).status, 404);
+});
+
 test('a filesystem write failure gives a bounded error without disclosing paths or credentials', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'review-failure-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));

@@ -2,6 +2,7 @@
 import type { ReviewTrade } from '../src/review-ledger.ts';
 import PlanComparison from './components/PlanComparison.vue';
 import ReviewNotes from './components/ReviewNotes.vue';
+import TradeChart from './components/TradeChart.vue';
 import { nextTick } from 'vue';
 import { useReviewPage } from './useReviewPage.ts';
 const { source, expectedSource } = defineProps<{
@@ -66,6 +67,13 @@ async function show(id: string) {
   await open(id);
   await nextTick();
   if (trade.value) document.getElementById('trade-detail')?.focus();
+}
+async function focusFill(index: number) {
+  const target = document.getElementById(`trade-fill-${index}`);
+  const disclosure = target?.closest('details');
+  if (disclosure) disclosure.open = true;
+  await nextTick();
+  target?.focus();
 }
 </script>
 
@@ -299,6 +307,7 @@ async function show(id: string) {
         </div>
       </dl>
       <p v-if="trade.missing.length" class="error">待确认：{{ trade.missing.join('；') }}</p>
+      <TradeChart :trade="trade" @fill="focusFill" />
       <details class="disclosure">
         <summary class="disclosure__summary">
           订单证据 · {{ trade.evidence.orders.length }} 张
@@ -331,7 +340,13 @@ async function show(id: string) {
         <summary class="disclosure__summary">
           逐笔成交 · {{ trade.evidence.fills.length }} 条
         </summary>
-        <article v-for="fill in trade.evidence.fills" :key="fill.id" class="review-fill">
+        <article
+          v-for="(fill, index) in trade.evidence.fills"
+          :id="`trade-fill-${index}`"
+          :key="fill.id"
+          class="review-fill"
+          tabindex="-1"
+        >
           <h3 class="section-title">{{ fill.id }}</h3>
           <p>
             原始成交：{{ fill.id

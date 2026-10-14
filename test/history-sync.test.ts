@@ -65,6 +65,112 @@ async function finished(app: Awaited<ReturnType<typeof start>>) {
   throw new Error('history did not finish');
 }
 
+function marketRows(url: URL, bias = 0) {
+  const steps: Record<string, number> = { '1m': 60_000, '5m': 300_000, '15m': 900_000, '1h': 3_600_000, '4h': 14_400_000 };
+  const step = steps[url.searchParams.get('interval')!]!;
+  const rows = [];
+  for (let time = Number(url.searchParams.get('startTime')); time <= Number(url.searchParams.get('endTime')); time += step) rows.push([time, String(100 + bias), String(110 + bias), String(90 + bias), String(105 + bias), '0', time + step - 1, '0', 0, '0', '0', '0']);
+  return rows;
+}
+
+test('market pagination retains full raw evidence, separates sources and freezes earlier snapshots', async (t) => {
+  const opening = Math.floor((Date.now() - 20 * 86_400_000) / 60_000) * 60_000;
+  const closing = opening + 5 * 86_400_000;
+  const historyFills = [{ ...fills[0], time: opening }, { ...fills[1], time: closing }];
+  const base = fixture({ '/fapi/v1/userTrades': historyFills, '/fapi/v1/allOrders': historyFills.map((fill) => ({ ...orders[0], orderId: fill.orderId, side: fill.side, time: fill.time, updateTime: fill.time })), '/fapi/v1/income': [], '/fapi/v2/positionRisk': [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0', updateTime: closing }] });
+  let reads = 0;
+  const app = await start(t, async (url, headers, signal) => {
+    if (['/fapi/v1/klines', '/fapi/v1/markPriceKlines'].includes(url.pathname)) {
+      assert.deepEqual(headers, {});
+      assert.equal(url.searchParams.has('signature'), false);
+      assert.equal(url.searchParams.get('limit'), '499');
+      reads++;
+      return { status: 200, body: marketRows(url, url.pathname.includes('mark') ? 1 : 0) };
+    }
+    return base(url, headers, signal);
+  });
+  await app.sync();
+  const list = await finished(app);
+  const path = `/api/review/trades/${list.trades[0].id}/market?interval=1m`;
+  const first = await (await app.get(path)).json();
+  assert.equal(first.series.contract.rawCount, 1996);
+  assert.equal(first.series.contract.complete, false);
+  assert.equal(first.series.contract.sampled, true);
+  assert.ok(first.series.contract.candles.length <= 301);
+  let chart = first;
+  for (let page = 0; page < 3; page++) chart = await (await app.get(path)).json();
+  assert.equal(chart.series.contract.complete, true);
+  assert.equal(chart.series.mark.complete, true);
+  assert.equal(chart.series.contract.rawCount, 7221);
+  const old = await (await app.get(`/api/review/market/${first.snapshotId}?source=contract`)).json();
+  assert.equal(old.rawCount, 1996);
+  assert.equal(old.queriedAt, first.queriedAt);
+  assert.equal(old.candles[0].close, '105');
+  assert.equal(old.nextOffset, 499);
+  const rawMark = await (await app.get(`/api/review/market/${chart.snapshotId}?source=mark&offset=6986`)).json();
+  assert.equal(rawMark.candles.length, 235);
+  assert.equal(rawMark.nextOffset, null);
+  assert.equal(rawMark.candles[0].close, '106');
+  const before = reads;
+  assert.equal((await (await app.get(path)).json()).snapshotId, chart.snapshotId);
+  assert.equal(reads, before);
+  assert.equal((await app.get(`/api/review/market/${chart.snapshotId}?source=mark&offset=-1`)).status, 400);
+});
+
+test('missing or malformed candles and a failed mark source never produce complete market evidence', async (t) => {
+  const anchor = Math.floor(opened / 900_000) * 900_000 + 1000;
+  const historyFills = [{ ...fills[0], time: anchor }, { ...fills[1], time: anchor + 60_000 }];
+  const base = fixture({ '/fapi/v1/userTrades': historyFills, '/fapi/v1/allOrders': historyFills.map((fill) => ({ ...orders[0], orderId: fill.orderId, side: fill.side, time: fill.time, updateTime: fill.time })), '/fapi/v1/income': [], '/fapi/v2/positionRisk': [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0', updateTime: anchor + 60_000 }] });
+  let mode: 'gap' | 'invalid' | 'valid' = 'gap';
+  let markFail = true;
+  const app = await start(t, async (url, headers, signal) => {
+    if (url.pathname === '/fapi/v1/klines') {
+      const body = marketRows(url);
+      if (mode === 'gap') body.splice(1, 1);
+      if (mode === 'invalid') body[0]![2] = '1';
+      return { status: 200, body };
+    }
+    if (url.pathname === '/fapi/v1/markPriceKlines') {
+      if (markFail) throw new Error('offline');
+      return { status: 200, body: marketRows(url, 1) };
+    }
+    return base(url, headers, signal);
+  });
+  await app.sync();
+  const list = await finished(app);
+  const path = `/api/review/trades/${list.trades[0].id}/market?interval=15m`;
+  const partial = await (await app.get(path)).json();
+  assert.equal(partial.series.contract.complete, false);
+  assert.equal(partial.series.contract.rawCount, 20);
+  assert.equal(partial.series.contract.gaps.length, 1);
+  assert.equal(partial.series.mark.rawCount, 0);
+  assert.equal(partial.series.mark.complete, false);
+  assert.match(partial.series.mark.error, /连接失败/);
+  mode = 'invalid';
+  const invalid = await (await app.get(path)).json();
+  assert.equal(invalid.series.contract.rawCount, 20);
+  assert.match(invalid.series.contract.error, /高低价不一致/);
+  mode = 'valid'; markFail = false;
+  const complete = await (await app.get(path)).json();
+  assert.equal(complete.series.contract.complete, true);
+  assert.equal(complete.series.mark.complete, true);
+  assert.equal(complete.series.contract.rawCount, 21);
+});
+
+test('an ordinary historical stop is shown only through its actual linked order and retains contract-price basis', async (t) => {
+  const history = [{ ...orders[0] }, { ...orders[1], type: 'STOP_MARKET', stopPrice: '99', workingType: 'CONTRACT_PRICE' }];
+  const base = fixture({ '/fapi/v1/allOrders': history });
+  const app = await start(t, async (url, headers, signal) => url.pathname.includes('Klines') || url.pathname.endsWith('/klines') ? { status: 200, body: marketRows(url) } : base(url, headers, signal));
+  await app.sync();
+  const list = await finished(app);
+  const chart = await (await app.get(`/api/review/trades/${list.trades[0].id}/market?interval=15m`)).json();
+  assert.equal(chart.stops.length, 1);
+  assert.equal(chart.stops[0].kind, 'historical');
+  assert.equal(chart.stops[0].price, '99');
+  assert.equal(chart.stops[0].basis, 'CONTRACT_PRICE');
+  assert.equal(chart.openedAt, new Date(opened).toISOString());
+});
+
 test('history refuses an unverifiable account before reading or archiving history', async (t) => {
   const app = await start(t, async (url) => {
     if (url.pathname === '/sapi/v1/account/apiRestrictions') return { status: 200, body: permissions };
@@ -443,6 +549,15 @@ test('one-way reversal shares original evidence and allocates fee remainder to t
   assert.equal(right.evidence.fills[0].quantity, '2');
   assert.equal(left.evidence.fills[1].realizedPnl, '10');
   assert.equal(right.evidence.fills[0].realizedPnl, '0');
+  const leftChart = await (await app.get(`/api/review/trades/${long.id}/market?interval=15m`)).json();
+  const rightChart = await (await app.get(`/api/review/trades/${short.id}/market?interval=15m`)).json();
+  assert.equal(leftChart.events[1].event, 'exit');
+  assert.equal(leftChart.events[1].allocation, 'close');
+  assert.equal(rightChart.events[0].event, 'entry');
+  assert.equal(rightChart.events[0].allocation, 'open');
+  assert.equal(leftChart.events[1].id, rightChart.events[0].id);
+  assert.equal(leftChart.events[1].quantity, '1');
+  assert.equal(rightChart.events[0].quantity, '2');
   assert.equal(right.evidence.raw.find((row: { kind: string; id: string }) => row.kind === 'trades' && row.id === '21').payload.qty, '3');
   await app.sync();
   data = await finished(app);
@@ -609,6 +724,13 @@ test('a first visible reversal retains an incomplete old fragment and a distinct
   assert.equal(next.realizedPnl, '0');
   const oldDetail = await (await app.get(`/api/review/trades/${old.id}`)).json();
   const nextDetail = await (await app.get(`/api/review/trades/${next.id}`)).json();
+  const oldChart = await (await app.get(`/api/review/trades/${old.id}/market?interval=15m`)).json();
+  const nextChart = await (await app.get(`/api/review/trades/${next.id}/market?interval=15m`)).json();
+  assert.equal(oldChart.openedAt, null);
+  assert.equal(nextChart.closedAt, null);
+  assert.equal(oldChart.stops.length, 0);
+  assert.equal(nextChart.stops.length, 0);
+  assert.equal(nextChart.events[0].event, 'entry');
   const save = (id: string, basis: string, freeNote: string) => fetch(`${app.base}/api/review/trades/${id}/note`, {
     method: 'POST', headers: { Cookie: app.cookie, Origin: app.base, 'Content-Type': 'application/json' },
     body: JSON.stringify({ noteId: null, version: 0, basis, entryReason: '', exitReason: '', executionProblem: '', improvement: '', freeNote, tagIds: [] }),

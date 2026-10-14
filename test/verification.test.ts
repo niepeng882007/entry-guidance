@@ -952,6 +952,11 @@ test('review links direct fill evidence, preserves fixed plan and old checks thr
   assert.equal(detail.planComparison.confirmedLoss, '26.054');
   assert.equal(detail.planComparison.budgetExcess, '6.054');
   assert.equal(detail.planComparison.verifications[0].queriedAt, verification.queriedAt);
+  const chart = await (await app.read(`/api/review/trades/${id}/market?interval=15m`)).json();
+  assert.equal(chart.stops.filter((stop: { kind: string }) => stop.kind === 'plan').length, 1);
+  assert.equal(chart.stops.find((stop: { kind: string }) => stop.kind === 'plan').price, '98');
+  assert.equal(chart.stops.find((stop: { kind: string }) => stop.kind === 'observed').time, Date.parse(verification.queriedAt));
+  assert.equal(chart.stops.find((stop: { kind: string }) => stop.kind === 'observed').basis, 'MARK_PRICE');
   assert.match(detail.planComparison.limitations.join(' '), /查询时点.*未记录.*未知/);
   assert.match(detail.planComparison.limitations.join(' '), /不能.*违规.*动机/);
   await app.login();
@@ -997,6 +1002,9 @@ test('two-level comparison records quantity and trigger deviations and keeps par
   const comparison = (await (await app.read(`/api/review/trades/${list.trades[0].id}`)).json()).planComparison;
   assert.equal(comparison.status, 'linked');
   assert.equal(comparison.plan.nearStop.quantity, '0.2');
+  const chart = await (await app.read(`/api/review/trades/${list.trades[0].id}/market?interval=15m`)).json();
+  assert.deepEqual(chart.stops.filter((stop: { kind: string }) => stop.kind === 'plan').map((stop: { price: string }) => stop.price), ['98', '99']);
+  assert.ok(chart.stops.some((stop: { kind: string; price: string }) => stop.kind === 'observed' && stop.price === '99'));
   assert.match(comparison.stopChecks[0].deviations.join(' '), /数量.*0.3.*0.2/);
   assert.equal(comparison.budgetExcess, null);
 });

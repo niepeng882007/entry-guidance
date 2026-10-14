@@ -91,6 +91,7 @@ export function coordinateAccountReads(config: AccountConfig) {
       '/fapi/v2/account': 5, '/fapi/v2/positionRisk': 5, '/fapi/v1/exchangeInfo': 1,
       '/fapi/v1/openOrders': single ? 1 : 40, '/fapi/v1/openAlgoOrders': single ? 1 : 40,
       '/fapi/v2/ticker/price': single ? 1 : 2, '/fapi/v1/premiumIndex': single ? 1 : 10,
+      '/fapi/v1/klines': 2, '/fapi/v1/markPriceKlines': 2,
     };
     return weights[url.pathname] ?? 0;
   };
