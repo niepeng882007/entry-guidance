@@ -235,6 +235,44 @@ function recordStop(order: State['orders'][number]): RecordedStop {
   };
 }
 
+function recordedAmount(value: unknown, signed = false): string | null {
+  try { return formatDecimal(amount(value, '历史金额', signed)); }
+  catch { return null; }
+}
+
+// Identity depends on the flat baseline, fill/order chain and current position, not costs or compliance.
+function confirmedEntryOrder(plan: Plan, state: State, data: Records, evidence: VerificationEvidence): string | null {
+  try {
+    const fills = [...evidence.fills].sort((a, b) => Date.parse(a.time) - Date.parse(b.time) || (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+    if (!evidence.snapshotConsistent || !fills.length || fills.length !== data.trades.length || fills.length >= 1000 || data.history.length >= 1000 || new Set(fills.map((fill) => fill.id)).size !== fills.length) return null;
+    const direction = plan.side === 'long' ? 1n : -1n;
+    let position = 0n;
+    const entryOrders = new Set<string>();
+    const quantities = new Map<string, bigint>();
+    for (const [index, fill] of fills.entries()) {
+      if (fill.symbol !== plan.symbol || fill.positionSide !== 'BOTH' || !['BUY', 'SELL'].includes(fill.side) || Date.parse(fill.time) < data.start || Date.parse(fill.time) > data.end) return null;
+      const quantity = amount(fill.quantity, '成交数量');
+      if (quantity <= 0n || amount(fill.price, '成交价') <= 0n) return null;
+      if (fill.side === plan.execution.entrySide) entryOrders.add(fill.orderId);
+      position += quantity * (fill.side === 'BUY' ? 1n : -1n);
+      if (position * direction < 0n || (position === 0n && index < fills.length - 1)) return null;
+      quantities.set(fill.orderId, (quantities.get(fill.orderId) ?? 0n) + quantity);
+    }
+    if (entryOrders.size !== 1 || fills[0]!.side !== plan.execution.entrySide || position !== state.position.quantity) return null;
+    for (const order of data.history) {
+      if (order.symbol !== plan.symbol || stamp(order.time) < data.start || stamp(order.time) > data.end || stamp(order.updateTime) > data.end) return null;
+      if (!quantities.has(id(order.orderId)) && amount(order.executedQty, '订单成交量') > 0n) return null;
+    }
+    for (const [orderId, quantity] of quantities) {
+      const matching = data.history.filter((order) => id(order.orderId) === orderId);
+      if (matching.length !== 1 || amount(matching[0]!.executedQty, '订单成交量') !== quantity || fills.some((fill) => fill.orderId === orderId && (matching[0]!.side !== fill.side || matching[0]!.positionSide !== fill.positionSide))) return null;
+    }
+    const orderId = [...entryOrders][0]!;
+    const order = data.history.find((order) => id(order.orderId) === orderId)!;
+    return !flag(order.reduceOnly) && !flag(order.closePosition) ? orderId : null;
+  } catch { return null; }
+}
+
 function evaluate(plan: Plan, state: State, data: Records): Verification {
   const { position } = state;
   const quantity = abs(position.quantity);
@@ -249,9 +287,10 @@ function evaluate(plan: Plan, state: State, data: Records): Verification {
     result.reviewEvidence.fills = data.trades.map((row) => ({
       id: id(row.id), orderId: id(row.orderId), symbol: String(row.symbol), side: row.side as ReviewFill['side'], positionSide: row.positionSide as ReviewFill['positionSide'],
       quantity: formatDecimal(amount(row.qty, '成交数量')), price: formatDecimal(amount(row.price, '成交价格')), time: new Date(stamp(row.time)).toISOString(),
-      realizedPnl: formatDecimal(amount(row.realizedPnl, '已实现盈亏', true)), commission: formatDecimal(amount(row.commission, '成交手续费')), commissionAsset: String(row.commissionAsset),
+      realizedPnl: recordedAmount(row.realizedPnl, true), commission: recordedAmount(row.commission), commissionAsset: typeof row.commissionAsset === 'string' ? row.commissionAsset : null,
     }));
   } catch { result.reviewEvidence.fills = []; }
+  result.reviewEvidence.entryOrderId = confirmedEntryOrder(plan, state, data, result.reviewEvidence);
   const incomplete = (message: string) => { result.issues.push(message); return result; };
   if (position.updateTime > data.end || (quantity > 0n && position.updateTime === 0) || [...state.orders, ...state.algoOrders].some((order) => order.updateTime > data.end)) return incomplete('持仓或挂单时间与本次查询不一致，请重新刷新。');
   // ponytail: one bounded history window; refuse a full page instead of silently truncating. Add pagination for longer/multi-order workflows.
@@ -362,8 +401,6 @@ function evaluate(plan: Plan, state: State, data: Records): Verification {
   const entry = data.history.filter((order) => orderIds.has(id(order.orderId)));
   if (orderIds.size !== 1 || entry.length !== 1) return incomplete('本单起点后无法确认唯一开仓订单，不猜测多笔订单的归属。');
   const order = entry[0]!;
-  // A reconciled fill chain establishes identity independently of whether execution followed the plan.
-  if (position.quantity === direction * (total - closed)) result.reviewEvidence.entryOrderId = id(order.orderId);
   const matchesEntry = plan.execution.entryType === 'LIMIT' ? order === limitOrder
     : order.type === 'MARKET' && order.origType === 'MARKET' && order.side === entrySide && order.positionSide === 'BOTH' && !flag(order.reduceOnly) && !flag(order.closePosition) && order.status === 'FILLED';
   if (!matchesEntry) return incomplete('未确认本单的唯一同方向开仓订单，无法完整核验。');

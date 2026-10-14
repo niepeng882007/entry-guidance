@@ -1131,3 +1131,34 @@ test('an account identity change during plan generation cannot leave a usable sa
   assert.equal(response.status, 409);
   assert.equal((await response.json()).code, 'unverified_identity');
 });
+
+
+test('a changed limit entry or non-USDT cost still retains uniquely reconciled identity without a passing verification', async (t) => {
+  for (const scenario of ['market', 'price', 'non-USDT']) await t.test(scenario, async (t) => {
+    const directory = mkdtempSync(join(tmpdir(), 'comparison-limit-deviation-'));
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    const app = await start(t, fixture(), 'real', 'test-key', join(directory, 'real.sqlite'));
+    const plan = await (await app.create(limitInput)).json();
+    app.data['/fapi/v1/openAlgoOrders'] = [fill(app)];
+    const order = { ...limitOrder(app), origQty: '0.4', executedQty: '0.4', status: 'FILLED' };
+    if (scenario === 'market') Object.assign(order, { type: 'MARKET', origType: 'MARKET', price: '0' });
+    if (scenario === 'price') {
+      order.price = '101';
+      for (const fill of app.data['/fapi/v1/userTrades'] as Record<string, unknown>[]) fill.price = '101';
+      app.position.entryPrice = '101';
+    }
+    if (scenario === 'non-USDT') (app.data['/fapi/v1/userTrades'] as Record<string, unknown>[])[0]!.commissionAsset = 'BNB';
+    app.data['/fapi/v1/allOrders'] = [order];
+    const check = await (await app.read(`/api/verification?planId=${plan.id}`)).json();
+    assert.equal(check.status, 'incomplete');
+    app.data['/fapi/v1/time'] = () => ({ serverTime: Date.now() });
+    const list = await reviewSynced(app);
+    const comparison = (await (await app.read(`/api/review/trades/${list.trades[0].id}`)).json()).planComparison;
+    assert.equal(comparison.status, 'linked');
+    assert.equal(comparison.plan.limitPrice, '100');
+    assert.equal(comparison.entryTypeDeviation, scenario === 'market');
+    assert.equal(comparison.priceDifference, scenario === 'price' ? '1' : '0');
+    assert.equal(comparison.budgetExcess, null);
+    assert.equal(comparison.verifications[0].status, 'incomplete');
+  });
+});
