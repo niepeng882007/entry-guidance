@@ -98,6 +98,9 @@ export function createServer(config: Config) {
       ? "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:24678; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
       : "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
     const send = (status: number, value: unknown) => {
+      if (status >= 400 && value && typeof value === 'object' && 'scopeConfirmed' in value && value.scopeConfirmed === false) {
+        scopeGeneration++; for (const slot of accountSlots) slot.clear();
+      }
       res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(value));
     };
@@ -185,7 +188,7 @@ export function createServer(config: Config) {
         return send(200, { ...plan, input: input as EntryInput, recovery: `${payload}.${signature(payload)}` } satisfies SavedPlan);
       } catch (error) {
         if (!(error instanceof AccountError)) throw error;
-        return send(error.status, { error: error.message, code: error.code, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt });
+        return send(error.status, { error: error.message, code: error.code, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt, scopeConfirmed: error.scopeConfirmed });
       }
     }
     if (req.method !== 'GET' && !(path === '/api/review/sync' && req.method === 'POST')) return send(405, { error: '仅支持读取。' });
@@ -197,7 +200,7 @@ export function createServer(config: Config) {
       try { return send(200, await verifyPosition(config, plan, query.get('demo') ?? undefined)); }
       catch (error) {
         if (!(error instanceof AccountError)) throw error;
-        return send(error.status, { error: error.message, code: error.code, source: plan.source, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt });
+        return send(error.status, { error: error.message, code: error.code, source: plan.source, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt, scopeConfirmed: error.scopeConfirmed });
       }
     }
     if (path === '/api/review/sync' && req.method === 'POST') {
@@ -219,7 +222,7 @@ export function createServer(config: Config) {
         const sync = await getHistory(uid);
         return send(202, await sync!.start(symbol));
       } catch (error) {
-        if (error instanceof AccountError) return send(error.status, { error: error.message, code: error.code });
+        if (error instanceof AccountError) return send(error.status, { error: error.message, code: error.code, scopeConfirmed: error.scopeConfirmed, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt });
         return send(503, { error: '复盘同步暂不可用，已有账本保留。' });
       }
     }
@@ -276,7 +279,7 @@ export function createServer(config: Config) {
       try { return send(200, await readSymbols(config)); }
       catch (error) {
         if (!(error instanceof AccountError)) throw error;
-        return send(error.status, { error: error.message, code: error.code });
+        return send(error.status, { error: error.message, code: error.code, scopeConfirmed: error.scopeConfirmed, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt });
       }
     }
     if (path?.startsWith('/api/market?')) {
@@ -285,7 +288,7 @@ export function createServer(config: Config) {
       try { return send(200, await readMarket(config, query.get('symbol')!)); }
       catch (error) {
         if (!(error instanceof AccountError)) throw error;
-        return send(error.status, { source: config.mode === 'demo' ? 'demo' : 'binance', code: error.code, error: error.message, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt });
+        return send(error.status, { source: config.mode === 'demo' ? 'demo' : 'binance', code: error.code, error: error.message, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt, scopeConfirmed: error.scopeConfirmed });
       }
     }
     if (path === '/api/account' || path === '/api/account/assets' || path === '/api/account/positions' || path === '/api/account/orders' || path === '/api/account/conditional-orders') {
@@ -316,7 +319,6 @@ export function createServer(config: Config) {
         const session = sessions.get(cookie!);
         if (!session || session.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
         if (!(error instanceof AccountError)) throw error;
-        if (error.scopeConfirmed === false) { scopeGeneration++; for (const slot of accountSlots) slot.clear(); }
         if (error.retryAt) res.setHeader('Retry-After', Math.max(0, Math.ceil((Date.parse(error.retryAt) - Date.now()) / 1000)));
         return send(error.status, { source, code: error.code, error: error.message, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt, scopeConfirmed: error.scopeConfirmed });
       } finally { res.removeListener('close', cancel); }

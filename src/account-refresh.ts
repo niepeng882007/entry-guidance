@@ -12,6 +12,7 @@ export class SharedRead<T> {
   private lifetime: number;
   constructor(load: (signal: AbortSignal) => Promise<T>, lifetime = 0, retry = false) { this.load = load; this.lifetime = lifetime; this.retry = retry; }
 
+  setLoader(load: (signal: AbortSignal) => Promise<T>) { this.load = load; }
   get active() { return this.pending !== undefined; }
   clear() { this.cached = undefined; this.generation++; }
   stop() { this.clear(); this.pending?.controller.abort(); }
@@ -42,14 +43,18 @@ export class SharedRead<T> {
       entry.promise = promise
         .then((value) => {
           if (!controller.signal.aborted && generation === this.generation) {
-            this.cached = { value, expiresAt: Date.parse(attemptedAt) + this.lifetime, attemptedAt };
+            const successfulAt = value && typeof value === 'object' && 'queriedAt' in value && typeof value.queriedAt === 'string' ? Date.parse(value.queriedAt) : Date.parse(attemptedAt);
+            this.cached = { value, expiresAt: Math.min(Date.parse(attemptedAt), successfulAt) + this.lifetime, attemptedAt };
             this.failure = undefined; this.failures = 0;
           }
           return value;
         }).catch((error: unknown) => {
           if (this.retry && !controller.signal.aborted && error instanceof AccountError) {
             error.attemptedAt ??= attemptedAt;
-            if (error.code !== 'rate_limited' && !error.retryAt) error.retryAt = new Date(Date.now() + Math.min(60_000, 3_000 * 2 ** Math.min(this.failures++, 5))).toISOString();
+            if (error.code !== 'rate_limited' && error !== this.failure) {
+              const until = Date.now() + Math.min(60_000, 3_000 * 2 ** Math.min(this.failures++, 5));
+              error.retryAt = new Date(Math.max(until, Date.parse(error.retryAt ?? '') || 0)).toISOString();
+            }
             this.failure = error; this.cached = undefined;
           }
           throw error;

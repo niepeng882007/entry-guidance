@@ -146,9 +146,13 @@ function format(value: bigint): string {
 }
 
 export async function readAccountScope(config: AccountConfig, signal: AbortSignal) {
-  if (!config.apiKey || !config.apiSecret) throw new AccountError('missing_credentials', '未连接：请在后端配置 BINANCE_API_KEY 和 BINANCE_API_SECRET。', 503);
+  // Shared timeout waiters must also know that scope was still unconfirmed.
+  const tagAbort = () => { if (signal.reason instanceof AccountError) signal.reason.scopeConfirmed = false; };
+  signal.addEventListener('abort', tagAbort, { once: true });
   const read = async (operation: keyof typeof endpoints) => object(await readBinance(config, operation, signal));
   try {
+    if (!config.apiKey || !config.apiSecret) throw new AccountError('missing_credentials', '未连接：请在后端配置 BINANCE_API_KEY 和 BINANCE_API_SECRET。', 503);
+    signal.throwIfAborted();
     await verifyReadPermissions(config, signal);
     await read('portfolio');
     const account = await read('account');
@@ -159,19 +163,28 @@ export async function readAccountScope(config: AccountConfig, signal: AbortSigna
     const asset = assets[0]!;
     return { account, asset };
   } catch (error) {
-    if (signal.aborted) throw new AccountError('timeout', '账户查询超时，请检查网络后重试。', 504);
+    if (signal.aborted) {
+      const failure = signal.reason instanceof AccountError ? signal.reason : new AccountError('timeout', '账户查询超时，请检查网络后重试。', 504);
+      failure.scopeConfirmed = false;
+      throw failure;
+    }
     if (error instanceof AccountError) { error.scopeConfirmed = false; throw error; }
     const failure = new AccountError('connection_failed', '账户连接失败，请检查网络或后端代理设置。');
     failure.scopeConfirmed = false;
     throw failure;
-  }
+  } finally { signal.removeEventListener('abort', tagAbort); }
 }
 
 async function verifyReadPermissions(config: AccountConfig, signal: AbortSignal) {
-  const permissions = object(await readBinance(config, 'permissions', signal));
-  if (permissions.enableReading !== true) throw new AccountError('reading_disabled', '凭据没有可验证的读取权限。');
-  if (writePermissions.some((field) => permissions[field] === true)) throw new AccountError('unsafe_permissions', '凭据包含交易、提现或划转权限，请更换专用只读凭据。');
-  if (writePermissions.some((field) => permissions[field] !== false)) throw new AccountError('unverified_permissions', '无法完整确认凭据的只读权限，已停止读取。');
+  try {
+    const permissions = object(await readBinance(config, 'permissions', signal));
+    if (permissions.enableReading !== true) throw new AccountError('reading_disabled', '凭据没有可验证的读取权限。');
+    if (writePermissions.some((field) => permissions[field] === true)) throw new AccountError('unsafe_permissions', '凭据包含交易、提现或划转权限，请更换专用只读凭据。');
+    if (writePermissions.some((field) => permissions[field] !== false)) throw new AccountError('unverified_permissions', '无法完整确认凭据的只读权限，已停止读取。');
+  } catch (error) {
+    if (error instanceof AccountError) error.scopeConfirmed = false;
+    throw error;
+  }
 }
 
 export async function readReviewIdentity(config: AccountConfig, signal: AbortSignal) {
