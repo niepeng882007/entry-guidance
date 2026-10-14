@@ -376,3 +376,60 @@ test('complex trade detail shows mixed execution types, shared reversal evidence
     });
   }
 });
+
+test.describe('review loading with classic scrollbars', () => {
+  test.use({ isMobile: false, hasTouch: false });
+
+  for (const width of [320, 390, 1280, 1600]) {
+    test(`review keeps horizontal layout stable at ${width}px while loading and opening details`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 600 });
+      // Force an occupying scrollbar in WebKit even when macOS uses overlay scrollbars.
+      await page.route('**/*.css', async (route) => {
+        const response = await route.fetch();
+        await route.fulfill({
+          response,
+          body: `${await response.text()}\nhtml::-webkit-scrollbar { width: 16px; }`,
+        });
+      });
+      await page.goto('/');
+      await page.getByLabel('个人访问密码').fill('browser-test-only');
+      await page.getByRole('button', { name: '进入账户' }).click();
+      let release!: () => void;
+      await page.route('**/api/review/trades', async (route) => {
+        const response = await route.fetch();
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        await route.fulfill({ response });
+      });
+      await page
+        .getByRole('navigation', { name: '功能入口' })
+        .getByRole('link', { name: '交易记录分析', exact: true })
+        .click();
+      await expect.poll(() => typeof release).toBe('function');
+      const content = page.locator('#main-content');
+      const measure = () =>
+        content.evaluate((node) => {
+          const { x, width } = node.getBoundingClientRect();
+          return { x, width };
+        });
+      const loading = await measure();
+      release();
+      await expect(page.getByText('1 笔归档交易', { exact: true })).toBeVisible();
+      expect(await measure()).toEqual(loading);
+      await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
+      await expect(page.locator('#trade-detail')).toBeFocused();
+      expect(await measure()).toEqual(loading);
+      await page.getByText('逐笔成交 · 4 条', { exact: true }).click();
+      expect(await measure()).toEqual(loading);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
+      await navigate(page, '首页');
+      await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
+      expect(await measure()).toEqual(loading);
+    });
+  }
+});
