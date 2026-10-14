@@ -448,7 +448,6 @@ export function useReviewPage(source: Source, location: () => ReviewLocation) {
   let pending: AbortController | undefined;
   let suspended = false;
   let cleanup = () => {};
-  let polling: ReturnType<typeof setTimeout> | undefined;
 
   async function read(
     id?: string,
@@ -458,7 +457,6 @@ export function useReviewPage(source: Source, location: () => ReviewLocation) {
   ) {
     if (suspended || relogin.value || document.hidden || !navigator.onLine) return;
     const current = ++sequence;
-    clearTimeout(polling);
     pending?.abort();
     const controller = new AbortController();
     pending = controller;
@@ -740,15 +738,6 @@ export function useReviewPage(source: Source, location: () => ReviewLocation) {
                       interrupted: '同步中断 · 请再次同步补查',
                     }[sync.value.status]
                   : '尚未同步 · 无真实交易归档';
-      if (
-        !id &&
-        !selectedTrade() &&
-        evidenceOffset === undefined &&
-        (sync.value?.status === 'running' || archive.value?.status === 'running')
-      )
-        polling = setTimeout(() => void read(), 1000);
-      else if (source === 'binance' && !id && !selectedTrade() && evidenceOffset === undefined)
-        polling = setTimeout(() => void read(), 5000);
       return true;
     } catch (error) {
       if (current !== sequence || controller.signal.aborted) return;
@@ -766,7 +755,6 @@ export function useReviewPage(source: Source, location: () => ReviewLocation) {
     sequence++;
     pending?.abort();
     pending = undefined;
-    clearTimeout(polling);
     busy.value = false;
     filterOptions.value = {
       ...filterOptions.value,
@@ -780,7 +768,6 @@ export function useReviewPage(source: Source, location: () => ReviewLocation) {
     sequence++;
     pending?.abort();
     pending = undefined;
-    clearTimeout(polling);
     busy.value = false;
     trade.value = null;
     stale.value = true;
@@ -794,13 +781,11 @@ export function useReviewPage(source: Source, location: () => ReviewLocation) {
     busy.value = false;
     trade.value = null;
     evidence.value = null;
-    clearTimeout(polling);
   });
 
   function pause(reason: string) {
     suspended = true;
     sequence++;
-    clearTimeout(polling);
     pending?.abort();
     pending = undefined;
     busy.value = false;

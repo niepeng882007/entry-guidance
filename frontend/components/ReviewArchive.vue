@@ -21,6 +21,7 @@ const {
 <template>
   <details class="disclosure review-archive">
     <summary class="disclosure__summary">归档管理 · 同步进度与原始证据</summary>
+    <p class="muted">同步进度为上次读取结果，点击页面顶部「重新读取」更新。</p>
     <section class="review-page__detail" aria-labelledby="account-archive-title">
       <h2 id="account-archive-title" class="section-title">全账户历史归档</h2>
       <p class="muted">
