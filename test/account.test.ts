@@ -183,6 +183,7 @@ test('independent assets read uses exact USDT amounts even with cross and hedge 
 });
 
 test('asset details distinguish absent amounts from malformed amounts without changing the summary', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
   let fields: Record<string, unknown> = {};
   const base = await start(t, {
     apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
@@ -193,7 +194,7 @@ test('asset details distinguish absent amounts from malformed amounts without ch
     },
   });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-  const read = (path: string) => fetch(base + path, { headers: { Cookie: cookie } });
+  const read = (path: string) => { t.mock.timers.setTime(Date.now() + 65_000); return fetch(base + path, { headers: { Cookie: cookie } }); };
   const missing = await (await read('/api/account/assets')).json();
   for (const field of ['positionInitialMargin', 'openOrderInitialMargin', 'maintMargin', 'maxWithdrawAmount']) {
     assert.equal(missing[field], null);
@@ -278,7 +279,7 @@ test('read-only failures are explicit and never expose a balance or upstream sec
     const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
     for (const path of ['/api/account', '/api/account/assets', '/api/account/positions', '/api/account/orders', '/api/account/conditional-orders']) {
       const result = await fetch(base + path, { headers: { Cookie: cookie } });
-      assert.equal(result.status, 502);
+      assert.equal(result.status, scenario.status === 429 ? 429 : 502);
       const body = await result.json();
       assert.equal(body.code, scenario.expected);
       assert.equal(body.equity, undefined);
@@ -336,6 +337,7 @@ test('whole account query has a bounded timeout and no fallback', async (t) => {
   assert.equal(result.status, 504);
   const body = await result.json();
   assert.equal(body.code, 'timeout');
+  assert.equal(body.scopeConfirmed, false);
   assert.equal(body.source, 'binance');
   assert.equal(body.equity, undefined);
 });
@@ -412,6 +414,7 @@ test('all current positions remain separate across symbols, hedge sides and marg
 });
 
 test('position observation excludes delivery contracts and keeps facts when auxiliary reads fail', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
   let phase = 'mixed';
   const row = { symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0.12345678', marginType: 'cross', leverage: '10', entryPrice: '60000', markPrice: '60100', unRealizedProfit: '-9.12345678' };
   const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
@@ -426,7 +429,7 @@ test('position observation excludes delivery contracts and keeps facts when auxi
     return { status: 429, body: { code: -1003, msg: 'controlled-test-secret' } };
   } });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-  const read = () => fetch(`${base}/api/account/positions`, { headers: { Cookie: cookie } });
+  const read = () => { t.mock.timers.setTime(Date.now() + 65_000); return fetch(`${base}/api/account/positions`, { headers: { Cookie: cookie } }); };
   const response = await read();
   assert.equal(response.status, 200);
   const data = await response.json();
@@ -443,6 +446,7 @@ test('position observation excludes delivery contracts and keeps facts when auxi
   }
   phase = 'asset-invalid';
   assert.equal((await read()).status, 200);
+  t.mock.timers.setTime(Date.now() + 65_000);
   assert.equal((await fetch(`${base}/api/account/assets`, { headers: { Cookie: cookie } })).status, 502);
   phase = 'empty';
   assert.deepEqual((await (await read()).json()).positions, []);
@@ -476,6 +480,7 @@ test('ordinary active orders read the whole account and preserve exact quantitie
 });
 
 test('ordinary orders preserve raw JSON integer IDs and reject bad quantities without becoming empty', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
   let row: Record<string, unknown> = { symbol: 'BTCUSDT', orderId: '9007199254740993123', side: 'BUY', positionSide: 'BOTH', type: 'LIMIT', status: 'PARTIALLY_FILLED', origQty: '1.00000001', executedQty: '1' };
   let raw = true;
   const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
@@ -487,7 +492,7 @@ test('ordinary orders preserve raw JSON integer IDs and reject bad quantities wi
     return { status: 200, body: raw ? JSON.stringify([row]).replace('"9007199254740993123"', '9007199254740993123') : [row] };
   } });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-  const read = () => fetch(`${base}/api/account/orders`, { headers: { Cookie: cookie } });
+  const read = () => { t.mock.timers.setTime(Date.now() + 65_000); return fetch(`${base}/api/account/orders`, { headers: { Cookie: cookie } }); };
   let response = await read();
   assert.equal(response.status, 200);
   let data = await response.json();
@@ -516,6 +521,7 @@ test('ordinary orders preserve raw JSON integer IDs and reject bad quantities wi
 });
 
 test('ordinary orders exclude known contracts outside USDT perpetual scope without losing valid orders', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
   let unexpected = false;
   let missingMetadata = false;
   const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
@@ -533,7 +539,7 @@ test('ordinary orders exclude known contracts outside USDT perpetual scope witho
     ] };
   } });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-  const read = () => fetch(`${base}/api/account/orders`, { headers: { Cookie: cookie } });
+  const read = () => { t.mock.timers.setTime(Date.now() + 65_000); return fetch(`${base}/api/account/orders`, { headers: { Cookie: cookie } }); };
   const response = await read();
   assert.equal(response.status, 200);
   assert.deepEqual((await response.json()).orders.map((o: { symbol: string }) => o.symbol), ['BTCUSDT']);
@@ -588,6 +594,7 @@ test('conditional orders preserve whole-account facts, close-all semantics and r
 
 test('conditional orders keep unknown settings and trailing facts while rejecting invalid or unconfirmed lists', async (t) => {
   const valid: Record<string, unknown> = { symbol: 'BTCUSDT', algoId: '123', algoType: 'CONDITIONAL', side: 'SELL', positionSide: 'BOTH', orderType: 'TRAILING_STOP_MARKET', algoStatus: 'NEW', quantity: '0.00000001', activatePrice: '60000.12345678', callbackRate: '0.3', workingType: 'OTHER_PRICE' };
+  t.mock.timers.enable({ apis: ['Date'] });
   let row = { ...valid }, failed = false, missingMetadata = false, duplicate = false, empty = false;
   const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
     if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
@@ -603,7 +610,7 @@ test('conditional orders keep unknown settings and trailing facts while rejectin
     return { status: 200, body: empty ? [] : [row, ...(duplicate ? [row] : []), { symbol: 'ETHUSDC' }, { symbol: 'BTCUSDT_261225' }] };
   } });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-  const read = () => fetch(`${base}/api/account/conditional-orders`, { headers: { Cookie: cookie } });
+  const read = () => { t.mock.timers.setTime(Date.now() + 65_000); return fetch(`${base}/api/account/conditional-orders`, { headers: { Cookie: cookie } }); };
   let data = await (await read()).json();
   assert.equal(data.orders.length, 1);
   assert.equal(data.orders[0].activatePrice, '60000.12345678');
@@ -644,4 +651,279 @@ test('conditional orders keep unknown settings and trailing facts while rejectin
   assert.equal(data.code, 'rate_limited');
   assert.equal(data.orders, undefined);
   assert.doesNotMatch(JSON.stringify(data), /controlled-test|signature/);
+});
+
+test('visitors share summary and asset reads for three seconds without inventing a new query time', async (t) => {
+  let accountReads = 0;
+  const base = await start(t, {
+    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      if (url.pathname === '/sapi/v1/account/apiRestrictions') return { status: 200, body: permissions };
+      if (url.pathname === '/sapi/v1/portfolio/account') return { status: 400, body: { code: -21001 } };
+      accountReads++;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return { status: 200, body: accountResponse };
+    },
+  });
+  const cookies = await Promise.all([login(base), login(base)]).then((responses) => responses.map((r) => r.headers.get('set-cookie')!.split(';')[0]!));
+  const read = (path: string, cookie = cookies[0]!) => fetch(`${base}${path}`, { headers: { Cookie: cookie } }).then((r) => r.json());
+  const [summary, assets] = await Promise.all([read('/api/account'), read('/api/account/assets', cookies[1])]);
+  assert.equal(accountReads, 1);
+  assert.equal(summary.queriedAt, assets.queriedAt);
+  const reused = await read('/api/account/assets');
+  assert.equal(accountReads, 1);
+  assert.equal(reused.queriedAt, assets.queriedAt);
+  assert.equal(reused.reused, true);
+  assert.equal((await fetch(`${base}/api/account/assets`)).status, 401);
+  await new Promise((resolve) => setTimeout(resolve, 3010));
+  const fresh = await read('/api/account/assets');
+  assert.equal(accountReads, 2);
+  assert.ok(Date.parse(fresh.queriedAt) > Date.parse(assets.queriedAt));
+});
+
+test('rate limits stop manual and multi-visitor reads until the upstream retry time', async (t) => {
+  let limited = true, calls = 0;
+  const base = await start(t, {
+    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      calls++;
+      if (limited) return { status: 429, headers: { 'retry-after': '1' }, body: { code: -1003, msg: 'private upstream details' } };
+      if (url.pathname === '/sapi/v1/account/apiRestrictions') return { status: 200, body: permissions };
+      if (url.pathname === '/sapi/v1/portfolio/account') return { status: 400, body: { code: -21001 } };
+      return { status: 200, body: accountResponse };
+    },
+  });
+  const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+  const read = (path: string) => fetch(`${base}${path}`, { headers: { Cookie: cookie } });
+  const first = await read('/api/account/assets');
+  assert.equal(first.status, 429);
+  const error = await first.json();
+  assert.ok(Date.parse(error.retryAt) > Date.now());
+  assert.doesNotMatch(JSON.stringify(error), /private upstream/);
+  for (const path of ['/api/account', '/api/account/positions', '/api/account/orders', '/api/account/conditional-orders', '/api/market?symbol=BTCUSDT']) {
+    assert.equal((await read(path)).status, 429);
+  }
+  assert.equal(calls, 1);
+  limited = false;
+  await new Promise((resolve) => setTimeout(resolve, 1050));
+  assert.equal((await read('/api/account/assets')).status, 200);
+});
+
+test('shared reads cancel only when their last visitor leaves and never accept canceled data', async (t) => {
+  let started!: () => void, release!: () => void;
+  let upstreamSignal: AbortSignal | undefined;
+  let accountReads = 0;
+  let ready = new Promise<void>((resolve) => { started = resolve; });
+  const base = await start(t, {
+    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    transport: async (url, _headers, signal) => {
+      if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+      if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
+      accountReads++; upstreamSignal = signal; started();
+      await new Promise<void>((resolve) => { release = resolve; });
+      return { status: 200, body: accountResponse };
+    },
+  });
+  const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+  const first = new AbortController(), second = new AbortController();
+  const read = (controller: AbortController) => fetch(`${base}/api/account/assets`, { headers: { Cookie: cookie }, signal: controller.signal });
+  const one = read(first).catch(() => null);
+  await ready;
+  const two = read(second);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  first.abort(); await one;
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(upstreamSignal?.aborted, false);
+  release();
+  assert.equal((await two).status, 200);
+  assert.equal(accountReads, 1);
+  await new Promise((resolve) => setTimeout(resolve, 3010));
+  ready = new Promise<void>((resolve) => { started = resolve; });
+  const last = new AbortController();
+  const canceled = read(last).catch(() => null);
+  await ready;
+  const canceledSignal = upstreamSignal!;
+  last.abort(); await canceled;
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(canceledSignal.aborted, true);
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  ready = new Promise<void>((resolve) => { started = resolve; });
+  const fresh = read(new AbortController());
+  await ready; release();
+  assert.equal((await fresh).status, 200);
+  assert.equal(accountReads, 3);
+});
+
+test('persistent failures back off across visitors and return the original failed attempt', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
+  let calls = 0, fail = true;
+  const base = await start(t, {
+    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+      if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
+      calls++;
+      return fail ? { status: 500, body: {} } : { status: 200, body: accountResponse };
+    },
+  });
+  const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+  const read = () => fetch(`${base}/api/account/assets`, { headers: { Cookie: cookie } }).then((r) => r.json());
+  for (const delay of [3000, 6000, 12000, 24000, 48000, 60000]) {
+    const error = await read();
+    assert.equal(Date.parse(error.retryAt) - Date.now(), delay);
+    const repeated = await read();
+    assert.equal(repeated.attemptedAt, error.attemptedAt);
+    assert.equal(repeated.retryAt, error.retryAt);
+    t.mock.timers.setTime(Date.now() + delay);
+  }
+  assert.equal(calls, 6);
+  fail = false;
+  assert.equal((await read()).equity, '975.09999999');
+});
+
+test('reported exchange quota and IP usage defer whole-account reads before exhausting the window', async (t) => {
+  let orders = 0;
+  const base = await start(t, {
+    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+      if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
+      if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
+      if (url.pathname.endsWith('positionRisk')) return { status: 200, body: [] };
+      if (url.pathname.endsWith('exchangeInfo')) return { status: 200, headers: { 'x-mbx-used-weight-1m': '2399' }, body: { symbols: [], rateLimits: [{ rateLimitType: 'REQUEST_WEIGHT', interval: 'MINUTE', intervalNum: 1, limit: 2400 }] } };
+      orders++; return { status: 200, body: [] };
+    },
+  });
+  const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+  const read = (path: string) => fetch(`${base}${path}`, { headers: { Cookie: cookie } });
+  assert.equal((await read('/api/account/positions')).status, 200);
+  const response = await read('/api/account/orders');
+  assert.equal(response.status, 429);
+  assert.match((await response.json()).error, /额度/);
+  assert.equal(orders, 0);
+});
+
+test('whole-account visitors share every section and preserve strict market scope checks', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
+  const calls = new Map<string, number>();
+  let supportedScope = true;
+  const base = await start(t, {
+    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      calls.set(url.pathname, (calls.get(url.pathname) ?? 0) + 1);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+      if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
+      if (url.pathname.endsWith('/account')) return { status: 200, body: { ...accountResponse, multiAssetsMargin: !supportedScope } };
+      if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: [] } };
+      return { status: 200, body: [] };
+    },
+  });
+  const cookies = await Promise.all([login(base), login(base)]).then((responses) => responses.map((r) => r.headers.get('set-cookie')!.split(';')[0]!));
+  const paths = ['/api/account', '/api/account/assets', '/api/account/positions', '/api/account/orders', '/api/account/conditional-orders'];
+  const read = (path: string, cookie: string) => fetch(`${base}${path}`, { headers: { Cookie: cookie } });
+  const responses = await Promise.all(cookies.flatMap((cookie) => paths.map((path) => read(path, cookie))));
+  for (const response of responses) assert.equal(response.status, 200);
+  for (const path of ['/sapi/v1/account/apiRestrictions', '/sapi/v1/portfolio/account', '/fapi/v2/account', '/fapi/v1/exchangeInfo', '/fapi/v2/positionRisk', '/fapi/v1/openOrders', '/fapi/v1/openAlgoOrders']) assert.equal(calls.get(path), 1, path);
+  supportedScope = false;
+  // A formal market query cannot borrow the still-current observation cache.
+  const strict = await read('/api/market?symbol=BTCUSDT', cookies[0]!);
+  assert.equal(strict.status, 502);
+  assert.equal((await strict.json()).code, 'unsupported_account');
+  assert.equal(calls.get('/fapi/v2/account'), 2);
+  const revoked = await read('/api/account/assets', cookies[1]!);
+  assert.equal(revoked.status, 502);
+  assert.equal((await revoked.json()).scopeConfirmed, false);
+  t.mock.timers.setTime(Date.now() + 3000);
+  const failed = await Promise.all(paths.map((path) => read(path, cookies[1]!)));
+  for (const response of failed) {
+    assert.equal(response.status, 502);
+    assert.equal((await response.json()).scopeConfirmed, false);
+  }
+});
+
+test('a reported ban deadline takes precedence over the fallback and never leaks upstream text', async (t) => {
+  const until = Date.now() + 120_000;
+  let calls = 0;
+  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async () => {
+    calls++; return { status: 418, body: { code: -1003, msg: `private details IP banned until ${until}` } };
+  } });
+  const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+  const read = () => fetch(`${base}/api/account`, { headers: { Cookie: cookie } }).then((r) => r.json());
+  const error = await read();
+  assert.equal(error.retryAt, new Date(until).toISOString());
+  assert.doesNotMatch(JSON.stringify(error), /private details/);
+  await read(); assert.equal(calls, 1);
+});
+
+test('a slow successful read does not extend reuse past the next foreground tick', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
+  let calls = 0;
+  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
+    if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+    if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
+    calls++;
+    t.mock.timers.setTime(Date.now() + 1000);
+    return { status: 200, body: accountResponse };
+  } });
+  const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+  const before = Date.now();
+  const read = () => fetch(`${base}/api/account/assets`, { headers: { Cookie: cookie } });
+  assert.equal((await read()).status, 200);
+  t.mock.timers.setTime(before + 3000);
+  assert.equal((await read()).status, 200);
+  assert.equal(calls, 2);
+});
+
+test('asset details cannot extend the success reuse window of an earlier summary', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  let calls = 0;
+  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
+    if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+    if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
+    calls++; return { status: 200, body: accountResponse };
+  } });
+  const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+  const read = (path: string) => fetch(`${base}${path}`, { headers: { Cookie: cookie } }).then((r) => r.json());
+  const before = Date.now();
+  const summary = await read('/api/account');
+  t.mock.timers.setTime(before + 2800);
+  assert.equal((await read('/api/account/assets')).queriedAt, summary.queriedAt);
+  t.mock.timers.setTime(before + 3500);
+  const fresh = await read('/api/account/assets');
+  assert.equal(calls, 2);
+  assert.ok(Date.parse(fresh.queriedAt) > Date.parse(summary.queriedAt));
+});
+
+test('invalid or refused auxiliary market data backs off while positions and funding keep updating', async (t) => {
+  for (const status of [200, 400, 'alternating'] as const) await t.test(String(status), async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+    let calls = 0;
+    const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
+      if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+      if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
+      if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
+      if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: [{ symbol: 'BTCUSDT', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'PERPETUAL' }] } };
+      if (url.pathname.endsWith('positionRisk')) return { status: 200, body: [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '1', marginType: 'cross', leverage: '10', entryPrice: '60000', markPrice: '60100', unRealizedProfit: '100' }] };
+      if (url.pathname.endsWith('premiumIndex')) return { status: 200, body: [{ symbol: 'BTCUSDT', lastFundingRate: '0.0001', time: Date.now() }] };
+      calls++;
+      const responseStatus = status === 'alternating' ? (calls % 2 ? 200 : 500) : status;
+      return { status: responseStatus, body: responseStatus === 200 ? [{ symbol: 'BTCUSDT', price: 'NaN' }] : { code: -1 } };
+    } });
+    const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+    const read = () => fetch(`${base}/api/account/positions`, { headers: { Cookie: cookie } }).then((r) => r.json());
+    const first = await read();
+    assert.equal(first.last.status, 'error');
+    assert.equal(Date.parse(first.last.retryAt) - Date.now(), 3000);
+    t.mock.timers.setTime(Date.now() + 3000);
+    const second = await read();
+    assert.equal(Date.parse(second.last.retryAt) - Date.now(), 6000);
+    t.mock.timers.setTime(Date.now() + 3000);
+    const waiting = await read();
+    assert.equal(calls, 2);
+    assert.equal(waiting.last.attemptedAt, second.last.attemptedAt);
+    assert.ok(Date.parse(waiting.queriedAt) > Date.parse(second.queriedAt));
+    assert.ok(Date.parse(waiting.funding.queriedAt) > Date.parse(second.funding.queriedAt));
+  });
 });

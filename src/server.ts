@@ -1,10 +1,11 @@
+import { SharedRead, coordinateAccountReads } from './account-refresh.ts';
 import { readAccountOrders, demoAccountOrders, readAccountConditionalOrders, demoAccountConditionalOrders } from './orders.ts';
 import { readAccountPositions, demoAccountPositions } from './positions.ts';
 import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
-import { AccountError, readAccount, readAccountAssets, readReviewIdentity, type AccountConfig } from './account.ts';
+import { AccountError, readAccountData, accountAssetDetails, readReviewIdentity, type AccountConfig } from './account.ts';
 import { demoAccount, demoAccountAssets, readMarket, readSymbols } from './market.ts';
 import { createPlan, verifyPosition, type Plan } from './verification.ts';
 import { ReviewLedger, demoTrade, type ReviewList } from './review-ledger.ts';
@@ -28,6 +29,20 @@ const digest = (value: string) => createHash('sha256').update(value).digest();
 
 export function createServer(config: Config) {
   if (config.password.length < 12) throw new Error('APP_PASSWORD 至少需要 12 个字符。');
+  const observation = coordinateAccountReads(config);
+  config = { ...config, ...observation.strictConfig };
+  // Leave a small margin before the next three-second foreground tick.
+  const reuseMs = 2_900;
+  const accountData = new SharedRead(async (signal) => config.mode === 'demo' ? { snapshot: demoAccount(), asset: demoAccountAssets() } : readAccountData(observation.config, signal), reuseMs, true);
+  const accountAssets = new SharedRead(async (signal) => {
+    const result = await accountData.read(signal);
+    return { ...result.value.snapshot, ...accountAssetDetails(result.value.asset), attemptedAt: result.attemptedAt, reused: result.reused };
+  }, reuseMs, true);
+  const accountPositions = new SharedRead(async (signal) => config.mode === 'demo' ? demoAccountPositions() : readAccountPositions(observation.config, signal), reuseMs, true);
+  const accountOrders = new SharedRead(async (signal) => config.mode === 'demo' ? demoAccountOrders() : readAccountOrders(observation.config, signal), reuseMs, true);
+  const accountConditionalOrders = new SharedRead(async (signal) => config.mode === 'demo' ? demoAccountConditionalOrders() : readAccountConditionalOrders(observation.config, signal), reuseMs, true);
+  const accountSlots = [accountData, accountAssets, accountPositions, accountOrders, accountConditionalOrders];
+  let scopeGeneration = 0;
   const passwordHash = digest(config.password);
   const source = config.mode === 'demo' ? 'demo' : 'binance';
   // Bind restored plans to this installation's password, data mode and account credentials.
@@ -109,6 +124,9 @@ export function createServer(config: Config) {
       ? "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:24678; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
       : "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
     const send = (status: number, value: unknown) => {
+      if (status >= 400 && value && typeof value === 'object' && 'scopeConfirmed' in value && value.scopeConfirmed === false) {
+        scopeGeneration++; for (const slot of accountSlots) slot.clear();
+      }
       res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(value));
     };
@@ -196,7 +214,7 @@ export function createServer(config: Config) {
         return send(200, { ...plan, input: input as EntryInput, recovery: `${payload}.${signature(payload)}` } satisfies SavedPlan);
       } catch (error) {
         if (!(error instanceof AccountError)) throw error;
-        return send(error.status, { error: error.message, code: error.code, attemptedAt: new Date().toISOString() });
+        return send(error.status, { error: error.message, code: error.code, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt, scopeConfirmed: error.scopeConfirmed });
       }
     }
     if (req.method !== 'GET' && !(['/api/review/sync', '/api/review/archive'].includes(path ?? '') && req.method === 'POST')) return send(405, { error: '仅支持读取。' });
@@ -208,7 +226,7 @@ export function createServer(config: Config) {
       try { return send(200, await verifyPosition(config, plan, query.get('demo') ?? undefined)); }
       catch (error) {
         if (!(error instanceof AccountError)) throw error;
-        return send(error.status, { error: error.message, code: error.code, source: plan.source, attemptedAt: new Date().toISOString() });
+        return send(error.status, { error: error.message, code: error.code, source: plan.source, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt, scopeConfirmed: error.scopeConfirmed });
       }
     }
     if (['/api/review/sync', '/api/review/archive'].includes(path ?? '') && req.method === 'POST') {
@@ -231,11 +249,15 @@ export function createServer(config: Config) {
         const currentSession = sessions.get(cookie!);
         if (!currentSession || currentSession.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
         const sync = await getHistory(uid);
-        if (fullAccount) return send(202, await archive!.start());
+        if (fullAccount) {
+          const progress = await archive!.start();
+          archiveIssue = undefined;
+          return send(202, progress);
+        }
         if (archive?.busy()) return send(409, { error: '全账户归档正在运行，请查看进度。', code: 'sync_running' });
         return send(202, await sync!.start(symbol as string));
       } catch (error) {
-        if (error instanceof AccountError) return send(error.status, { error: error.message, code: error.code });
+        if (error instanceof AccountError) return send(error.status, { error: error.message, code: error.code, scopeConfirmed: error.scopeConfirmed, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt });
         return send(503, { error: '复盘同步暂不可用，已有账本保留。' });
       }
     }
@@ -294,7 +316,7 @@ export function createServer(config: Config) {
       try { return send(200, await readSymbols(config)); }
       catch (error) {
         if (!(error instanceof AccountError)) throw error;
-        return send(error.status, { error: error.message, code: error.code });
+        return send(error.status, { error: error.message, code: error.code, scopeConfirmed: error.scopeConfirmed, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt });
       }
     }
     if (path?.startsWith('/api/market?')) {
@@ -303,33 +325,40 @@ export function createServer(config: Config) {
       try { return send(200, await readMarket(config, query.get('symbol')!)); }
       catch (error) {
         if (!(error instanceof AccountError)) throw error;
-        return send(error.status, { source: config.mode === 'demo' ? 'demo' : 'binance', code: error.code, error: error.message, attemptedAt: new Date().toISOString() });
+        return send(error.status, { source: config.mode === 'demo' ? 'demo' : 'binance', code: error.code, error: error.message, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt, scopeConfirmed: error.scopeConfirmed });
       }
     }
-    if (path === '/api/account') {
-      if (config.mode === 'demo') return send(200, demoAccount());
-      try { return send(200, await readAccount(config)); }
-      catch (error) {
-        if (!(error instanceof AccountError)) throw error;
-        return send(error.status, { source: 'binance', code: error.code, error: error.message, attemptedAt: new Date().toISOString() });
-      }
-    }
-    if (path === '/api/account/assets' || path === '/api/account/positions' || path === '/api/account/orders' || path === '/api/account/conditional-orders') {
+    if (path === '/api/account' || path === '/api/account/assets' || path === '/api/account/positions' || path === '/api/account/orders' || path === '/api/account/conditional-orders') {
+      const controller = new AbortController();
+      const cancel = () => { if (!res.writableEnded) controller.abort(); };
+      res.once('close', cancel);
+      const generation = scopeGeneration;
       try {
-        const data = path === '/api/account/conditional-orders'
-          ? config.mode === 'demo' ? demoAccountConditionalOrders() : await readAccountConditionalOrders(config)
-          : path === '/api/account/orders'
-          ? config.mode === 'demo' ? demoAccountOrders() : await readAccountOrders(config)
-          : path === '/api/account/positions'
-          ? config.mode === 'demo' ? demoAccountPositions() : await readAccountPositions(config)
-          : config.mode === 'demo' ? demoAccountAssets() : await readAccountAssets(config);
+        observation.check();
+        const signal = controller.signal;
+        const result = path === '/api/account/conditional-orders' ? await accountConditionalOrders.read(signal)
+          : path === '/api/account/orders' ? await accountOrders.read(signal)
+          : path === '/api/account/positions' ? await accountPositions.read(signal)
+          : path === '/api/account/assets' ? await accountAssets.read(signal) : await accountData.read(signal);
+        if (controller.signal.aborted) return;
         const session = sessions.get(cookie!);
         if (!session || session.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
-        return send(200, data);
+        if (generation !== scopeGeneration) {
+          const error = new AccountError('scope_unconfirmed', '账户口径或权限未确认，本次读取已失效。');
+          error.scopeConfirmed = false;
+          throw error;
+        }
+        const value = 'snapshot' in result.value ? result.value.snapshot : result.value;
+        const attemptedAt = 'attemptedAt' in value && typeof value.attemptedAt === 'string' ? value.attemptedAt : result.attemptedAt;
+        return send(200, { ...value, attemptedAt, reused: result.reused || ('reused' in value && value.reused === true) });
       } catch (error) {
+        if (controller.signal.aborted) return;
+        const session = sessions.get(cookie!);
+        if (!session || session.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
         if (!(error instanceof AccountError)) throw error;
-        return send(error.status, { source, code: error.code, error: error.message, attemptedAt: new Date().toISOString() });
-      }
+        if (error.retryAt) res.setHeader('Retry-After', Math.max(0, Math.ceil((Date.parse(error.retryAt) - Date.now()) / 1000)));
+        return send(error.status, { source, code: error.code, error: error.message, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt, scopeConfirmed: error.scopeConfirmed });
+      } finally { res.removeListener('close', cancel); }
     }
     return send(404, { error: '入口不存在。' });
   }
@@ -350,6 +379,8 @@ export function createServer(config: Config) {
     closing = true;
     clearInterval(archiveTimer);
     sessions.clear();
+    for (const slot of accountSlots) slot.stop();
+    observation.stop();
     if (history) void Promise.all([history.stop(), archive?.stop()]).finally(() => reviewLedger?.close());
     else reviewLedger?.close();
   });

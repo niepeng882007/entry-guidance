@@ -136,6 +136,7 @@ test('ordinary orders reject unavailable or inconsistent data and recover withou
     if (variant === 'failure')
       return route.fulfill({ status: 502, json: { error: '首次委托读取失败' } });
     const data = await (await route.fetch()).json();
+    data.queriedAt = new Date().toISOString();
     if (variant === 'source') data.source = 'binance';
     if (variant === 'time') data.queriedAt = new Date(Date.now() - 60_000).toISOString();
     if (variant === 'remaining') data.orders[0].remainingQty = '0.12345678';
@@ -153,7 +154,10 @@ test('ordinary orders reject unavailable or inconsistent data and recover withou
     await page.getByRole('button', { name: '手动刷新' }).click();
     await expect(orders.locator('article[data-kind=ordinary]')).toHaveCount(0);
     await expect(orders).toContainText('无效');
-    await expect(page.getByRole('status')).toContainText('模拟查询成功');
+    if (variant === 'source') {
+      await expect(page.getByRole('status')).toContainText('账户来源无效');
+      await expect(page.locator('.balances--assets')).toHaveAttribute('data-current', 'false');
+    } else await expect(page.getByRole('status')).toContainText('模拟查询成功');
   }
   variant = 'ok';
   await page.getByRole('button', { name: '手动刷新' }).click();

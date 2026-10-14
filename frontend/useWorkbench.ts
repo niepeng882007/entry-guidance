@@ -13,6 +13,10 @@ import type { SavedPlan } from '../src/server.ts';
 import type { Plan, Verification } from '../src/verification.ts';
 import type { readAccount } from '../src/account.ts';
 
+class QueryFailure extends Error {
+  attemptedAt?: string;
+}
+
 type Account = Omit<Awaited<ReturnType<typeof readAccount>>, 'source'> & {
   source: 'binance' | 'demo';
 };
@@ -688,7 +692,14 @@ export function useWorkbench(source: string) {
         hasAccount &&
         (account.equity !== text.equity || account.availableBalance !== text.available);
       renderAccount(account);
-      show('attempted', time(account.queriedAt));
+      show(
+        'attempted',
+        time(
+          'attemptedAt' in account && typeof account.attemptedAt === 'string'
+            ? account.attemptedAt
+            : account.queriedAt,
+        ),
+      );
       if (changed && (snapshot || ui.cardCurrent || ui.verificationCurrent)) {
         snapshot = null;
         invalidateCard('账户余额已变化，需完整查询后重新确认');
@@ -701,7 +712,14 @@ export function useWorkbench(source: string) {
         'account-error',
         `账户刷新失败 · ${message(error)}${hasAccount ? ' 上次快照已过期，原数值与查询时间保留。' : ''}`,
       );
-      show('attempted', time(new Date().toISOString()));
+      show(
+        'attempted',
+        time(
+          error instanceof QueryFailure && error.attemptedAt
+            ? error.attemptedAt
+            : new Date().toISOString(),
+        ),
+      );
       snapshot = null;
       invalidateCard('账户刷新失败，当前结果已失效');
       renderDraft();
@@ -1178,9 +1196,19 @@ export function useWorkbench(source: string) {
     const data: unknown = await response.json();
     if (!response.ok) {
       const error = record(data);
-      throw new Error(typeof error.error === 'string' ? error.error : '查询失败，请重试。', {
-        cause: response.status === 409 ? error.code : undefined,
-      });
+      const retry =
+        typeof error.retryAt === 'string' && Number.isFinite(Date.parse(error.retryAt))
+          ? ` 下次允许读取：${time(error.retryAt)}。`
+          : '';
+      const failure = new QueryFailure(
+        `${typeof error.error === 'string' ? error.error : '查询失败，请重试。'}${retry}`,
+        {
+          cause: response.status === 409 ? error.code : undefined,
+        },
+      );
+      if (typeof error.attemptedAt === 'string' && Number.isFinite(Date.parse(error.attemptedAt)))
+        failure.attemptedAt = error.attemptedAt;
+      throw failure;
     }
     return data as T;
   }
@@ -1325,7 +1353,14 @@ export function useWorkbench(source: string) {
           : '关键数据查询失败，暂停生成新开仓卡。',
       );
       invalidateCard('数据已过期，关键查询失败');
-      show('attempted', time(new Date().toISOString()));
+      show(
+        'attempted',
+        time(
+          error instanceof QueryFailure && error.attemptedAt
+            ? error.attemptedAt
+            : new Date().toISOString(),
+        ),
+      );
       ui.status = 'error';
     } finally {
       if (id === requestId) {

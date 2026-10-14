@@ -225,7 +225,10 @@ export class ReviewLedger {
   private saveRaw(symbol: string, records: RawRecord[]) {
     const { source, accountId } = this.identity;
     for (const record of records) {
-        const existing = this.db.prepare('SELECT payload FROM history_raw WHERE source=? AND account=? AND symbol=? AND kind=? AND id=?').get(source, accountId, symbol, record.kind, record.id);
+        const recordSymbol = record.kind === 'income' && typeof record.payload.symbol === 'string' ? record.payload.symbol : symbol;
+        const existing = record.kind === 'income'
+          ? this.db.prepare('SELECT payload FROM history_raw WHERE source=? AND account=? AND kind=? AND id=?').get(source, accountId, record.kind, record.id)
+          : this.db.prepare('SELECT payload FROM history_raw WHERE source=? AND account=? AND symbol=? AND kind=? AND id=?').get(source, accountId, recordSymbol, record.kind, record.id);
         if (existing && ['trades', 'income'].includes(record.kind)) {
           const previous = JSON.parse(String(existing.payload)) as RawRecord;
           const fields = record.kind === 'trades' ? ['symbol', 'id', 'orderId', 'side', 'positionSide', 'qty', 'price', 'time', 'realizedPnl', 'commission', 'commissionAsset'] : ['symbol', 'tranId', 'incomeType', 'time', 'income', 'asset', 'tradeId'];
@@ -236,7 +239,7 @@ export class ReviewLedger {
             return ['id', 'orderId', 'tranId', 'tradeId'].includes(field) ? String(before) !== String(after) : before !== after;
           })) throw new Error('来源事实冲突，保留已有账本。');
         }
-        this.db.prepare('INSERT INTO history_raw VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(source, account, symbol, kind, id) DO UPDATE SET payload=excluded.payload').run(source, accountId, symbol, record.kind, record.id, JSON.stringify(record));
+        this.db.prepare('INSERT INTO history_raw VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(source, account, symbol, kind, id) DO UPDATE SET payload=excluded.payload').run(source, accountId, recordSymbol, record.kind, record.id, JSON.stringify(record));
     }
   }
 

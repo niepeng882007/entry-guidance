@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from '../src/server.ts';
 import { readBinance, AccountError, type Transport } from '../src/account.ts';
+import { coordinateAccountReads } from '../src/account-refresh.ts';
 
 const permissions = { enableReading: true, enableWithdrawals: false, enableInternalTransfer: false, enableMargin: false, enableFutures: false, permitsUniversalTransfer: false, enableVanillaOptions: false, enableFixApiTrade: false, enableSpotAndMarginTrading: false, enablePortfolioMarginTrading: false };
 const at = Date.now() - 86_400_000;
@@ -19,7 +20,7 @@ function fixture(): Transport {
       case '/api/v3/account': body = { uid: 12345 }; break;
       case '/fapi/v1/time': body = { serverTime: Date.now() }; break;
       case '/fapi/v1/exchangeInfo': body = { symbols: [{ symbol: 'BTCUSDT', contractType: 'PERPETUAL', quoteAsset: 'USDT', marginAsset: 'USDT' }] }; break;
-      case '/fapi/v1/income': body = at >= start && at <= end ? ['BTCUSDT', 'OLDUSDT'].filter((value) => !symbol || value === symbol).map((value, index) => ({ symbol: value, incomeType: 'COMMISSION', tranId: index + 1, time: at, income: '-0.1', asset: 'USDT', tradeId: '1' })) : []; break;
+      case '/fapi/v1/income': body = at >= start && at <= end ? ['BTCUSDT', 'OLDUSDT'].filter((value) => !symbol || value === symbol).map((value) => ({ symbol: value, incomeType: 'COMMISSION', tranId: value === 'BTCUSDT' ? 1 : 2, time: at, income: '-0.1', asset: 'USDT', tradeId: '1' })) : []; break;
       case '/fapi/v1/userTrades': body = at >= start && at <= end ? [{ symbol, id: 1, orderId: 11, time: at, side: 'BUY', positionSide: 'BOTH', qty: '1', price: '100', realizedPnl: '0', commission: '0.1', commissionAsset: 'USDT' }] : []; break;
       case '/fapi/v1/allOrders': body = at >= start && at <= end ? [{ symbol, orderId: 11, time: at, side: 'BUY', positionSide: 'BOTH', type: 'MARKET', executedQty: '1' }] : []; break;
       case '/fapi/v2/positionRisk': body = symbol === 'OLDUSDT' ? [] : [{ symbol, positionSide: 'BOTH', positionAmt: '1' }]; break;
@@ -265,17 +266,29 @@ test('full archive refuses unsafe permissions and identifies network failures wi
 test('minute weight pressure pauses archive reads, lets foreground reads proceed and signs at dispatch', async (t) => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
   let backgroundRead = false, signedAt = 0;
-  const config = { apiKey: 'test-key', apiSecret: 'test-secret', transport: async (url: URL) => {
-    if (url.pathname === '/fapi/v1/time') return { status: 200, body: { serverTime: Date.now() }, usedWeight: 1800 };
+  let holdForeground = false, release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const coordinator = coordinateAccountReads({ apiKey: 'test-key', apiSecret: 'test-secret', transport: async (url: URL) => {
+    if (url.pathname === '/fapi/v1/exchangeInfo') return { status: 200, body: { rateLimits: [{ rateLimitType: 'REQUEST_WEIGHT', interval: 'MINUTE', intervalNum: 1, limit: 2400 }] } };
+    if (url.pathname === '/fapi/v1/time') return { status: 200, body: { serverTime: Date.now() }, headers: { 'x-mbx-used-weight-1m': '1800' } };
+    if (url.pathname === '/api/v3/account' && holdForeground) await gate;
     if (url.pathname === '/fapi/v1/userTrades') { backgroundRead = true; signedAt = Number(url.searchParams.get('timestamp')); }
     return { status: 200, body: [] };
-  } };
+  } });
+  const config = coordinator.strictConfig;
   const signal = new AbortController().signal;
+  await readBinance(config, 'exchange', signal, undefined, undefined, 'archive');
   await readBinance(config, 'time', signal, undefined, undefined, 'archive');
-  const pending = readBinance(config, 'trades', signal, 'BTCUSDT', { startTime: at, endTime: at + 1000 }, 'archive');
+  await assert.rejects(readBinance(config, 'trades', signal, 'BTCUSDT', { startTime: at, endTime: at + 1000 }, 'archive'), (error: unknown) => error instanceof AccountError && error.code === 'rate_limited' && error.retryAt !== undefined);
   await readBinance(config, 'identity', signal);
   assert.equal(backgroundRead, false);
   t.mock.timers.tick(60_000);
+  holdForeground = true;
+  const foreground = readBinance(config, 'identity', signal);
+  const pending = readBinance(config, 'trades', signal, 'BTCUSDT', { startTime: at, endTime: at + 1000 }, 'archive');
+  t.mock.timers.tick(6000);
+  release();
+  await foreground;
   await pending;
   assert.equal(signedAt, Date.now());
 });
@@ -283,16 +296,70 @@ test('minute weight pressure pauses archive reads, lets foreground reads proceed
 test('Retry-After prevents more external reads until the controlled cooldown ends', async (t) => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
   let reads = 0;
-  const config = { transport: async () => ++reads === 1 ? { status: 429, body: { code: -1003 }, retryAfterMs: 60_000 } : { status: 200, body: { serverTime: Date.now() } } };
+  const config = coordinateAccountReads({ transport: async () => ++reads === 1 ? { status: 429, body: { code: -1003 }, headers: { 'retry-after': '60' } } : { status: 200, body: { serverTime: Date.now() } } }).strictConfig;
   const signal = new AbortController().signal;
   await assert.rejects(readBinance(config, 'time', signal), (error: unknown) => error instanceof AccountError && error.code === 'rate_limited');
-  const pending = readBinance(config, 'time', signal);
-  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(readBinance(config, 'time', signal), (error: unknown) => error instanceof AccountError && error.retryAt !== undefined);
   assert.equal(reads, 1);
   t.mock.timers.tick(59_999);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(reads, 1);
   t.mock.timers.tick(1);
-  await pending;
+  await readBinance(config, 'time', signal);
   assert.equal(reads, 2);
+});
+
+test('a clock advancing during every checkpoint still reads a partially expired first page', async (t) => {
+  const clockStart = Date.now();
+  let ticks = 0, incomeReads = 0;
+  t.mock.method(Date, 'now', () => {
+    if (++ticks === 4000) throw new Error('expiry loop did not make progress');
+    return clockStart + ticks;
+  });
+  const base = fixture();
+  const app = await start(t, async (url, headers, signal) => {
+    if (url.pathname === '/fapi/v1/income') incomeReads++;
+    return base(url, headers, signal);
+  });
+  await app.sync();
+  const result = await finished(app);
+  assert.equal(result.archive.status, 'complete', JSON.stringify(result.archive.missing));
+  assert.ok(incomeReads > 0);
+  assert.ok(ticks < 4000);
+  assert.ok(result.archive.contracts.every((contract: { status: string }) => contract.status === 'complete'));
+});
+
+test('discovery and contract responses cannot disagree about the same funding identity', async (t) => {
+  const base = fixture();
+  const app = await start(t, async (url, headers, signal) => {
+    const response = await base(url, headers, signal);
+    if (url.pathname === '/fapi/v1/income' && Array.isArray(response.body)) response.body = response.body.map((row) => ({ ...row, incomeType: 'FUNDING_FEE', tradeId: '', income: url.searchParams.has('symbol') ? '-0.2' : '-0.1' }));
+    return response;
+  });
+  await app.sync();
+  const data = await finished(app);
+  assert.equal(data.archive.status, 'failed');
+  assert.equal(data.archive.contracts.find((contract: { symbol: string }) => contract.symbol === 'BTCUSDT').status, 'failed');
+  assert.ok(data.archive.contracts.find((contract: { symbol: string }) => contract.symbol === 'BTCUSDT').pending.some((page: { source: string; startTime: number; endTime: number }) => page.source === 'income' && page.startTime <= at && page.endTime >= at));
+  const evidence = await fetch(`${app.base}/api/review/evidence?symbol=BTCUSDT`, { headers: { Cookie: app.cookie } });
+  assert.equal((await evidence.json()).records.find((row: { kind: string }) => row.kind === 'income').payload.income, '-0.1');
+});
+
+test('immediate synchronization clears a recovered bootstrap failure instead of retaining a paused status', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'account-archive-bootstrap-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  let unavailable = true;
+  const base = fixture();
+  const app = await start(t, async (url, headers, signal) => {
+    if (url.pathname === '/api/v3/account' && unavailable) throw new Error('temporary identity failure');
+    return base(url, headers, signal);
+  }, join(directory, 'real.sqlite'));
+  let data = await (await app.get()).json();
+  for (let index = 0; !data.archiveIssue && index < 50; index++) { await new Promise((resolve) => setTimeout(resolve, 10)); data = await (await app.get()).json(); }
+  assert.equal(data.archiveIssue.code, 'connection_failed');
+  unavailable = false;
+  assert.equal((await app.sync()).status, 202);
+  const recovered = await finished(app);
+  assert.equal(recovered.archive.status, 'complete');
+  assert.equal(recovered.archiveIssue, undefined);
 });

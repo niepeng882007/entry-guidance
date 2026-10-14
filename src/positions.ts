@@ -1,3 +1,4 @@
+import { SharedRead } from './account-refresh.ts';
 import { AccountError, object, readAccountScope, readBinance, type AccountConfig } from './account.ts';
 import { parseDecimal, formatDecimal } from '../public/draft.js';
 
@@ -10,11 +11,14 @@ export type Position = {
 };
 export type LastPrice = { symbol: string; price: string; updatedAt: string | null };
 export type Funding = { symbol: string; rate: string | null; nextFundingAt: string | null; updatedAt: string | null };
-export type MarketPart<T> = { status: 'ok'; queriedAt: string; data: T[] } | { status: 'error'; error: string };
+export type MarketPart<T> = ({ status: 'ok'; queriedAt: string; data: T[] } | { status: 'error'; error: string }) & { attemptedAt?: string; retryAt?: string };
 export type PositionsSnapshot = {
   source: 'binance' | 'demo'; queriedAt: string; positions: Position[];
   last: MarketPart<LastPrice>; funding: MarketPart<Funding>;
 };
+
+type MarketData = { queriedAt: string; data: (LastPrice | Funding)[] };
+const marketReads = new WeakMap<AccountConfig, Partial<Record<'last' | 'mark', SharedRead<MarketData>>>>();
 
 function invalid(): never { throw new AccountError('invalid_response', '持仓或辅助行情字段无效，本次分项不可用。'); }
 function decimal(value: unknown, signed = false): string {
@@ -71,15 +75,26 @@ export async function readAccountPositions(config: AccountConfig, signal = Abort
   positions.sort((a, b) => a.symbol.localeCompare(b.symbol) || a.direction.localeCompare(b.direction));
   const queriedAt = positionRead.queriedAt;
   const symbols = new Set(positions.map((p) => p.symbol));
-  async function market<T>(operation: 'last' | 'mark', parse: (p: Record<string, unknown>) => T): Promise<MarketPart<T>> {
+  async function market<T extends LastPrice | Funding>(operation: 'last' | 'mark', parse: (p: Record<string, unknown>) => T): Promise<MarketPart<T>> {
+    const attemptedAt = new Date().toISOString();
     try {
-      if (!symbols.size) return { status: 'ok', queriedAt: new Date().toISOString(), data: [] };
-      const rows = list(await readBinance(config, operation, signal)).filter((p) => symbols.has(p.symbol as string));
-      const seen = new Set<unknown>();
-      const data = rows.map((p) => { if (seen.has(p.symbol)) invalid(); seen.add(p.symbol); return parse(p); });
-      return { status: 'ok', queriedAt: new Date().toISOString(), data };
+      if (!symbols.size) return { status: 'ok', attemptedAt, queriedAt: new Date().toISOString(), data: [] };
+      let reads = marketReads.get(config);
+      if (!reads) { reads = {}; marketReads.set(config, reads); }
+      const load = async (sharedSignal: AbortSignal): Promise<MarketData> => {
+        const rows = list(await readBinance(config, operation, sharedSignal)).filter((p) => symbols.has(p.symbol as string));
+        const seen = new Set<unknown>();
+        const data = rows.map((p) => { if (seen.has(p.symbol)) invalid(); seen.add(p.symbol); return parse(p); });
+        return { queriedAt: new Date().toISOString(), data };
+      };
+      let read = reads[operation];
+      if (!read) { read = new SharedRead(load, 0, true); reads[operation] = read; }
+      // Positions may change; retain this source's backoff while updating its parser's symbol set.
+      else read.setLoader(load);
+      const result = await read.read(signal);
+      return { status: 'ok', attemptedAt: result.attemptedAt, queriedAt: result.value.queriedAt, data: result.value.data as T[] };
     } catch (error) {
-      return { status: 'error', error: error instanceof AccountError ? error.message : '辅助行情读取失败。' };
+      return { status: 'error', attemptedAt: error instanceof AccountError ? error.attemptedAt ?? attemptedAt : attemptedAt, retryAt: error instanceof AccountError ? error.retryAt : undefined, error: error instanceof AccountError ? `${error.message}${error.retryAt ? ` 下次允许读取：${error.retryAt}。` : ''}` : '辅助行情读取失败。' };
     }
   }
   const [last, funding] = await Promise.all([

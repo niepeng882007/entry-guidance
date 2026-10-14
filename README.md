@@ -340,3 +340,13 @@ pnpm test
 浏览器验收：原生表单登录与退出，320px / 390px 手机视口和 1280px 桌面布局；断网刷新显示失败并保留带原时间的旧快照，恢复后可再查；退出后返回不能进入账户页。没有实体手机信任证书的验收结论。
 
 **真实账户联调尚未完成**：当前缺少 API Key，未请求真实账户。补齐只读凭据后需在真实模式验证权限响应、账户模式、USDT 字段和网络连通性。不能把受控响应测试当作真实 Binance 连通性通过。
+
+## 账户刷新协调与异常恢复（任务 05）
+
+工作台摘要、账户详情和多标签页共享后端读取，正常前台三秒更新；正在查询时跳过下一轮。成功结果最多复用 2.9 秒，保留原成功时间并在账户页标明复用。资产、持仓、普通委托、条件委托和辅助行情分别展示成功时间与实际尝试；失败保留原值和时间、标为过期，首次失败显示未知。来源、权限或账户口径未确认时统一撤销当前有效状态，会话失效停止查询。
+
+连续失败采用 3→6→12→24→48→最多60秒退避，成功后重置。429/418 由后端统一暂停读取，优先遵循 Retry-After 或封禁截止；缺少截止时分别等待60秒/3天，手动刷新和多个访问者无法绕过。页面显示原因及下次允许读取时间。隐藏、断网或离开暂停并取消页面请求，恢复后立即查询；最后访问者取消才终止共享上游，没有无人浏览时的持续监控。
+
+2026-10-14 核对 [Binance 交易/账户文档](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/trade)、[账户资产文档](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/account)、[行情文档](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data)及[限流规则](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info)：全账户普通/条件委托各40、账户V2与持仓V2各5、exchangeInfo为1、全市场最新成交价V2为2、标记价/资金费为10。理想并发合并的一轮期货侧权重103，三秒约2060/分钟；scope或元数据未重叠时可达120/轮、2400/分钟，另有严格查询及同IP其他调用。这里是按文档推算的成本，不是实连验收。服务读取交易所实际返回的 REQUEST_WEIGHT 额度和权重头，额度不足时退避；ticker V2的一分钟用量头按官方要求忽略。不能以示例2400额度保证实际账户始终三秒成功。
+
+正式方案生成、完整行情和止损核验保持独立完整查询，只受上游限流禁入期约束，不使用账户详情的短缓存或部分成功数据生成可执行建议。余额变化或读取失败仍撤销旧卡/核验当前状态，冻结预算和绝对止损保持。最终 `pnpm check` 通过（248项Node测试、124项Chromium/WebKit用例），Standards与Spec复核均无剩余问题。自动、模拟浏览器与检查记录见 [任务05](.scratch/account-snapshot/issues/05-refresh-coordination.md)；实体手机和真实账户仍待验收。

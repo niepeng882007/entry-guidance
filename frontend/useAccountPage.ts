@@ -269,6 +269,7 @@ type MarketState<T> = {
   snapshot: Extract<MarketPart<T>, { status: 'ok' }> | null;
   stale: boolean;
   error: string;
+  attemptedAt?: string;
 };
 
 export function useAccountPage(expectedSource: Assets['source']) {
@@ -285,6 +286,7 @@ export function useAccountPage(expectedSource: Assets['source']) {
   const conditionalOrdersStale = ref(true);
   const conditionalOrdersStatus = ref('等待首次条件委托查询');
   const attemptedAt = ref('');
+  const attempts = ref({ assets: '', positions: '', orders: '', conditionalOrders: '' });
   const busy = ref(false);
   const stale = ref(true);
   const relogin = ref(false);
@@ -299,40 +301,72 @@ export function useAccountPage(expectedSource: Assets['source']) {
     const controller = new AbortController();
     pending = controller;
     busy.value = true;
-    attemptedAt.value = new Date().toISOString();
-    const current = () => id === sequence && !controller.signal.aborted;
-    async function request(path: string): Promise<unknown> {
+    let scopeInvalid = false;
+    const current = () => id === sequence && !controller.signal.aborted && !scopeInvalid;
+    function revokeScope(reason: string) {
+      scopeInvalid = true;
+      stale.value = positionsStale.value = ordersStale.value = conditionalOrdersStale.value = true;
+      status.value =
+        positionsStatus.value =
+        ordersStatus.value =
+        conditionalOrdersStatus.value =
+          `${reason} ${snapshot.value ? '上次数据已过期' : '尚无成功数据'}，账户有效状态已撤销。`;
+      last.value = { ...last.value, stale: true };
+      funding.value = { ...funding.value, stale: true };
+    }
+    async function request(path: string, part: keyof typeof attempts.value): Promise<unknown> {
+      attempts.value[part] = new Date().toISOString();
+      if (part === 'assets') attemptedAt.value = attempts.value[part];
       const response = await fetch(path, {
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
         cache: 'no-store',
       });
-      if (!current()) throw new Error('查询已取消。');
+      if (id !== sequence || controller.signal.aborted) throw new Error('查询已取消。');
       if (response.status === 401) {
         relogin.value = true;
         pause('登录已过期，请重新登录。');
         throw new Error('登录已过期，请重新登录。');
       }
       const data: unknown = await response.json();
+      if (!current()) throw new Error('查询已取消。');
+      const meta = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+      if (typeof meta.attemptedAt === 'string' && Number.isFinite(Date.parse(meta.attemptedAt))) {
+        attempts.value[part] = meta.attemptedAt;
+        if (part === 'assets') attemptedAt.value = meta.attemptedAt;
+      }
+      const retry =
+        typeof meta.retryAt === 'string' && Number.isFinite(Date.parse(meta.retryAt))
+          ? ` 下次允许读取：${new Date(meta.retryAt).toLocaleString('zh-CN', { hour12: false })}。`
+          : '';
+      if (
+        meta.scopeConfirmed === false ||
+        (meta.source !== undefined && meta.source !== expectedSource)
+      ) {
+        revokeScope(
+          `${typeof meta.error === 'string' ? meta.error : '账户来源无效，无法确认。'}${retry}`,
+        );
+        throw new Error('账户来源或口径未确认。');
+      }
       if (!response.ok) {
         const message =
           data && typeof data === 'object' && 'error' in data && typeof data.error === 'string'
             ? data.error
             : '账户读取失败，请稍后重试。';
-        throw new Error(message);
+        throw new Error(`${message}${retry}`);
       }
       if (relogin.value) throw new Error('登录已过期，请重新登录。');
       return data;
     }
     async function assetsRead() {
       try {
-        const data = await request('/api/account/assets');
+        const data = await request('/api/account/assets', 'assets');
         if (!current()) return;
         const next = validateAssets(data, expectedSource);
         if (snapshot.value && Date.parse(next.queriedAt) < Date.parse(snapshot.value.queriedAt))
           throw new Error('账户响应早于上次成功查询，本次快照不可用。');
         snapshot.value = next;
         stale.value = false;
-        status.value = `${expectedSource === 'demo' ? '模拟' : 'Binance '}查询成功 · 仅代表查询时点`;
+        status.value = `${expectedSource === 'demo' ? '模拟' : 'Binance '}查询成功 · 仅代表查询时点${data && typeof data === 'object' && 'reused' in data && data.reused === true ? ' · 复用 3 秒内读取，保留原查询时间' : ''}`;
       } catch (error) {
         if (!current()) return;
         stale.value = true;
@@ -345,13 +379,21 @@ export function useAccountPage(expectedSource: Assets['source']) {
       kind: 'last' | 'funding',
     ) {
       try {
+        const metadata =
+          value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+        const attemptedAt =
+          typeof metadata.attemptedAt === 'string' &&
+          Number.isFinite(Date.parse(metadata.attemptedAt))
+            ? metadata.attemptedAt
+            : attempts.value.positions;
+        state.value = { ...state.value, attemptedAt };
         const part = validateMarket<T>(value, kind);
         const previous = state.value.snapshot;
         if (part.status === 'error')
           state.value = { ...state.value, stale: true, error: part.error };
         else if (previous && Date.parse(part.queriedAt) < Date.parse(previous.queriedAt))
           state.value = { ...state.value, stale: true, error: '辅助行情响应早于上次查询。' };
-        else state.value = { snapshot: part, stale: false, error: '' };
+        else state.value = { snapshot: part, stale: false, error: '', attemptedAt };
       } catch (error) {
         state.value = {
           ...state.value,
@@ -362,14 +404,14 @@ export function useAccountPage(expectedSource: Assets['source']) {
     }
     async function positionsRead() {
       try {
-        const data = await request('/api/account/positions');
+        const data = await request('/api/account/positions', 'positions');
         if (!current()) return;
         const next = validatePositions(data, expectedSource);
         if (positions.value && Date.parse(next.queriedAt) < Date.parse(positions.value.queriedAt))
           throw new Error('持仓响应早于上次成功查询。');
         positions.value = { queriedAt: next.queriedAt, data: next.positions };
         positionsStale.value = false;
-        positionsStatus.value = `${expectedSource === 'demo' ? '模拟' : 'Binance '}持仓查询成功 · 仅代表查询时点`;
+        positionsStatus.value = `${expectedSource === 'demo' ? '模拟' : 'Binance '}持仓查询成功 · 仅代表查询时点${data && typeof data === 'object' && 'reused' in data && data.reused === true ? ' · 复用 3 秒内读取，保留原查询时间' : ''}`;
         updateMarket(last, next.last, 'last');
         updateMarket(funding, next.funding, 'funding');
       } catch (error) {
@@ -388,6 +430,7 @@ export function useAccountPage(expectedSource: Assets['source']) {
       try {
         const data = await request(
           conditional ? '/api/account/conditional-orders' : '/api/account/orders',
+          conditional ? 'conditionalOrders' : 'orders',
         );
         if (!current()) return;
         const next = conditional
@@ -397,7 +440,7 @@ export function useAccountPage(expectedSource: Assets['source']) {
           throw new Error(`${name}响应早于上次成功查询。`);
         snapshot.value = next;
         stale.value = false;
-        status.value = `${expectedSource === 'demo' ? '模拟' : 'Binance '}${name}查询成功 · 仅代表查询时点`;
+        status.value = `${expectedSource === 'demo' ? '模拟' : 'Binance '}${name}查询成功 · 仅代表查询时点${data && typeof data === 'object' && 'reused' in data && data.reused === true ? ' · 复用 3 秒内读取，保留原查询时间' : ''}`;
       } catch (error) {
         if (!current()) return;
         stale.value = true;
@@ -469,6 +512,7 @@ export function useAccountPage(expectedSource: Assets['source']) {
   return {
     snapshot,
     attemptedAt,
+    attempts,
     busy,
     stale,
     relogin,

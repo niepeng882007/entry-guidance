@@ -5,6 +5,7 @@
 | 任务 | 权威来源 |
 | --- | --- |
 | 确认产品范围、输入与风险规则 | [产品决策](product-spec.md)；[实现规格与验收要求](issue-spec.md) |
+| 实施独立账户快照页、持仓与活跃委托详情 | [账户快照页规格](account-snapshot-spec.md)（整体方案已确认；[本地任务 01–05](../.scratch/account-snapshot/issues/)，待实现） |
 | 实施交易记录、历史归并与复盘分析 | [交易复盘规格](trade-review-spec.md)（设计与拆分已确认；[本地任务 01–12](../.scratch/trade-review/issues/)，待实现） |
 | 修改领域用语或界面文案 | [领域词汇表](../CONTEXT.md) |
 | 修改仓位算法 | [ADR 0002：按最终止损确定仓位](adr/0002-size-to-final-stop.md) |
@@ -24,7 +25,7 @@
 | [src/main.ts](../src/main.ts) | 读取启动配置，选择 HTTP/HTTPS 并启动服务 |
 | [src/server.ts](../src/server.ts) | 登录、会话、静态文件白名单、方案保存与签名恢复、HTTP 业务入口 |
 | [src/account.ts](../src/account.ts) | Binance 白名单读取与签名、权限与账户口径校验；`transport` 是测试替换外部响应的边界 |
-| [src/history-sync.ts](../src/history-sync.ts)；[src/review-ledger.ts](../src/review-ledger.ts) | 按 UID 隔离的 SQLite 复盘账本、单币种历史分片/分页、持久进度与保守归并；`frontend/useReviewPage.ts` 和 `frontend/ReviewPage.vue` 展示同步与原始证据 |
+| [src/account-archive.ts](../src/account-archive.ts)；[src/history-sync.ts](../src/history-sync.ts)；[src/review-ledger.ts](../src/review-ledger.ts) | 按 UID 隔离的 SQLite 复盘账本、全账户合约发现与持续增量归档、历史分片/分页及保守归并；`frontend/useReviewPage.ts` 和 `frontend/ReviewPage.vue` 展示进度、缺口与原始证据 |
 | [src/market.ts](../src/market.ts) | 汇集账户、行情、费率、合约规则及模拟快照 |
 | [public/draft.js](../public/draft.js) | 前后端共用的十进制计算、模板应用、草稿、正式方案和分层数量计算 |
 | [src/verification.ts](../src/verification.ts) | 建立空仓起点、冻结方案，核对实际成交、成本与止损覆盖；复用共享计算模块 |

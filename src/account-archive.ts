@@ -61,7 +61,7 @@ export class AccountArchive {
       state.symbols = [...new Set([...state.symbols, ...this.ledger.syncs().map((sync) => sync.symbol), ...info.symbols.map(object).filter((row) => row.contractType === 'PERPETUAL' && row.quoteAsset === 'USDT' && row.marginAsset === 'USDT').map((row) => row.symbol).filter((symbol): symbol is string => typeof symbol === 'string' && symbolPattern.test(symbol))])].sort();
       this.ledger.saveArchive(state);
       while (state.discovery.pending.length) {
-        const page = state.discovery.pending[0]!;
+        let page = state.discovery.pending[0]!;
         const cutoff = calendarStart(Date.now());
         if (page.startTime < cutoff) {
           const gap = { ...page, endTime: Math.min(page.endTime, cutoff - 1) };
@@ -69,7 +69,8 @@ export class AccountArchive {
           if (page.endTime < cutoff) state.discovery.pending.shift();
           else state.discovery.pending[0] = { ...page, startTime: cutoff, page: 1 };
           this.ledger.saveArchive(state);
-          continue;
+          if (page.endTime < cutoff) continue;
+          page = state.discovery.pending[0]!;
         }
         await this.confirmIdentity();
         const response = await readBinance(this.config, 'income', this.signal(), undefined, { startTime: page.startTime, endTime: page.endTime, page: page.page }, 'archive');

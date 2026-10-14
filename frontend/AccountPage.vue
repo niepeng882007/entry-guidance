@@ -11,6 +11,7 @@ const { source, expectedSource } = defineProps<{
 const {
   snapshot,
   attemptedAt,
+  attempts,
   busy,
   stale,
   relogin,
@@ -138,7 +139,7 @@ function time(value: string | undefined) {
       :positions="positions"
       :stale="positionsStale"
       :status="positionsStatus"
-      :attempted-at="attemptedAt"
+      :attempted-at="attempts.positions"
       :last="last"
       :funding="funding"
     />
@@ -151,7 +152,8 @@ function time(value: string | undefined) {
       :conditional-status="conditionalOrdersStatus"
       :stale="ordersStale"
       :status="ordersStatus"
-      :attempted-at="attemptedAt"
+      :attempted-at="attempts.orders"
+      :conditional-attempted-at="attempts.conditionalOrders"
     />
     <p class="footnote">账户快照不代表后续状态，也不表示止损核验通过。交易由你在 Binance 执行。</p>
   </main>

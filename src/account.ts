@@ -2,12 +2,16 @@ import { createHmac } from 'node:crypto';
 import { get } from 'node:https';
 import { parseDecimal, formatDecimal } from '../public/draft.js';
 
-export type Transport = (url: URL, headers: Record<string, string>, signal: AbortSignal) => Promise<{ status: number; body: unknown; usedWeight?: number; retryAfterMs?: number }>;
+export type ReadPriority = 'foreground' | 'archive';
+export type Transport = (url: URL, headers: Record<string, string>, signal: AbortSignal, priority?: ReadPriority) => Promise<{ status: number; body: unknown; headers?: Record<string, string | undefined> }>;
 export type AccountConfig = { apiKey?: string; apiSecret?: string; transport?: Transport };
 
 export class AccountError extends Error {
   code: string;
   status: number;
+  retryAt?: string;
+  attemptedAt?: string;
+  scopeConfirmed?: false;
   constructor(code: string, message: string, status = 502) {
     super(message);
     this.code = code;
@@ -22,7 +26,7 @@ export function object(value: unknown): Record<string, unknown> {
 
 const integerIdPaths = ['/api/v3/account', '/fapi/v1/openOrders', '/fapi/v1/openAlgoOrders', '/fapi/v1/userTrades', '/fapi/v1/allOrders', '/fapi/v1/allAlgoOrders', '/fapi/v1/income', '/fapi/v1/forceOrders'];
 
-const transport: Transport = (url, headers, signal) => new Promise((resolve, reject) => {
+export const binanceTransport: Transport = (url, headers, signal) => new Promise((resolve, reject) => {
   const request = get(url, { headers, signal }, (response) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -39,13 +43,11 @@ const transport: Transport = (url, headers, signal) => new Promise((resolve, rej
         // Signed source IDs are int64; keep their JSON tokens until the read boundary.
         data = integerIdPaths.includes(url.pathname) && response.statusCode === 200 ? text : JSON.parse(text);
       }
-      catch { reject(new AccountError('upstream_error', 'Binance 返回异常响应，请稍后重试。')); return; }
-      const usedWeight = Number(response.headers['x-mbx-used-weight-1m']);
-      const retryAfter = Number(response.headers['retry-after']);
-      resolve({ status: response.statusCode ?? 502, body: data,
-        ...(Number.isFinite(usedWeight) && usedWeight >= 0 ? { usedWeight } : {}),
-        ...(Number.isFinite(retryAfter) && retryAfter > 0 ? { retryAfterMs: retryAfter * 1000 } : {}),
-      });
+      catch {
+        if (response.statusCode === 429 || response.statusCode === 418) data = null;
+        else { reject(new AccountError('upstream_error', 'Binance 返回异常响应，请稍后重试。')); return; }
+      }
+      resolve({ status: response.statusCode ?? 502, body: data, headers: Object.fromEntries(Object.entries(response.headers).map(([key, value]) => [key, Array.isArray(value) ? value.join(',') : value])) });
     });
   });
   request.on('error', reject);
@@ -74,44 +76,11 @@ const endpoints = {
   forceOrders: 'https://fapi.binance.com/fapi/v1/forceOrders',
 } as const;
 
-type ReadPriority = 'foreground' | 'archive';
-type QueuedRead = { run: () => void };
-const readQueues = new WeakMap<AccountConfig, { active: boolean; nextArchiveAt: number; blockedUntil: number; archiveWeightLimit: number; foreground: QueuedRead[]; archive: QueuedRead[]; timer?: ReturnType<typeof setTimeout> }>();
-
-function coordinatedRead<T>(config: AccountConfig, signal: AbortSignal, priority: ReadPriority, request: () => Promise<T>): Promise<T> {
-  let queue = readQueues.get(config);
-  if (!queue) { queue = { active: false, nextArchiveAt: 0, blockedUntil: 0, archiveWeightLimit: 1800, foreground: [], archive: [] }; readQueues.set(config, queue); }
-  const current = queue;
-  const pump = () => {
-    if (current.active) return;
-    clearTimeout(current.timer);
-    if (!current.foreground.length && !current.archive.length) return;
-    if (current.blockedUntil > Date.now()) { current.timer = setTimeout(pump, current.blockedUntil - Date.now()); return; }
-    const next = current.foreground.shift();
-    if (next) { current.active = true; next.run(); return; }
-    if (!current.archive.length) return;
-    const delay = current.nextArchiveAt - Date.now();
-    if (delay > 0) { current.timer = setTimeout(pump, delay); return; }
-    current.active = true; current.archive.shift()!.run();
-  };
-  return new Promise<T>((resolve, reject) => {
-    const cancel = () => {
-      const index = current[priority].indexOf(job);
-      if (index >= 0) { current[priority].splice(index, 1); reject(new AccountError('timeout', '查询已取消或超时。', 504)); pump(); }
-    };
-    const job: QueuedRead = { run: () => {
-      signal.removeEventListener('abort', cancel);
-      if (signal.aborted) { current.active = false; reject(new AccountError('timeout', '查询已取消或超时。', 504)); pump(); return; }
-      void Promise.resolve().then(request).then(resolve, reject).finally(() => {
-        // Real archive GETs are paced; injected transports supply their own controlled timing.
-        if (priority === 'archive' && !config.transport) current.nextArchiveAt = Math.max(current.nextArchiveAt, Date.now() + 1000);
-        current.active = false; pump();
-      });
-    } };
-    current[priority].push(job);
-    signal.addEventListener('abort', cancel, { once: true });
-    if (signal.aborted) cancel(); else pump();
-  });
+export function signBinanceRequest(config: AccountConfig, url: URL) {
+  if (!config.apiSecret) throw new AccountError('missing_credentials', '后端只读凭据缺失。', 503);
+  url.searchParams.delete('signature');
+  url.searchParams.set('timestamp', Date.now().toString()); url.searchParams.set('recvWindow', '5000');
+  url.searchParams.set('signature', createHmac('sha256', config.apiSecret).update(url.searchParams.toString()).digest('hex'));
 }
 
 export async function readBinance(config: AccountConfig, operation: keyof typeof endpoints, signal: AbortSignal, symbol?: string, period?: { startTime: number; endTime: number; page?: number; autoCloseType?: 'LIQUIDATION' | 'ADL' }, priority: ReadPriority = 'foreground'): Promise<unknown> {
@@ -141,25 +110,8 @@ export async function readBinance(config: AccountConfig, operation: keyof typeof
     headers['X-MBX-APIKEY'] = config.apiKey;
   }
   try {
-    const response = await coordinatedRead(config, signal, priority, () => {
-      // Sign when dispatched, so waiting behind another GET cannot expire the signature.
-      if (!isPublic) {
-        url.searchParams.set('timestamp', Date.now().toString()); url.searchParams.set('recvWindow', '5000');
-        url.searchParams.set('signature', createHmac('sha256', config.apiSecret!).update(url.searchParams.toString()).digest('hex'));
-      }
-      return (config.transport ?? transport)(url, headers, signal);
-    });
-    const queue = readQueues.get(config)!;
-    if (operation === 'exchange' && response.status === 200 && Array.isArray(object(response.body).rateLimits)) {
-      const limits = (object(response.body).rateLimits as unknown[]).map(object);
-      const minute = limits.find((limit) => limit.rateLimitType === 'REQUEST_WEIGHT' && limit.interval === 'MINUTE' && limit.intervalNum === 1);
-      if (minute && Number.isSafeInteger(minute.limit) && Number(minute.limit) > 0) queue.archiveWeightLimit = Math.floor(Number(minute.limit) * 0.75);
-    }
-    if (url.hostname === 'fapi.binance.com' && Number.isFinite(response.usedWeight) && response.usedWeight! >= queue.archiveWeightLimit) queue.nextArchiveAt = Math.max(queue.nextArchiveAt, (Math.floor(Date.now() / 60_000) + 1) * 60_000);
-    if ((response.status === 429 || response.status === 418) && (!config.transport || response.retryAfterMs !== undefined)) {
-      const retry = response.retryAfterMs && Number.isFinite(response.retryAfterMs) && response.retryAfterMs > 0 ? response.retryAfterMs : response.status === 418 ? 300_000 : 60_000;
-      queue.blockedUntil = Math.max(queue.blockedUntil, Date.now() + retry);
-    }
+    if (!isPublic) signBinanceRequest(config, url);
+    const response = await (config.transport ?? binanceTransport)(url, headers, signal, priority);
     if (operation === 'portfolio' && response.status === 400 && object(response.body).code === -21001) return response.body;
     if (response.status !== 200) {
       const data = object(response.body);
@@ -200,9 +152,13 @@ function format(value: bigint): string {
 }
 
 export async function readAccountScope(config: AccountConfig, signal: AbortSignal) {
-  if (!config.apiKey || !config.apiSecret) throw new AccountError('missing_credentials', '未连接：请在后端配置 BINANCE_API_KEY 和 BINANCE_API_SECRET。', 503);
+  // Shared timeout waiters must also know that scope was still unconfirmed.
+  const tagAbort = () => { if (signal.reason instanceof AccountError) signal.reason.scopeConfirmed = false; };
+  signal.addEventListener('abort', tagAbort, { once: true });
   const read = async (operation: keyof typeof endpoints) => object(await readBinance(config, operation, signal));
   try {
+    if (!config.apiKey || !config.apiSecret) throw new AccountError('missing_credentials', '未连接：请在后端配置 BINANCE_API_KEY 和 BINANCE_API_SECRET。', 503);
+    signal.throwIfAborted();
     await verifyReadPermissions(config, signal);
     await read('portfolio');
     const account = await read('account');
@@ -213,17 +169,28 @@ export async function readAccountScope(config: AccountConfig, signal: AbortSigna
     const asset = assets[0]!;
     return { account, asset };
   } catch (error) {
-    if (signal.aborted) throw new AccountError('timeout', '账户查询超时，请检查网络后重试。', 504);
-    if (error instanceof AccountError) throw error;
-    throw new AccountError('connection_failed', '账户连接失败，请检查网络或后端代理设置。');
-  }
+    if (signal.aborted) {
+      const failure = signal.reason instanceof AccountError ? signal.reason : new AccountError('timeout', '账户查询超时，请检查网络后重试。', 504);
+      failure.scopeConfirmed = false;
+      throw failure;
+    }
+    if (error instanceof AccountError) { error.scopeConfirmed = false; throw error; }
+    const failure = new AccountError('connection_failed', '账户连接失败，请检查网络或后端代理设置。');
+    failure.scopeConfirmed = false;
+    throw failure;
+  } finally { signal.removeEventListener('abort', tagAbort); }
 }
 
 async function verifyReadPermissions(config: AccountConfig, signal: AbortSignal, priority: ReadPriority = 'foreground') {
-  const permissions = object(await readBinance(config, 'permissions', signal, undefined, undefined, priority));
-  if (permissions.enableReading !== true) throw new AccountError('reading_disabled', '凭据没有可验证的读取权限。');
-  if (writePermissions.some((field) => permissions[field] === true)) throw new AccountError('unsafe_permissions', '凭据包含交易、提现或划转权限，请更换专用只读凭据。');
-  if (writePermissions.some((field) => permissions[field] !== false)) throw new AccountError('unverified_permissions', '无法完整确认凭据的只读权限，已停止读取。');
+  try {
+    const permissions = object(await readBinance(config, 'permissions', signal, undefined, undefined, priority));
+    if (permissions.enableReading !== true) throw new AccountError('reading_disabled', '凭据没有可验证的读取权限。');
+    if (writePermissions.some((field) => permissions[field] === true)) throw new AccountError('unsafe_permissions', '凭据包含交易、提现或划转权限，请更换专用只读凭据。');
+    if (writePermissions.some((field) => permissions[field] !== false)) throw new AccountError('unverified_permissions', '无法完整确认凭据的只读权限，已停止读取。');
+  } catch (error) {
+    if (error instanceof AccountError) error.scopeConfirmed = false;
+    throw error;
+  }
 }
 
 export async function readReviewIdentity(config: AccountConfig, signal: AbortSignal, priority: ReadPriority = 'foreground') {
@@ -233,7 +200,7 @@ export async function readReviewIdentity(config: AccountConfig, signal: AbortSig
   return String(uid);
 }
 
-async function readAccountData(config: AccountConfig, signal: AbortSignal) {
+export async function readAccountData(config: AccountConfig, signal: AbortSignal) {
   const { account, asset } = await readAccountScope(config, signal);
   const wallet = decimal(asset.walletBalance);
   const pnl = decimal(asset.unrealizedProfit);
@@ -257,10 +224,14 @@ export async function readAccount(config: AccountConfig, symbol?: string, signal
   return snapshot;
 }
 
-export async function readAccountAssets(config: AccountConfig, signal = AbortSignal.timeout(10_000)) {
-  const { asset, snapshot } = await readAccountData(config, signal);
+export function accountAssetDetails(asset: Record<string, unknown>) {
   const amount = (field: string) => asset[field] === undefined ? null : format(decimal(asset[field]));
-  return { ...snapshot, positionInitialMargin: amount('positionInitialMargin'),
+  return { positionInitialMargin: amount('positionInitialMargin'),
     openOrderInitialMargin: amount('openOrderInitialMargin'), maintMargin: amount('maintMargin'),
     maxWithdrawAmount: amount('maxWithdrawAmount') };
+}
+
+export async function readAccountAssets(config: AccountConfig, signal = AbortSignal.timeout(10_000)) {
+  const { asset, snapshot } = await readAccountData(config, signal);
+  return { ...snapshot, ...accountAssetDetails(asset) };
 }

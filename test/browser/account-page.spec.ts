@@ -396,7 +396,7 @@ test('busy position reads do not pile up and canceled responses cannot restore o
   hold = false;
   release();
   await page.unrouteAll({ behavior: 'wait' });
-  await expect(positions).toContainText('显示 3 / 全账户 3 份持仓');
+  await expect(positions).toContainText('显示 3 / 上次全账户 3 份持仓');
   await page.clock.runFor(9000);
   expect(requests).toBe(3);
   await page.evaluate(() =>
@@ -459,7 +459,7 @@ test('position session expiry marks retained data stale and stops all subsequent
   await page.getByRole('button', { name: '手动刷新' }).click();
   await expect(page.getByRole('link', { name: '重新登录' })).toBeVisible();
   await expect(positions).toContainText('持仓已过期');
-  await expect(positions).toContainText('显示 3 / 全账户 3 份持仓');
+  await expect(positions).toContainText('显示 3 / 上次全账户 3 份持仓');
   await page.clock.runFor(12000);
   expect(requests).toBe(2);
   await expect(page.getByRole('button', { name: '手动刷新' })).toBeDisabled();

@@ -137,7 +137,7 @@ export class HistorySync {
     await this.task;
   }
   private async readPage(state: SyncState) {
-    const page = state.pending[0]!;
+    let page = state.pending[0]!;
     const cutoff = ['history', 'algoHistory'].includes(page.source) ? Date.now() - 90 * day + 1 : ['trades', 'income'].includes(page.source) ? calendarStart(Date.now()) : null;
     if (cutoff !== null && page.startTime < cutoff) {
       const gap = { ...page, endTime: Math.min(page.endTime, cutoff - 1) };
@@ -146,7 +146,8 @@ export class HistorySync {
       if (cutoff > page.endTime) state.pending.shift();
       else state.pending[0] = { ...page, startTime: cutoff, page: 1 };
       this.ledger.saveSync(state);
-      return state;
+      if (cutoff > page.endTime) return state;
+      page = state.pending[0]!;
     }
     const response = await readBinance(this.config, page.source, AbortSignal.any([this.controller.signal, AbortSignal.timeout(10_000)]), state.symbol,
       { startTime: page.startTime, endTime: page.endTime, ...(page.source === 'income' ? { page: page.page } : {}), ...(page.autoCloseType ? { autoCloseType: page.autoCloseType } : {}) }, 'archive');
