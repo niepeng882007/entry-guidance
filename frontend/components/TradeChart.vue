@@ -101,22 +101,10 @@ watch([chart, source], () => {
     <a v-if="relogin" class="button button--text button--link" href="/login">行情重新登录</a>
     <template v-if="chart && series">
       <p class="muted">
-        {{ chart.source === 'demo' ? '演示合成行情 · 不是真实历史价格' : 'Binance 公共历史行情' }} ·
-        {{ source === 'contract' ? '合约成交价' : '标记价' }} · {{ series.endpoint }} ·
-        {{ chart.interval }}
+        <span v-if="chart.source === 'demo'">演示合成行情 · 不是真实历史价格 · </span>
+        {{ source === 'contract' ? '合约成交价' : '标记价' }} · {{ chart.interval }}
       </p>
-      <p class="muted">
-        查询时点：{{ time(chart.queriedAt) }} · 范围：{{ time(chart.startTime) }} 至
-        {{ time(chart.endTime) }}
-      </p>
-      <p class="muted">
-        {{
-          series.complete ? '本来源请求范围已完整归档' : '本来源行情未完成或有缺口 / 未闭合 K 线'
-        }}
-        · {{ series.rawCount }} 根原始 K 线 · 屏幕显示 {{ series.candles.length }} 根{{
-          series.sampled ? '（抽稀展示，不是全部原始数据）' : ''
-        }}
-      </p>
+      <p v-if="!series.complete" class="muted">本来源行情未完成或有缺口 / 未闭合 K 线</p>
       <p v-if="chart.desiredEndTime > chart.endTime" class="muted">
         出场后窗口尚未全部发生，截至已知时间展示。
       </p>
@@ -132,10 +120,6 @@ watch([chart, source], () => {
           {{ time(gap.startTime) }} 至 {{ time(gap.endTime) }}
         </p>
       </details>
-      <p class="muted">
-        开仓前 / 持仓中 / 出场后按已确认边界区分。整根 K 线在收盘后才完整可知；跨边界及未闭合 K
-        线不能当作决策时已知路径，不能证明止损触发或精确逐笔走势。
-      </p>
       <p v-if="Number.isFinite(bounds.min)" class="muted">
         价格纵轴 {{ bounds.min.toFixed(2) }} 至 {{ bounds.max.toFixed(2) }} USDT ·
         横轴为时间；浅灰区域为开仓前，深灰区域为出场后。
@@ -296,7 +280,7 @@ watch([chart, source], () => {
           查看此成交原始详情
         </button>
       </article>
-      <p v-if="!chart.stops.length" class="muted">无可关联止损证据，不补造计划线或止损触发。</p>
+      <p v-if="!chart.stops.length" class="muted">暂无关联止损记录。</p>
       <p v-for="stop in chart.stops" :key="stop.id" class="muted">
         {{ stop.label }} · {{ stop.price }} USDT ·
         {{
@@ -308,15 +292,26 @@ watch([chart, source], () => {
         }}
         · {{ time(stop.time) }}
       </p>
-      <p class="muted">
-        虚线为原计划；圆点为对应时点的实际设置证据，不能推导持续保护。实际成交标记始终使用成交价，即使当前行情选择标记价。
-      </p>
+      <p class="muted">虚线为原计划；圆点为查询时点的止损设置。</p>
       <p v-if="chart.missing.length" class="error">交易证据缺项：{{ chart.missing.join('；') }}</p>
       <details class="disclosure">
         <summary class="disclosure__summary">原始数值行情证据入口</summary>
         <p class="muted">
-          按相同快照与来源读取，每页最多 499 根；抽稀仅影响屏幕。已归档
-          {{ series.rawCount }} 根，缺口仍保留，未来分析必须同时携带交易证据与每根读取时点。
+          接口：{{ series.endpoint }} · 查询时点：{{ time(chart.queriedAt) }} · 范围：
+          {{ time(chart.startTime) }} 至 {{ time(chart.endTime) }}
+        </p>
+        <p class="muted">
+          {{
+            series.complete ? '本来源请求范围已完整归档' : '本来源行情未完成或有缺口 / 未闭合 K 线'
+          }}
+          · {{ series.rawCount }} 根原始 K 线 · 屏幕显示 {{ series.candles.length }} 根{{
+            series.sampled ? '（抽稀展示，不是全部原始数据）' : ''
+          }}
+        </p>
+        <p class="muted">原始数据每页最多 499 根；抽稀仅影响屏幕展示。</p>
+        <p class="muted">
+          整根 K 线在收盘后才完整可知；跨边界及未闭合 K 线不能证明止损触发或精确逐笔走势。
+          实际成交标记使用成交价；止损设置仅代表查询时点，不能推导持续保护。
         </p>
         <a
           class="button button--text button--link"

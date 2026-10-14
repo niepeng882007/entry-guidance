@@ -171,10 +171,11 @@ function pnlState(value: string | null) {
         responsive
         @change="(page) => emit('paginate', page)"
       />
-      <p class="footnote">
-        已实现盈亏汇总本订单成交结果，不含手续费及资金费；成交未补齐时不以零代替。完整交易胜率、净盈亏和
-        AI 分析在完整交易复盘中查看。
-      </p>
+      <details class="disclosure disclosure--help">
+        <summary class="disclosure__summary">已实现盈亏说明</summary>
+        <p class="help">本订单成交的已实现盈亏，不含手续费及资金费；成交未补齐时显示待确认。</p>
+        <p class="help">完整交易胜率、净盈亏和 AI 分析在完整交易复盘中查看。</p>
+      </details>
     </div>
     <details v-if="list?.archive" class="disclosure">
       <summary class="disclosure__summary">本次手动更新进度</summary>

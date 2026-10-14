@@ -70,7 +70,9 @@ export function useTradeAnalysis(
         tasks.value = data.tasks.map((task: unknown) => validateAnalysisTask(task, current));
       }
       stale.value = false;
-      status.value = '报告依据已冻结；离开页面不会取消后台任务。';
+      status.value = tasks.value.some((task) => task.status === 'running')
+        ? '后台分析中；离开页面后任务继续。'
+        : '';
       if (input) {
         busy.value = false;
         void read();

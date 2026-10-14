@@ -71,8 +71,12 @@ onUnmounted(() => desktop.removeEventListener('change', breakpointChanged));
         </form>
       </header>
       <main id="main-content" class="workspace__content" tabindex="-1">
-        <HomePage v-if="page === 'home'" :source="source" />
-        <EntryWorkbench v-else-if="page === 'entry'" :source="source" />
+        <HomePage v-if="page === 'home'" :source="source" :expected-source="expectedSource" />
+        <EntryWorkbench
+          v-else-if="page === 'entry'"
+          :source="source"
+          :expected-source="expectedSource"
+        />
         <ReviewPage
           v-else-if="page === 'review'"
           :source="source"

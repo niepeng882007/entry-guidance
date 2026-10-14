@@ -17,7 +17,14 @@ test('list batch analysis is explicit, freezes its range and preserves old repor
   expect(starts).toBe(0);
   await analysis.getByRole('button', { name: '发起分析 / 复用报告', exact: true }).click();
   await expect(analysis.getByText('完整报告', { exact: true }).first()).toBeVisible();
-  await expect(analysis).toContainText('基于已完成分段结果综合');
+  const details = analysis.getByText('完整覆盖清单、分段结果与返回用量', { exact: true }).first();
+  const explanation = analysis.getByText(/本报告基于已完成分段结果综合/).first();
+  await expect(explanation).toBeHidden();
+  await details.focus();
+  await page.keyboard.press('Enter');
+  await expect(explanation).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(explanation).toBeHidden();
   await expect(analysis).toContainText('选择范围 1 笔');
   await page.goto('/review?view=cycles&symbol=ETHUSDT');
   await expect(analysis).toContainText('BTCUSDT');

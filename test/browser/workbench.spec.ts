@@ -43,6 +43,24 @@ test.beforeEach(async ({ page }) => {
   await login(page);
 });
 
+test('entry card retains execution parameters and risk warnings with optional amount help', async ({
+  page,
+}) => {
+  await fillPlan(page);
+  await generate(page);
+  const card = page.locator('#entry-card');
+  await expect(card.getByText(/实际亏损可能超过预算/)).toBeVisible();
+  await expect(page.locator('#card-instructions')).toContainText(
+    '标记价触发、关闭价格保护、整仓退出',
+  );
+  await expect(card).not.toContainText('手动执行');
+  const explanation = card.getByText('按入场参考价计算的仓位价值，不等于保证金。', { exact: true });
+  await expect(explanation).toBeHidden();
+  await card.getByLabel('开仓卡名义价值说明', { exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(explanation).toBeVisible();
+});
+
 test('review navigation stays current when its section cannot reach the activation line', async ({
   page,
 }) => {

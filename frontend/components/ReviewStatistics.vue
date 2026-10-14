@@ -76,10 +76,15 @@ function bar(value: string | null) {
       {{ statistics.pnl.excluded.length }} 笔 · 时长有效 {{ statistics.duration.samples }} 笔，排除
       {{ statistics.duration.excluded.length }} 笔
     </p>
-    <p class="muted">净盈亏 = 已实现盈亏 − USDT 手续费 + 可确认归属的资金费净收支。</p>
     <dl class="details">
       <div class="details__row">
-        <dt class="details__term">净盈亏</dt>
+        <dt class="details__term">
+          净盈亏
+          <details class="disclosure disclosure--help">
+            <summary class="disclosure__summary" aria-label="统计净盈亏说明">说明</summary>
+            <p class="help">已实现盈亏 − USDT 手续费 + 可确认归属的资金费净收支。</p>
+          </details>
+        </dt>
         <dd class="details__value">{{ money(statistics.pnl.netPnl) }}</dd>
       </div>
       <div class="details__row">
@@ -144,8 +149,7 @@ function bar(value: string | null) {
 
     <h3 class="section-title review-statistics__heading">累计净盈亏 · USDT</h3>
     <p class="muted">
-      横轴：平仓时间（上海）；纵轴：累计交易净盈亏（USDT）。仅含选定交易结果，不代表账户权益或资金收益率。同一平仓时刻按交易
-      ID 排列。
+      横轴：平仓时间（上海）；纵轴：累计交易净盈亏（USDT）。仅含选定交易结果，不代表账户权益或资金收益率。
     </p>
     <div v-if="statistics.curve.length" class="review-statistics__chart">
       <div class="review-statistics__scale">
@@ -277,7 +281,7 @@ function bar(value: string | null) {
     <details class="review-statistics__evidence">
       <summary>统计证据与读取时点</summary>
       <p>口径版本 {{ statistics.version }} · {{ time(statistics.queriedAt) }}（上海）</p>
-      <p>数据更新后指纹会变化；后续报告可引用此范围及冻结原值。</p>
+      <p>同一平仓时刻按交易 ID 排列。</p>
       <p class="review-statistics__evidence-id">{{ statistics.evidenceId }}</p>
     </details>
   </section>

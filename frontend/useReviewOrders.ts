@@ -67,7 +67,6 @@ export function useReviewOrders(source: OrderList['source'], location: () => Rev
   const message = ref('');
   let pending: AbortController | undefined,
     sequence = 0;
-  let progressTimer: ReturnType<typeof setTimeout> | undefined;
   const lifetime = new AbortController();
   function cancel() {
     sequence++;
@@ -105,12 +104,9 @@ export function useReviewOrders(source: OrderList['source'], location: () => Rev
         throw new Error('订单筛选范围不一致。');
       list.value = result;
       stale.value = false;
-      message.value = result.accountId
-        ? '已读取本地记录，未连接 Binance。'
-        : '请手动更新，确认账户并建立本地记录。';
-      clearTimeout(progressTimer);
+      message.value = result.accountId ? '' : '请手动更新，确认账户并建立本地记录。';
       if (updating.value && result.archive?.status === 'running')
-        progressTimer = setTimeout(() => void read(), 2000);
+        message.value = '本次更新正在运行；点击「读取本地记录」查看最新进度与订单。';
       else if (updating.value) {
         updating.value = false;
         message.value = '本次更新已停止，请查看进度与缺口后手动继续。';
@@ -163,7 +159,6 @@ export function useReviewOrders(source: OrderList['source'], location: () => Rev
   });
   onMounted(() => {
     const pause = () => {
-      clearTimeout(progressTimer);
       if (pending) {
         stale.value = true;
         cancel();
@@ -183,7 +178,6 @@ export function useReviewOrders(source: OrderList['source'], location: () => Rev
   onUnmounted(() => {
     lifetime.abort();
     cancel();
-    clearTimeout(progressTimer);
   });
   return { list, busy, updating, stale, relogin, message, read, update };
 }

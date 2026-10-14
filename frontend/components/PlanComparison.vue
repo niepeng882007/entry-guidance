@@ -110,13 +110,13 @@ function amount(value: string | null, asset = 'USDT') {
           </dd>
         </div>
       </dl>
-      <p v-if="comparison.actualEntry" class="muted">
-        实际入场口径：本周期全部开仓及加仓成交；数量按 {{ baseAsset }}，均价按 USDT 加权并截取到 8
-        位小数。 首次 {{ time(comparison.actualEntry.firstAt) }} · 最后
-        {{ time(comparison.actualEntry.lastAt) }}。 数量差可能来自部分成交或加仓，不单独判定违规。
-      </p>
       <details class="disclosure">
         <summary class="disclosure__summary">原费用与价格假设</summary>
+        <p v-if="comparison.actualEntry" class="muted">
+          实际入场口径：本周期全部开仓及加仓成交；数量按 {{ baseAsset }}，均价按 USDT 加权并截取到 8
+          位小数。首次 {{ time(comparison.actualEntry.firstAt) }} · 最后
+          {{ time(comparison.actualEntry.lastAt) }}。数量差可能来自部分成交或加仓，不单独判定违规。
+        </p>
         <p class="muted">
           开仓估值 {{ comparison.plan.entryEstimate }} USDT · 止损执行估值
           {{ comparison.plan.exitEstimate }} USDT。

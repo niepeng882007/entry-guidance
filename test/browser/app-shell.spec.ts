@@ -16,6 +16,7 @@ test('home is the login destination and does not query business data, including 
     if (new URL(request.url()).pathname.startsWith('/api/')) requests.push(request.url());
   });
   await login(page);
+  await expect(page.locator('body')).not.toContainText('交易由你在 Binance 执行');
   await expect(page.getByRole('navigation', { name: '功能入口' }).getByRole('link')).toHaveCount(3);
   expect(requests).toEqual([]);
   await page.clock.install();
@@ -32,6 +33,9 @@ test('home is the login destination and does not query business data, including 
       .click();
     await expect(page).toHaveURL(path);
     await expect(page.getByRole('heading', { name, exact: true, level: 1 })).toBeVisible();
+    await expect(page.locator('body')).not.toContainText('交易由你在 Binance 执行');
+    await expect(page.locator('body')).not.toContainText('手动执行');
+    await expect(page.locator('body')).not.toContainText('工具不会下单');
     await navigate(page, '首页');
     await expect(page).toHaveURL('/');
     await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
@@ -39,6 +43,20 @@ test('home is the login destination and does not query business data, including 
     await page.clock.runFor(10000);
     expect(requests.length).toBe(count);
   }
+});
+
+test('real-mode home omits connection explanations', async ({ page }) => {
+  await login(page);
+  await page.route('**/', async (route) => {
+    const response = await route.fetch();
+    const body = (await response.text())
+      .replace('data-mode="demo"', 'data-mode="binance"')
+      .replace('模拟数据 · 仅用于界面与流程验证', '真实模式 · 数据由 Binance 只读接口查询');
+    await route.fulfill({ response, body });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
+  await expect(page.locator('.source')).toHaveCount(0);
 });
 
 test('mobile drawer traps focus, closes by Escape, button and backdrop, and transfers page selection', async ({

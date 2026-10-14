@@ -89,11 +89,11 @@ function coverage(task: AnalysisTask, request: AnalysisTask['requests'][number])
 <template>
   <section class="trade-analysis" :aria-labelledby="titleId">
     <h3 :id="titleId" class="section-title">{{ batch ? '筛选范围模型复盘' : '单笔模型复盘' }}</h3>
-    <p class="muted">DeepSeek · deepseek-v4-pro · high。仅点击发起时调用；可能产生费用。</p>
+    <p class="muted">DeepSeek · deepseek-v4-pro。发起分析可能产生费用。</p>
     <p v-if="batch" class="muted">
       当前选择
       {{ selectionCount }}
-      笔，使用全部筛选结果，与当前页无关。每次最多 100 笔，无调用次数限制。
+      笔，使用全部筛选结果，与当前页无关。每次最多 100 笔。
     </p>
     <p v-if="batch && (total ?? 0) > 100" class="error">当前范围超过 100 笔，请缩小筛选范围。</p>
     <p v-else-if="batch && !unavailable && !total" class="muted">
@@ -102,9 +102,7 @@ function coverage(task: AnalysisTask, request: AnalysisTask['requests'][number])
     <label class="trade-analysis__notes"
       ><input v-model="includeNotes" type="checkbox" :disabled="busy" />发送已保存笔记</label
     >
-    <p class="muted">
-      仅发送归属已确认的保存版本；未保存草稿不发送。行情使用已归档的全部周期与原始数值。
-    </p>
+    <p class="muted">仅发送已确认归属的保存版本，未保存草稿不发送。</p>
     <div class="review-page__actions">
       <button
         type="button"
@@ -133,10 +131,8 @@ function coverage(task: AnalysisTask, request: AnalysisTask['requests'][number])
     <article v-for="task in tasks" :key="task.id" class="trade-analysis__task">
       <h4 class="section-title">{{ states[task.status] }}</h4>
       <p class="muted">
-        冻结于 {{ reviewTime(task.snapshot.frozenAt) }} ·
-        {{ task.snapshot.notes.length ? '含已保存笔记' : '未发送笔记' }} · 已完成
-        {{ task.requests.filter((row) => row.status === 'complete').length }} /
-        {{ task.requests.length }} 个请求
+        分析时间 {{ reviewTime(task.snapshot.frozenAt) }} ·
+        {{ task.snapshot.notes.length ? '含已保存笔记' : '未发送笔记' }}
       </p>
       <p class="muted">
         统计范围：{{ task.snapshot.statistics.filters.from || '不限起日' }} —
@@ -201,9 +197,6 @@ function coverage(task: AnalysisTask, request: AnalysisTask['requests'][number])
         }}
       </p>
       <div v-if="task.report">
-        <p v-if="task.tradeId === '$batch'" class="muted">
-          本报告基于已完成分段结果综合；引用分段摘要，原始证据见引用链与覆盖清单。
-        </p>
         <section
           v-if="task.report.styleSuggestions?.length"
           class="trade-analysis__section"
@@ -249,6 +242,16 @@ function coverage(task: AnalysisTask, request: AnalysisTask['requests'][number])
       <details class="disclosure" @toggle="disclosure($event, task.id)">
         <summary class="disclosure__summary">完整覆盖清单、分段结果与返回用量</summary>
         <div v-if="sections.has(task.id)">
+          <p class="muted">
+            DeepSeek · deepseek-v4-pro · high。行情使用已归档的全部周期与原始数值。
+          </p>
+          <p class="muted">
+            已完成 {{ task.requests.filter((row) => row.status === 'complete').length }} /
+            {{ task.requests.length }} 个请求。
+          </p>
+          <p v-if="task.tradeId === '$batch'" class="muted">
+            本报告基于已完成分段结果综合；原始证据见引用链与覆盖清单。
+          </p>
           <p class="muted">
             {{ task.records.length }} 条证据字段。UTF-8
             字节保守估计容量；全量分段后综合，无抽样。模型上下文

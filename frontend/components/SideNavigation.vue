@@ -20,6 +20,5 @@ const emit = defineEmits<{ navigate: [] }>();
         >{{ page.title }}</a
       >
     </div>
-    <p class="app-nav__note">只读接入<br />交易由你在 Binance 执行</p>
   </nav>
 </template>

@@ -140,7 +140,7 @@ watch([lastPage, busy], () => {
           >{{ busy ? '取消读取' : '重新读取' }}</Button
         >
       </header>
-      <p class="source review-page__source">{{ source }}</p>
+      <p v-if="expectedSource === 'demo'" class="source review-page__source">{{ source }}</p>
       <div
         v-if="location.tradeId"
         id="review-status"
@@ -300,9 +300,12 @@ watch([lastPage, busy], () => {
             responsive
             @change="paginate"
           />
-          <p class="footnote">
-            净盈亏 = 已实现盈亏 − 手续费 + 资金费净收支；缺失或归属未确认时显示待确认。
-          </p>
+          <details class="disclosure disclosure--help">
+            <summary class="disclosure__summary">净盈亏说明</summary>
+            <p class="help">
+              净盈亏 = 已实现盈亏 − 手续费 + 资金费净收支；缺失或归属未确认时显示待确认。
+            </p>
+          </details>
         </div>
         <details class="disclosure review-page__statistics">
           <summary class="disclosure__summary">表现统计 · 当前筛选范围</summary>

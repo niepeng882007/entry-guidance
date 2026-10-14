@@ -18,6 +18,17 @@ test('analysis is explicit, reports are text, and leaving the detail preserves t
   await analysis.getByRole('button', { name: '发起分析 / 复用报告', exact: true }).click();
   await expect(analysis.getByText('完整报告', { exact: true }).first()).toBeVisible();
   await expect(
+    analysis.getByText('DeepSeek · deepseek-v4-pro。发起分析可能产生费用。'),
+  ).toBeVisible();
+  const details = analysis.getByText('完整覆盖清单、分段结果与返回用量', { exact: true }).first();
+  await expect(analysis.getByText(/UTF-8/)).toHaveCount(0);
+  await details.focus();
+  await page.keyboard.press('Enter');
+  await expect(analysis.getByText(/UTF-8/)).toBeVisible();
+  await expect(analysis.getByText(/deepseek-v4-pro · high/)).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(analysis.getByText(/UTF-8/)).toHaveCount(0);
+  await expect(
     analysis.getByText('用量未知，可能产生费用', { exact: false }).first(),
   ).toBeVisible();
   expect(starts).toBe(1);

@@ -14,6 +14,14 @@ test('trade chart distinguishes price sources and links real fill markers at mob
   await expect(chart).toContainText('合约成交价');
   await expect(chart).toContainText('69 根原始 K 线');
   await expect(chart).toContainText('演示合成行情');
+  const endpoint = chart.getByText(/接口：/);
+  await expect(endpoint).toBeHidden();
+  const details = chart.getByText('原始数值行情证据入口', { exact: true });
+  await details.focus();
+  await page.keyboard.press('Enter');
+  await expect(endpoint).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(endpoint).toBeHidden();
   await chart.getByRole('button', { name: '开仓 · demo-fill-1', exact: true }).focus();
   await page.keyboard.press('Enter');
   await expect(chart).toContainText('60000 USDT');

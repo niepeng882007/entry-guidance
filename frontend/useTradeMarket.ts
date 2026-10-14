@@ -175,7 +175,7 @@ export function useTradeMarket(trade: Ref<ReviewTrade>) {
         chart.value = null;
         throw error;
       }
-      status.value = '行情证据已归档 · 完整性按价格来源分别确认';
+      status.value = '';
     } catch (error) {
       if (current !== sequence) return;
       status.value = controller.signal.aborted

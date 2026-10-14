@@ -17,7 +17,7 @@ const { fields, text, hidden, ui, verifyCurrentPlan, scenarioChanged, restoreInp
     <h3 id="verification-title" class="section-title">{{ text['verification-title'] }}</h3>
     <p class="help" id="verification-start">{{ text['verification-start'] }}</p>
     <div id="demo-verification" :hidden="hidden['demo-verification']">
-      <label for="demo-scenario" class="field-label">模拟账户场景 · 不会执行交易</label>
+      <label for="demo-scenario" class="field-label">模拟账户场景</label>
       <SelectControl
         ><select
           id="demo-scenario"
@@ -185,12 +185,13 @@ const { fields, text, hidden, ui, verifyCurrentPlan, scenarioChanged, restoreInp
         </dd>
       </div>
     </dl>
-    <p class="help">
-      始终沿用原预算与原绝对止损。资金费支出消耗原预留，收入不扩大风险预算。修改输入后需恢复原输入才能核验此卡；新方案需重新确认空仓起点。
-    </p>
-    <p class="notice">
-      核验仅对应显示的查询时点，不代表持续监测，也不保证未来成交。修正由你在 Binance
-      完成；部分退出需能关联原近端止损、成交及费用，否则无法完整核验。
-    </p>
+    <details class="disclosure">
+      <summary class="disclosure__summary">核验规则</summary>
+      <p class="help">
+        始终沿用原预算与原绝对止损。资金费支出消耗原预留，收入不扩大风险预算。修改输入后需恢复原输入才能核验此卡；新方案需重新确认空仓起点。
+      </p>
+      <p class="help">部分退出需能关联原近端止损、成交及费用，否则无法完整核验。</p>
+    </details>
+    <p class="notice">核验仅对应显示的查询时间，不保证未来成交；仓位或止损变化后需重新核验。</p>
   </section>
 </template>

@@ -4,7 +4,10 @@ import { useWorkbench } from './useWorkbench';
 import PlanForm from './components/PlanForm.vue';
 import EntryCard from './components/EntryCard.vue';
 import VerificationPanel from './components/VerificationPanel.vue';
-const { source } = defineProps<{ source: string }>();
+const { source, expectedSource } = defineProps<{
+  source: string;
+  expectedSource: 'binance' | 'demo';
+}>();
 const workbench = useWorkbench(source);
 const { text, hidden, ui, accountOnly, refreshAccount, generateCard, clearTrade } = workbench;
 let cleanup = () => {};
@@ -179,9 +182,10 @@ onUnmounted(() => cleanup());
           <h1 class="page-title">开仓卡</h1>
           <p class="workspace__intro">明确本单风险，再执行交易。</p>
         </div>
-        <span class="tag">只读 · 手动执行</span>
       </div>
-      <p id="source" class="source">{{ text['source'] }}</p>
+      <p id="source" class="source" :hidden="expectedSource !== 'demo' || !text['source']">
+        {{ text['source'] }}
+      </p>
       <section :data-state="ui.status" class="status" aria-live="polite" aria-atomic="true">
         <div class="status__heading">
           <span class="status__indicator" aria-hidden="true"></span>
@@ -246,7 +250,15 @@ onUnmounted(() => cleanup());
                   <dd id="draft-budget" class="details__value">{{ text['draft-budget'] }}</dd>
                 </div>
                 <div class="details__row">
-                  <dt class="details__term">仓位名义价值</dt>
+                  <dt class="details__term">
+                    仓位名义价值
+                    <details class="disclosure disclosure--help">
+                      <summary class="disclosure__summary" aria-label="试算名义价值说明">
+                        说明
+                      </summary>
+                      <p class="help">按入场参考价计算的仓位价值，不等于保证金。</p>
+                    </details>
+                  </dt>
                   <dd id="draft-notional" class="details__value">{{ text['draft-notional'] }}</dd>
                 </div>
                 <div class="details__row details__row--risk">
@@ -292,6 +304,7 @@ onUnmounted(() => cleanup());
               </dl>
               <p id="draft-condition">{{ text['draft-condition'] }}</p>
               <p id="draft-time" class="help">{{ text['draft-time'] }}</p>
+              <p class="help">试算使用最近成功快照；生成开仓卡时重新查询。</p>
             </section>
             <section
               id="entry-checks"
@@ -358,12 +371,18 @@ onUnmounted(() => cleanup());
           <section class="balance">
             <h3 class="section-title">账户权益 <span class="balance__unit">USDT</span></h3>
             <p class="amount" id="equity">{{ text['equity'] }}</p>
-            <p class="muted balance__caption">钱包余额 + 未实现盈亏</p>
+            <details class="disclosure disclosure--help">
+              <summary class="disclosure__summary" aria-label="账户权益说明">说明</summary>
+              <p class="help">钱包余额 + 未实现盈亏。</p>
+            </details>
           </section>
           <section class="balance">
             <h3 class="section-title">可用余额 <span class="balance__unit">USDT</span></h3>
             <p class="amount" id="available">{{ text['available'] }}</p>
-            <p class="muted balance__caption">采用交易所返回值，不重复扣除占款</p>
+            <details class="disclosure disclosure--help">
+              <summary class="disclosure__summary" aria-label="可用余额说明">说明</summary>
+              <p class="help">可用于开仓的余额，已计入现有资金占用。</p>
+            </details>
           </section>
         </div>
         <div class="account-module__actions">
@@ -375,7 +394,13 @@ onUnmounted(() => cleanup());
                 <dd id="wallet" class="details__value">{{ text['wallet'] }}</dd>
               </div>
               <div class="details__row">
-                <dt class="details__term">未实现盈亏</dt>
+                <dt class="details__term">
+                  未实现盈亏
+                  <details class="disclosure disclosure--help">
+                    <summary class="disclosure__summary" aria-label="未实现盈亏说明">说明</summary>
+                    <p class="help">当前持仓的浮动盈亏，未扣手续费与资金费。</p>
+                  </details>
+                </dt>
                 <dd id="pnl" class="details__value">{{ text['pnl'] }}</dd>
               </div>
               <div class="details__row">
@@ -407,7 +432,6 @@ onUnmounted(() => cleanup());
       >
         <div class="section-heading">
           <h2 id="execution-title" class="module-title">开仓卡</h2>
-          <span class="muted section-heading__note">固定参数 · 手动执行</span>
         </div>
         <div class="empty-state">
           <p class="empty-state__title">尚未生成开仓卡</p>
@@ -424,11 +448,10 @@ onUnmounted(() => cleanup());
       >
         <div class="section-heading">
           <h2 id="review-title" class="module-title">成交核验</h2>
-          <span class="muted section-heading__note">执行后返回 · 只读核对</span>
         </div>
         <div class="empty-state">
           <p class="empty-state__title">尚无可核验的方案</p>
-          <p class="muted">生成开仓卡后，在 Binance 手动执行，再返回刷新成交与止损状态。</p>
+          <p class="muted">生成开仓卡后，在 Binance 执行，再返回刷新成交与止损状态。</p>
           <a class="inline-link" href="#plan-module">查看本次计划 →</a>
         </div>
         <VerificationPanel :workbench="workbench" />
@@ -438,9 +461,6 @@ onUnmounted(() => cleanup());
         <button id="clear-trade" @click="clearTrade" type="button" class="button button--secondary">
           清除本单记录
         </button>
-        <p class="notice">
-          草稿按最近成功快照估算。正式开仓卡须另行刷新生成；工具不会下单或调整账户设置。
-        </p>
         <details id="market-details" class="disclosure" :hidden="hidden['market-details']">
           <summary class="disclosure__summary">本次行情与交易规则</summary>
           <dl class="details">
@@ -492,9 +512,6 @@ onUnmounted(() => cleanup());
             </div>
           </dl>
         </details>
-        <p class="footnote">
-          名义价值按入场参考价计算，不等于保证金。止损均为标记价触发的止损市价、关闭价格保护；最终止损整仓退出，双层近端按固定数量只减仓。工具不会下单或修改账户。
-        </p>
       </footer>
       <noscript>请启用 JavaScript 以读取账户状态。</noscript>
     </div>

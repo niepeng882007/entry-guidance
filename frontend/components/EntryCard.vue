@@ -163,7 +163,13 @@ const { text, hidden, ui, cardElement, copyValue } = workbench;
         <dd id="card-budget" class="details__value">{{ text['card-budget'] }}</dd>
       </div>
       <div class="details__row">
-        <dt class="details__term">名义价值</dt>
+        <dt class="details__term">
+          名义价值
+          <details class="disclosure disclosure--help">
+            <summary class="disclosure__summary" aria-label="开仓卡名义价值说明">说明</summary>
+            <p class="help">按入场参考价计算的仓位价值，不等于保证金。</p>
+          </details>
+        </dt>
         <dd id="card-notional" class="details__value">{{ text['card-notional'] }}</dd>
       </div>
       <div class="details__row">
@@ -245,8 +251,6 @@ const { text, hidden, ui, cardElement, copyValue } = workbench;
       </p>
     </details>
     <p id="card-instructions">{{ text['card-instructions'] }}</p>
-    <p class="notice">
-      卡片生成不表示已下单或挂好止损。实际亏损可能超过预算，交易所仍可能拒单；成交后须检查真实仓位与止损。
-    </p>
+    <p class="notice">实际亏损可能超过预算，交易所仍可能拒单；成交后须检查真实仓位与止损。</p>
   </section>
 </template>

@@ -86,17 +86,26 @@ function time(value: string | undefined) {
       <section class="balance">
         <h2 class="section-title">账户权益 <span class="balance__unit">USDT</span></h2>
         <p id="asset-equity" class="amount">{{ snapshot?.equity ?? '—' }}</p>
-        <p class="muted balance__caption">钱包余额 + 未实现盈亏</p>
+        <details class="disclosure disclosure--help">
+          <summary class="disclosure__summary" aria-label="账户权益说明">说明</summary>
+          <p class="help">钱包余额 + 未实现盈亏。</p>
+        </details>
       </section>
       <section class="balance">
         <h2 class="section-title">可用余额 <span class="balance__unit">USDT</span></h2>
         <p id="asset-available" class="amount">{{ snapshot?.availableBalance ?? '—' }}</p>
-        <p class="muted balance__caption">交易所返回值，不重复扣除占款</p>
+        <details class="disclosure disclosure--help">
+          <summary class="disclosure__summary" aria-label="可用余额说明">说明</summary>
+          <p class="help">可用于开仓的余额，已计入现有资金占用。</p>
+        </details>
       </section>
       <section class="balance">
         <h2 class="section-title">未实现盈亏 <span class="balance__unit">USDT</span></h2>
         <p id="asset-pnl" class="amount">{{ snapshot?.unrealizedProfit ?? '—' }}</p>
-        <p class="muted balance__caption">查询值，未扣手续费与资金费</p>
+        <details class="disclosure disclosure--help">
+          <summary class="disclosure__summary" aria-label="未实现盈亏说明">说明</summary>
+          <p class="help">当前持仓的浮动盈亏，未扣手续费与资金费。</p>
+        </details>
       </section>
     </div>
     <details class="disclosure account-page__details" open>
@@ -116,6 +125,5 @@ function time(value: string | undefined) {
         </div>
       </dl>
     </details>
-    <p class="footnote">账户快照不代表后续状态，也不表示止损核验通过。交易由你在 Binance 执行。</p>
   </div>
 </template>

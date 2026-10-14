@@ -72,7 +72,7 @@ export function useWorkbench(source: string) {
   const text = reactive<Record<string, string>>({
     source: '',
     status: '等待查询',
-    message: '查询结果仅代表查询时点的账户状态。',
+    message: '选择币种并填写本次计划。',
     'budget-unit': 'USDT',
     'stop-unit': '%',
     'near-stop-unit': '%',
@@ -1025,7 +1025,7 @@ export function useWorkbench(source: string) {
         slippage: `${plan.slippagePercent}%`,
         funding: plan.fundingReserved ? `${plan.funding} USDT` : '未预留资金费',
         condition: `标记价 ${fields['side'] === 'long' ? '≤' : '≥'} ${plan.stopPrice} USDT 时触发最终止损市价，退出全部剩余仓位；触发价不等于成交价。${plan.nearStop ? '总仓位按全部落到最终止损计算，不依赖近端退出成功。' : ''}`,
-        time: `${plan.source === 'demo' ? '模拟数据' : 'Binance 只读快照'} · ${time(plan.queriedAt)}；按此快照试算，行情变化后请刷新。`,
+        time: `${plan.source === 'demo' ? '模拟数据 · ' : ''}${time(plan.queriedAt)}；按此快照试算，行情变化后请刷新。`,
       };
       for (const [id, value] of Object.entries(outputs)) show(`draft-${id}`, value);
       hidden['draft-near-row'] = !plan.nearStop;
@@ -1078,7 +1078,7 @@ export function useWorkbench(source: string) {
       'book-time': time(plan.bookTime),
       'price-times': `${time(plan.markTime)} / ${time(plan.lastTime)}`,
       time: time(plan.queriedAt),
-      instructions: `在 Binance 采用逐仓、单向持仓、${plan.leverage} 倍杠杆；${limit ? `普通限价（GTC，委托价 ${plan.limitPrice} USDT）` : '市价'}${plan.side === 'long' ? '买入做多' : '卖出做空'} ${plan.quantity} ${plan.baseAsset}。先附带并确认最终止损市价：绝对触发价 ${plan.stopPrice} USDT、标记价触发、关闭价格保护、整仓退出。${plan.nearStop ? `确认整仓保护有效后，再补近端 ${plan.nearStop.price} USDT、${plan.nearStop.quantity} ${plan.baseAsset} 的止损市价，只减仓、标记价触发、关闭价格保护；保留最终整仓保护。仅有最终单还未完成双层计划。` : ''}${limit ? '部分成交后先人工撤余单，再返回刷新核验；近端数量按实际累计入场量与原比例复算，止损执行不代表余单已撤。' : '请确认这些设置后手动执行。'}`,
+      instructions: `在 Binance 采用逐仓、单向持仓、${plan.leverage} 倍杠杆；${limit ? `普通限价（GTC，委托价 ${plan.limitPrice} USDT）` : '市价'}${plan.side === 'long' ? '买入做多' : '卖出做空'} ${plan.quantity} ${plan.baseAsset}。先附带并确认最终止损市价：绝对触发价 ${plan.stopPrice} USDT、标记价触发、关闭价格保护、整仓退出。${plan.nearStop ? `确认整仓保护有效后，再补近端 ${plan.nearStop.price} USDT、${plan.nearStop.quantity} ${plan.baseAsset} 的止损市价，只减仓、标记价触发、关闭价格保护；保留最终整仓保护。仅有最终单还未完成双层计划。` : ''}${limit ? '部分成交后先人工撤余单，再返回刷新核验；近端数量按实际累计入场量与原比例复算，止损执行不代表余单已撤。' : ''}`,
       'funding-model': `${limit ? '限价多头保证金按委托价；空头按最新成交价 × 1.0015、标记价、委托价中的较大值。开仓浮亏按委托价与标记价的不利差计算。' : '市价下单资金估值采用最新成交价 × 1.0015。'}费用按下单估值与不利成交估值中的较大名义价值预留。名义价值上限同时约束标记价、下单估值和不利成交估值。`,
     };
     for (const [id, value] of Object.entries(outputs)) show(`card-${id}`, value);
@@ -1104,7 +1104,7 @@ export function useWorkbench(source: string) {
       'verification-start',
       `本单空仓起点 ${time(plan.startedAt)} · ${plan.symbol} · 原预算 ${plan.budget} USDT · 原最终止损 ${plan.stopPrice} USDT${plan.nearStop ? ` · 原近端止损 ${plan.nearStop.price} USDT` : ''}`,
     );
-    show('verification-status', '待核验 · 在 Binance 手动执行后，返回此处刷新。');
+    show('verification-status', '待核验 · 成交后返回刷新。');
     show('verification-time', '尚无完整查询');
     show('refresh', '刷新账户与核验原方案');
     hidden['draft-result'] = true;
@@ -1159,7 +1159,7 @@ export function useWorkbench(source: string) {
       renderTemplatePreview();
       show('draft-error', '');
       show('status', plan.source === 'demo' ? '模拟方案已生成' : '正式方案已生成 · 待执行与核验');
-      show('message', '本单预算与止损已固定；到 Binance 手动执行后，返回刷新核验。');
+      show('message', '本单预算与止损已固定；成交后返回刷新核验。');
       show('attempted', time(plan.queriedAt));
       ui.status = 'success';
       await nextTick();
@@ -1275,17 +1275,12 @@ export function useWorkbench(source: string) {
       const account = 'account' in data ? data.account : data;
       renderAccount(account);
       show('attempted', time(data.queriedAt));
-      show(
-        'source',
-        data.source === 'demo'
-          ? '模拟数据 · 仅用于界面与流程验证'
-          : '真实模式 · 数据由 Binance 只读接口查询',
-      );
-      show('status', data.source === 'demo' ? '模拟查询成功' : '已连接 · 只读查询成功');
+      show('source', data.source === 'demo' ? '模拟数据 · 仅用于界面与流程验证' : '');
+      show('status', data.source === 'demo' ? '模拟查询成功' : '已连接');
       show(
         'message',
         selected
-          ? '当前快照符合空仓、逐仓与单向持仓条件；正式生成前还会刷新并检查资金与强平缓冲。'
+          ? '空仓、逐仓与单向持仓检查通过。'
           : '选择币种后读取适用费率、行情和开仓前账户条件。',
       );
       ui.status = 'success';

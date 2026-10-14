@@ -16,6 +16,49 @@ async function fulfillAtBrowserTime(page: Page, route: Route) {
   await route.fulfill({ json: data });
 }
 
+test('amount explanations are opt-in, keyboard accessible and fit narrow screens', async ({
+  page,
+}) => {
+  await login(page);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  for (const path of ['/account', '/entry']) {
+    await page.goto(path);
+    for (const width of [320, 390, 1280]) {
+      await page.setViewportSize({ width, height: 844 });
+      for (const [label, explanation] of [
+        ['账户权益说明', '钱包余额 + 未实现盈亏。'],
+        ['可用余额说明', '可用于开仓的余额，已计入现有资金占用。'],
+      ] as const) {
+        const help = page.getByLabel(label, { exact: true });
+        const content = page.getByText(explanation, { exact: true });
+        await expect(content).toBeHidden();
+        await help.focus();
+        await page.keyboard.press('Enter');
+        await expect(content).toBeVisible();
+        await expect(help).toBeFocused();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+          true,
+        );
+        if (label === '账户权益说明')
+          await page
+            .locator('.balances')
+            .first()
+            .screenshot({
+              path: test.info().outputPath(`amount-help-${path.slice(1)}-${width}.png`),
+            });
+        await page.keyboard.press('Enter');
+        await expect(content).toBeHidden();
+      }
+    }
+    if (path === '/account') {
+      const content = page.getByText('当前持仓的浮动盈亏，未扣手续费与资金费。', { exact: true });
+      await expect(content).toBeHidden();
+      await page.getByLabel('未实现盈亏说明', { exact: true }).click();
+      await expect(content).toBeVisible();
+    }
+  }
+});
+
 test('asset page opens from the workbench, displays details and supports return and logout', async ({
   page,
 }) => {

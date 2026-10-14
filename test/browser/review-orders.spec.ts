@@ -1,5 +1,90 @@
 import { test, expect } from '@playwright/test';
 import type { OrderList } from '../../src/review-orders.ts';
+import type { ArchiveProgress } from '../../src/review-ledger.ts';
+
+test('manual order updates read once and refresh running progress only on request', async ({
+  page,
+}) => {
+  await page.goto('/review');
+  await page.getByLabel('个人访问密码').fill('browser-test-only');
+  await page.getByRole('button', { name: '进入账户' }).click();
+  await page.route('**/review', async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      body: (await response.text()).replace('data-mode="demo"', 'data-mode="binance"'),
+    });
+  });
+  const archive: ArchiveProgress = {
+    source: 'binance',
+    accountId: '12345',
+    status: 'running',
+    startTime: Date.parse('2026-07-14'),
+    endTime: Date.parse('2026-10-14'),
+    discovery: {
+      symbol: '*',
+      status: 'complete',
+      startTime: Date.parse('2026-07-14'),
+      endTime: Date.parse('2026-10-14'),
+      pages: 1,
+      records: 0,
+      pending: [],
+      completed: [],
+      missing: [],
+      lastSuccessAt: null,
+    },
+    symbols: [],
+    pendingSymbols: [],
+    completedSymbols: [],
+    missing: [],
+    scopeMissing: [],
+    lastSuccessAt: null,
+    contracts: [],
+  };
+  let reads = 0;
+  let updates = 0;
+  await page.route('**/api/review/orders?**', async (route) => {
+    reads++;
+    const response = await route.fetch();
+    const data: OrderList = await response.json();
+    await route.fulfill({
+      response,
+      json: { ...data, source: 'binance', accountId: '12345', archive },
+    });
+  });
+  await page.route('**/api/review/archive', async (route) => {
+    updates++;
+    expect(route.request().postDataJSON()).toEqual({});
+    await route.fulfill({ status: 202, json: archive });
+  });
+  await page.clock.install();
+  await page.goto('/review');
+  await expect(page.locator('.ant-table-row')).toHaveCount(3);
+  const initialReads = reads;
+  await page.clock.runFor(6000);
+  expect(reads).toBe(initialReads);
+  const update = page.getByRole('button', { name: '手动更新至当前' });
+  const read = page.getByRole('button', { name: '读取本地记录' });
+  await update.click();
+  await expect(update).toBeDisabled();
+  await expect.poll(() => reads).toBe(initialReads + 1);
+  await expect(read).toBeEnabled();
+  expect(updates).toBe(1);
+  expect(reads).toBe(initialReads + 1);
+  await page.clock.runFor(6000);
+  expect(reads).toBe(initialReads + 1);
+  await read.click();
+  await expect(read).toBeEnabled();
+  expect(reads).toBe(initialReads + 2);
+  await page.clock.runFor(6000);
+  expect(reads).toBe(initialReads + 2);
+  archive.status = 'complete';
+  await read.click();
+  await expect(page.locator('.review-table-panel__status')).toHaveText('本次更新完成。');
+  await expect(update).toBeEnabled();
+  expect(reads).toBe(initialReads + 3);
+  expect(updates).toBe(1);
+});
 
 test('orders are the default view with separate realized pnl and links to complete-trade review', async ({
   page,
