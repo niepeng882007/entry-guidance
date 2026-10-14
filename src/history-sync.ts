@@ -76,6 +76,15 @@ export function uncoveredPages(page: HistoryPage, completed: HistoryPage[]): His
   }
   return pending;
 }
+export function clipExpiredPage(page: HistoryPage, startTime: number): HistoryPage[] {
+  const next = { ...page, startTime, page: 1, fingerprint: undefined };
+  // Offset pages cannot continue after their query range changes; smaller windows guarantee progress.
+  if (page.source === 'income' && page.page > 1 && startTime < page.endTime) {
+    const middle = Math.floor((startTime + page.endTime) / 2);
+    return [{ ...next, endTime: middle }, { ...next, startTime: middle + 1 }];
+  }
+  return [next];
+}
 function unavailableMessage(page: HistoryPage) {
   return `${page.source} · ${new Date(page.startTime).toISOString()} 至 ${new Date(page.endTime).toISOString()} 超出上游可查期限，保留为缺口`;
 }
@@ -144,7 +153,7 @@ export class HistorySync {
       const gaps = uncoveredPages(gap, state.completed);
       state = { ...state, pending: [...state.pending], unavailable: compactPages([...(state.unavailable ?? []), ...gaps]), missing: [...state.missing, ...gaps.map(unavailableMessage)] };
       if (cutoff > page.endTime) state.pending.shift();
-      else state.pending[0] = { ...page, startTime: cutoff, page: 1 };
+      else state.pending.splice(0, 1, ...clipExpiredPage(page, cutoff));
       this.ledger.saveSync(state);
       if (cutoff > page.endTime) return state;
       page = state.pending[0]!;

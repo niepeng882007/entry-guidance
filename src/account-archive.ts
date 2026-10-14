@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { AccountError, object, readBinance, readReviewIdentity, type AccountConfig } from './account.ts';
-import { calendarStart, compactPages, HistorySync, normalize, uncoveredPages, windows } from './history-sync.ts';
+import { calendarStart, clipExpiredPage, compactPages, HistorySync, normalize, uncoveredPages, windows } from './history-sync.ts';
 import { ReviewLedger, type ArchiveProgress, type ArchiveState, type ReviewIdentity, type SyncState } from './review-ledger.ts';
 
 const symbolPattern = /^[\p{L}\p{N}_]{1,30}USDT$/u;
@@ -67,7 +67,7 @@ export class AccountArchive {
           const gap = { ...page, endTime: Math.min(page.endTime, cutoff - 1) };
           state.discovery.unavailable = compactPages([...(state.discovery.unavailable ?? []), ...uncoveredPages(gap, state.discovery.completed)]);
           if (page.endTime < cutoff) state.discovery.pending.shift();
-          else state.discovery.pending[0] = { ...page, startTime: cutoff, page: 1 };
+          else state.discovery.pending.splice(0, 1, ...clipExpiredPage(page, cutoff));
           this.ledger.saveArchive(state);
           if (page.endTime < cutoff) continue;
           page = state.discovery.pending[0]!;
@@ -94,7 +94,7 @@ export class AccountArchive {
       }
       state.discovery.status = 'complete'; state.discovery.lastSuccessAt = new Date().toISOString();
       state.discovery.missing = (state.discovery.unavailable ?? []).map((page) => `全账户 income · ${new Date(page.startTime).toISOString()} 至 ${new Date(page.endTime).toISOString()} 超出可查期限，保留为发现缺口`);
-      state.pendingSymbols = [...state.symbols];
+      state.pendingSymbols = [...new Set([...state.pendingSymbols, ...state.symbols])];
       this.ledger.saveArchive(state);
       for (const symbol of [...state.pendingSymbols]) {
         await this.confirmIdentity();

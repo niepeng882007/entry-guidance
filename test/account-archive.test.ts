@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { createServer } from '../src/server.ts';
 import { readBinance, AccountError, type Transport } from '../src/account.ts';
 import { coordinateAccountReads } from '../src/account-refresh.ts';
+import { calendarStart } from '../src/history-sync.ts';
 
 const permissions = { enableReading: true, enableWithdrawals: false, enableInternalTransfer: false, enableMargin: false, enableFutures: false, permitsUniversalTransfer: false, enableVanillaOptions: false, enableFixApiTrade: false, enableSpotAndMarginTrading: false, enablePortfolioMarginTrading: false };
 const at = Date.now() - 86_400_000;
@@ -362,4 +363,48 @@ test('immediate synchronization clears a recovered bootstrap failure instead of 
   const recovered = await finished(app);
   assert.equal(recovered.archive.status, 'complete');
   assert.equal(recovered.archiveIssue, undefined);
+});
+
+test('full income pages continue under an advancing retention boundary for both discovery and contracts', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const denseAt = calendarStart(Date.now()) + 86_400_000;
+  const secondPages = new Set<string>();
+  const base = fixture();
+  const app = await start(t, async (url, headers, signal) => {
+    t.mock.timers.setTime(Date.now() + 1000);
+    if (url.pathname === '/fapi/v1/income' && Number(url.searchParams.get('startTime')) <= denseAt && Number(url.searchParams.get('endTime')) >= denseAt) {
+      const symbol = url.searchParams.get('symbol') ?? 'BTCUSDT';
+      if (url.searchParams.get('page') === '2') { secondPages.add(url.searchParams.get('symbol') ?? '*'); return { status: 200, body: [] }; }
+      return { status: 200, body: Array.from({ length: 1000 }, (_, index) => ({ symbol, incomeType: 'FUNDING_FEE', tranId: (symbol === 'BTCUSDT' ? 10_000 : 20_000) + index, time: denseAt, income: '0', asset: 'USDT', tradeId: '' })) };
+    }
+    return base(url, headers, signal);
+  });
+  await app.sync();
+  const data = await finished(app);
+  assert.equal(data.archive.status, 'complete', JSON.stringify(data.archive.missing));
+  assert.deepEqual([...secondPages].sort(), ['*', 'BTCUSDT', 'OLDUSDT']);
+  assert.ok(data.archive.discovery.unavailable.length > 0);
+  assert.ok(data.archive.contracts.every((contract: { status: string }) => contract.status === 'complete'));
+});
+
+test('retry prioritizes unfinished contracts so repeated limits cannot starve their initial history', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  let limited = true;
+  const queried: string[] = [];
+  const base = fixture();
+  const app = await start(t, async (url, headers, signal) => {
+    if (limited && url.pathname === '/fapi/v1/allOrders' && url.searchParams.get('symbol') === 'OLDUSDT') return { status: 429, body: { code: -1003 } };
+    if (url.pathname === '/fapi/v1/userTrades') queried.push(url.searchParams.get('symbol')!);
+    return base(url, headers, signal);
+  });
+  await app.sync();
+  const failed = await finished(app);
+  assert.deepEqual(failed.archive.pendingSymbols, ['OLDUSDT']);
+  limited = false; queried.length = 0;
+  t.mock.timers.setTime(Date.now() + 300_000);
+  await app.sync();
+  const recovered = await finished(app);
+  // OLDUSDT has already read its fills; its anchor/tail query must still precede BTC's incremental reads.
+  assert.equal(queried[0], 'OLDUSDT');
+  assert.equal(recovered.archive.status, 'complete');
 });
