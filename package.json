@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node --use-env-proxy --env-file-if-exists=.env src/main.ts",
-    "dev": "node --use-env-proxy --env-file-if-exists=.env src/main.ts --dev",
+    "dev": "node --watch --use-env-proxy --env-file-if-exists=.env src/main.ts --dev",
     "build": "vite build",
     "typecheck": "tsc --noEmit && vue-tsc --noEmit -p tsconfig.frontend.json",
     "test": "node --test test/*.test.ts",

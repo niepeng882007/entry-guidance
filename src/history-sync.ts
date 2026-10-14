@@ -20,7 +20,7 @@ function timestamp(value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) return fail('历史记录时间无效。');
   return value;
 }
-function normalize(source: HistorySource, value: unknown, symbol: string, page: HistoryPage): RawRecord[] {
+export function normalize(source: HistorySource, value: unknown, symbol: string, page: HistoryPage): RawRecord[] {
   if (!Array.isArray(value)) return fail('历史列表响应无效，区间保持未完成。');
   const rows = value.map((value): RawRecord => {
     const row = object(value);
@@ -45,17 +45,45 @@ function normalize(source: HistorySource, value: unknown, symbol: string, page: 
   if (new Set(rows.map((row) => row.id)).size !== rows.length) return fail('历史页包含重复身份，区间保持未完成。');
   return rows;
 }
-function windows(source: HistorySource, startTime: number, endTime: number): HistoryPage[] {
+export function windows(source: HistorySource, startTime: number, endTime: number): HistoryPage[] {
   const result: HistoryPage[] = [];
   for (let start = startTime; start <= endTime; start += 7 * day) result.push({ source, startTime: start, endTime: Math.min(endTime, start + 7 * day - 1), page: 1 });
   return result;
 }
-function calendarStart(endTime: number) {
+export function calendarStart(endTime: number) {
   const date = new Date(endTime);
   const dateOfMonth = date.getUTCDate(); date.setUTCDate(1); date.setUTCMonth(date.getUTCMonth() - 3);
   const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
   date.setUTCDate(Math.min(dateOfMonth, lastDay));
   return date.getTime();
+}
+export function compactPages(pages: HistoryPage[]): HistoryPage[] {
+  const result: HistoryPage[] = [];
+  for (const page of [...pages].sort((a, b) => `${a.source}-${a.autoCloseType ?? ''}`.localeCompare(`${b.source}-${b.autoCloseType ?? ''}`) || a.startTime - b.startTime)) {
+    const previous = result.at(-1);
+    if (previous && previous.source === page.source && previous.autoCloseType === page.autoCloseType && page.startTime <= previous.endTime + 1) previous.endTime = Math.max(previous.endTime, page.endTime);
+    else result.push({ ...page, page: 1, fingerprint: undefined });
+  }
+  return result;
+}
+export function uncoveredPages(page: HistoryPage, completed: HistoryPage[]): HistoryPage[] {
+  let pending = [page];
+  for (const range of completed.filter((range) => range.source === page.source && range.autoCloseType === page.autoCloseType)) {
+    pending = pending.flatMap((gap) => range.endTime < gap.startTime || range.startTime > gap.endTime ? [gap] : [
+      ...(range.startTime > gap.startTime ? [{ ...gap, endTime: range.startTime - 1 }] : []),
+      ...(range.endTime < gap.endTime ? [{ ...gap, startTime: range.endTime + 1 }] : []),
+    ]);
+  }
+  return pending;
+}
+export function clipExpiredPage(page: HistoryPage, startTime: number): HistoryPage[] {
+  const next = { ...page, startTime, page: 1, fingerprint: undefined };
+  // Offset pages cannot continue after their query range changes; smaller windows guarantee progress.
+  if (page.source === 'income' && page.page > 1 && startTime < page.endTime) {
+    const middle = Math.floor((startTime + page.endTime) / 2);
+    return [{ ...next, endTime: middle }, { ...next, startTime: middle + 1 }];
+  }
+  return [next];
 }
 function unavailableMessage(page: HistoryPage) {
   return `${page.source} · ${new Date(page.startTime).toISOString()} 至 ${new Date(page.endTime).toISOString()} 超出上游可查期限，保留为缺口`;
@@ -81,24 +109,30 @@ export class HistorySync {
   constructor(config: AccountConfig, ledger: ReviewLedger, identity: ReviewIdentity) {
     this.config = config; this.ledger = ledger; this.identity = identity;
   }
+  busy() { return this.running; }
+  async wait() { await this.task; }
   state() {
     const state = this.ledger.sync(this.activeSymbol);
     return state?.status === 'running' && !this.running ? { ...state, status: 'interrupted' as const, missing: ['服务中断，点击开始同步继续补查。'] } : state;
   }
-  async start(symbol: string) {
+  async start(symbol: string, incremental = false) {
     if (this.running) throw new AccountError('sync_running', '已有同步正在运行，请查看进度。', 409);
     this.running = true;
     try {
-      const endTime = timestamp(object(await readBinance(this.config, 'time', AbortSignal.any([this.controller.signal, AbortSignal.timeout(10_000)]))).serverTime);
-      const startTime = calendarStart(endTime);
+      const endTime = timestamp(object(await readBinance(this.config, 'time', AbortSignal.any([this.controller.signal, AbortSignal.timeout(10_000)]), undefined, undefined, 'archive')).serverTime);
+      const recentStart = calendarStart(endTime);
       const previous = this.ledger.sync(symbol);
+      const startTime = incremental && previous ? previous.startTime : recentStart;
+      if (previous && endTime < previous.endTime) throw new AccountError('clock_error', '查询时点早于已归档进度，暂停新增归档。');
       const resume = previous && previous.pending.length > 0 && previous.status !== 'complete';
-      const state: SyncState = resume ? { ...previous, status: 'running', missing: (previous.unavailable ?? []).map(unavailableMessage) } : {
+      const from = incremental && previous ? Math.max(startTime, previous.endTime - 7 * day + 1) : startTime;
+      const makePages = (from: number, to: number) => sources.flatMap((source) => source === 'forceOrders'
+        ? ['LIQUIDATION', 'ADL'].flatMap((autoCloseType) => windows(source, from, to).map((page) => ({ ...page, autoCloseType: autoCloseType as 'LIQUIDATION' | 'ADL' })))
+        : windows(source, from, to));
+      const state: SyncState = resume ? { ...previous, ...(incremental ? { endTime, pending: [...previous.pending, ...makePages(previous.endTime + 1, endTime)] } : {}), status: 'running', missing: (previous.unavailable ?? []).map(unavailableMessage), errorCode: undefined } : {
         symbol, startTime, endTime, status: 'running', pages: 0, records: 0,
-        pending: sources.flatMap((source) => source === 'forceOrders'
-          ? ['LIQUIDATION', 'ADL'].flatMap((autoCloseType) => windows(source, startTime, endTime).map((page) => ({ ...page, autoCloseType: autoCloseType as 'LIQUIDATION' | 'ADL' })))
-          : windows(source, startTime, endTime)),
-        completed: previous?.completed ?? [], missing: [], lastSuccessAt: previous?.lastSuccessAt ?? null,
+        pending: makePages(from, endTime), completed: previous?.completed ?? [],
+        unavailable: previous?.unavailable ?? [], missing: (previous?.unavailable ?? []).map(unavailableMessage), lastSuccessAt: previous?.lastSuccessAt ?? null,
       };
       state.attemptedAt = new Date().toISOString();
       this.ledger.saveSync(state);
@@ -112,18 +146,20 @@ export class HistorySync {
     await this.task;
   }
   private async readPage(state: SyncState) {
-    const page = state.pending[0]!;
+    let page = state.pending[0]!;
     const cutoff = ['history', 'algoHistory'].includes(page.source) ? Date.now() - 90 * day + 1 : ['trades', 'income'].includes(page.source) ? calendarStart(Date.now()) : null;
     if (cutoff !== null && page.startTime < cutoff) {
       const gap = { ...page, endTime: Math.min(page.endTime, cutoff - 1) };
-      state = { ...state, pending: [...state.pending], unavailable: [...(state.unavailable ?? []), gap], missing: [...state.missing, unavailableMessage(gap)] };
+      const gaps = uncoveredPages(gap, state.completed);
+      state = { ...state, pending: [...state.pending], unavailable: compactPages([...(state.unavailable ?? []), ...gaps]), missing: [...state.missing, ...gaps.map(unavailableMessage)] };
       if (cutoff > page.endTime) state.pending.shift();
-      else state.pending[0] = { ...page, startTime: cutoff, page: 1 };
+      else state.pending.splice(0, 1, ...clipExpiredPage(page, cutoff));
       this.ledger.saveSync(state);
-      return state;
+      if (cutoff > page.endTime) return state;
+      page = state.pending[0]!;
     }
     const response = await readBinance(this.config, page.source, AbortSignal.any([this.controller.signal, AbortSignal.timeout(10_000)]), state.symbol,
-      { startTime: page.startTime, endTime: page.endTime, ...(page.source === 'income' ? { page: page.page } : {}), ...(page.autoCloseType ? { autoCloseType: page.autoCloseType } : {}) });
+      { startTime: page.startTime, endTime: page.endTime, ...(page.source === 'income' ? { page: page.page } : {}), ...(page.autoCloseType ? { autoCloseType: page.autoCloseType } : {}) }, 'archive');
     const records = normalize(page.source, response, state.symbol, page);
     const limit = page.source === 'forceOrders' ? 100 : 1000;
     if (records.length > limit) return fail('历史页超过官方条数上限。');
@@ -146,7 +182,7 @@ export class HistorySync {
       }
     } else {
       state.pending.shift();
-      state.completed.push(page);
+      state.completed = compactPages([...state.completed, page]);
     }
     this.ledger.saveSync(state, records);
     return state;
@@ -161,6 +197,7 @@ export class HistorySync {
       this.ledger.saveSync(state);
     } catch (error) {
       state.status = this.controller.signal.aborted ? 'interrupted' : 'failed';
+      state.errorCode = error instanceof AccountError ? error.code : 'archive_failed';
       state.missing = [...(state.unavailable ?? []).map(unavailableMessage), error instanceof AccountError ? error.message : '归档读取或保存失败，已有账本保留，请再次同步。'];
       try { this.ledger.saveSync(state); this.project(state, null); }
       catch { /* Keep committed evidence and progress when the filesystem is unavailable. */ }
@@ -168,9 +205,9 @@ export class HistorySync {
   }
   private async anchor(state: SyncState): Promise<PositionAnchor | null> {
     const signal = () => AbortSignal.any([this.controller.signal, AbortSignal.timeout(10_000)]);
-    const before = timestamp(object(await readBinance(this.config, 'time', signal())).serverTime);
-    const response = await readBinance(this.config, 'positions', signal(), state.symbol);
-    const after = timestamp(object(await readBinance(this.config, 'time', signal())).serverTime);
+    const before = timestamp(object(await readBinance(this.config, 'time', signal(), undefined, undefined, 'archive')).serverTime);
+    const response = await readBinance(this.config, 'positions', signal(), state.symbol, undefined, 'archive');
+    const after = timestamp(object(await readBinance(this.config, 'time', signal(), undefined, undefined, 'archive')).serverTime);
     if (before < state.endTime || after < before || after - state.endTime >= 7 * day) return null;
     if (!Array.isArray(response)) return fail('持仓证据无效。');
     const positions = response.map(object);
@@ -189,7 +226,7 @@ export class HistorySync {
     let stable = modes as ReviewFill['positionSide'][];
     if (after > state.endTime) {
       const page: HistoryPage = { source: 'trades', startTime: state.endTime + 1, endTime: after, page: 1 };
-      const tail = normalize('trades', await readBinance(this.config, 'trades', signal(), state.symbol, { startTime: page.startTime, endTime: page.endTime }), state.symbol, page);
+      const tail = normalize('trades', await readBinance(this.config, 'trades', signal(), state.symbol, { startTime: page.startTime, endTime: page.endTime }, 'archive'), state.symbol, page);
       if (tail.length >= 1000) return null;
       this.ledger.saveSync(state, tail);
       if (tail.some((row) => row.time >= before || amounts[row.payload.positionSide as ReviewFill['positionSide']] === undefined)) return null;

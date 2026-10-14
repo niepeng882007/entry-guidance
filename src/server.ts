@@ -12,6 +12,7 @@ import { createPlan, verifyPosition, type Plan } from './verification.ts';
 import { ReviewLedger, demoTrade, type ReviewList } from './review-ledger.ts';
 import { ReviewWriteError } from './review-notes.ts';
 import { HistorySync } from './history-sync.ts';
+import { AccountArchive } from './account-archive.ts';
 import type { EntryInput } from '../public/draft.js';
 import type { ViteDevServer } from 'vite';
 
@@ -23,6 +24,7 @@ type Config = AccountConfig & {
   origin?: string;
   tls?: { cert: Buffer; key: Buffer };
   frontend?: ViteDevServer;
+  httpServer?: ReturnType<typeof createHttpServer>;
   reviewLedgerPath?: string;
 };
 
@@ -63,6 +65,10 @@ export function createServer(config: Config) {
   }
   let reviewLedger: ReviewLedger | undefined;
   let history: HistorySync | undefined;
+  let archive: AccountArchive | undefined;
+  let archiveIssue: ReviewList['archiveIssue'];
+  let background: Promise<void> | undefined;
+  let archiveTimer: ReturnType<typeof setInterval> | undefined;
   let reviewAccountId: string | undefined;
   let closing = false;
   function getReviewLedger() {
@@ -74,18 +80,39 @@ export function createServer(config: Config) {
     }
     return reviewLedger;
   }
-  async function getHistory(accountId?: string) {
+  let historyOpening = Promise.resolve();
+  function getHistory(accountId?: string) {
+    const result = historyOpening.then(() => openHistory(accountId));
+    historyOpening = result.then(() => {}, () => {});
+    return result;
+  }
+  async function openHistory(accountId?: string) {
     if (!accountId && history) return history;
     if (!accountId && (!config.reviewLedgerPath || !existsSync(config.reviewLedgerPath))) return null;
     const uid = accountId ?? await readReviewIdentity(config, AbortSignal.timeout(10_000));
     if (closing) throw new AccountError('interrupted', '服务已停止，已有账本保留。', 503);
     if (history && reviewAccountId === uid) return history;
-    if (history) await history.stop();
+    if (history) await Promise.all([history.stop(), archive?.stop()]);
+    if (closing) throw new AccountError('interrupted', '服务已停止，已有账本保留。', 503);
     reviewLedger?.close();
     reviewLedger = new ReviewLedger(config.reviewLedgerPath ?? ':memory:', { source: 'binance', accountId: uid });
     reviewAccountId = uid;
     history = new HistorySync(config, reviewLedger, { source: 'binance', accountId: uid });
+    archive = new AccountArchive(config, reviewLedger, history, { source: 'binance', accountId: uid });
     return history;
+  }
+  async function archiveAccount() {
+    const uid = await readReviewIdentity(config, AbortSignal.timeout(10_000), 'archive');
+    await getHistory(uid);
+    const progress = await archive!.start();
+    archiveIssue = undefined;
+    return progress;
+  }
+  function startBackground() {
+    if (closing || background) return;
+    background = archiveAccount().then(() => archive!.wait()).catch((error: unknown) => {
+      archiveIssue = { code: error instanceof AccountError ? error.code : 'archive_failed', message: error instanceof AccountError ? error.message : '后台归档暂不可用，已有账本保留。', attemptedAt: new Date().toISOString() };
+    }).finally(() => { background = undefined; });
   }
   async function planLedger(plan: Plan) {
     if (!plan.reviewAccountId) return null; // Legacy signed plans retain recovery without inventing an account identity.
@@ -104,8 +131,9 @@ export function createServer(config: Config) {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
+    const origin = config.origin ?? `http://127.0.0.1:${req.socket.localPort}`;
     res.setHeader('Content-Security-Policy', config.frontend
-      ? "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:24678; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+      ? `default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ${origin.replace(/^http:/, 'ws:')}; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`
       : "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
     const send = (status: number, value: unknown) => {
       if (status >= 400 && value && typeof value === 'object' && 'scopeConfirmed' in value && value.scopeConfirmed === false) {
@@ -118,7 +146,6 @@ export function createServer(config: Config) {
       res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' }).end(value);
     };
     const redirect = (location: string) => res.writeHead(303, { Location: location }).end();
-    const origin = config.origin ?? `http://127.0.0.1:${req.socket.localPort}`;
     if (req.headers.host !== new URL(origin).host) return send(403, { error: '访问地址不匹配。' });
     if (req.method === 'POST' && req.headers.origin !== origin) return send(403, { error: '请从本应用页面提交。' });
     const path = req.url;
@@ -240,7 +267,7 @@ export function createServer(config: Config) {
         return send(503, { error: '个人记录保存或读取失败，已有账本保留；当前输入保留，请重试。' });
       }
     }
-    if (req.method !== 'GET' && !(path === '/api/review/sync' && req.method === 'POST')) return send(405, { error: '仅支持读取。' });
+    if (req.method !== 'GET' && !(['/api/review/sync', '/api/review/archive'].includes(path ?? '') && req.method === 'POST')) return send(405, { error: '仅支持读取。' });
     if (path?.startsWith('/api/verification?')) {
       const query = new URL(path, origin).searchParams;
       const plan = sessions.get(cookie!)?.plans.get(query.get('planId') ?? '');
@@ -260,7 +287,7 @@ export function createServer(config: Config) {
         return send(error.status, { error: error.message, code: error.code, source: plan.source, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt, scopeConfirmed: error.scopeConfirmed });
       }
     }
-    if (path === '/api/review/sync' && req.method === 'POST') {
+    if (['/api/review/sync', '/api/review/archive'].includes(path ?? '') && req.method === 'POST') {
       if (source === 'demo') return send(409, { error: '演示模式仅展示模拟归档；请在真实模式主动同步。' });
       if (req.headers['content-type'] !== 'application/json') return send(415, { error: '同步输入格式不支持。' });
       let body = '';
@@ -270,14 +297,23 @@ export function createServer(config: Config) {
       }
       let input: unknown;
       try { input = JSON.parse(body); } catch { return send(400, { error: '同步输入格式无效。' }); }
+      const fullAccount = path === '/api/review/archive';
       const symbol = input && typeof input === 'object' && 'symbol' in input ? input.symbol : undefined;
-      if (typeof symbol !== 'string' || !/^[\p{L}\p{N}_]{1,30}USDT$/u.test(symbol) || Object.keys(input!).some((key) => key !== 'symbol')) return send(400, { error: '请选择一个 USDT 永续合约。' });
+      if (fullAccount ? !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 0 : typeof symbol !== 'string' || !/^[\p{L}\p{N}_]{1,30}USDT$/u.test(symbol) || Object.keys(input!).some((key) => key !== 'symbol')) return send(400, { error: '请选择一个 USDT 永续合约；全账户同步不接受额外参数。' });
+      if (!fullAccount && (archive?.busy() || history?.busy())) return send(409, { error: '已有同步正在运行，请查看进度。', code: 'sync_running' });
+      if (fullAccount && archive?.busy() && archive.state()) return send(202, archive.state());
       try {
         const uid = await readReviewIdentity(config, AbortSignal.timeout(10_000));
         const currentSession = sessions.get(cookie!);
         if (!currentSession || currentSession.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
         const sync = await getHistory(uid);
-        return send(202, await sync!.start(symbol));
+        if (fullAccount) {
+          const progress = await archive!.start();
+          archiveIssue = undefined;
+          return send(202, progress);
+        }
+        if (archive?.busy()) return send(409, { error: '全账户归档正在运行，请查看进度。', code: 'sync_running' });
+        return send(202, await sync!.start(symbol as string));
       } catch (error) {
         if (error instanceof AccountError) return send(error.status, { error: error.message, code: error.code, scopeConfirmed: error.scopeConfirmed, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt });
         return send(503, { error: '复盘同步暂不可用，已有账本保留。' });
@@ -297,12 +333,14 @@ export function createServer(config: Config) {
           const offset = (query.page - 1) * reviewPageSize;
           return send(200, {
             source, accountId: source === 'demo' ? 'demo-account' : reviewAccountId ?? null,
-            syncStatus: source === 'demo' ? 'demo' : sync?.state() ? 'synced' : 'not-synced',
+            syncStatus: source === 'demo' ? 'demo' : sync?.state() || archive?.state() ? 'synced' : 'not-synced',
             trades: selected.slice(offset, offset + reviewPageSize),
             filters: query.filters, total: selected.length, page: query.page, pageSize: reviewPageSize,
             nextPage: offset + reviewPageSize < selected.length ? query.page + 1 : null,
             options: { symbols: [...new Set(all.map((trade) => trade.symbol))].sort(), tags: (ledger?.tags() ?? []).map(({ id, name, active }) => ({ id, name, active })) },
             ...(sync ? { sync: sync.state() } : {}),
+            ...(archive?.state() ? { archive: archive.state() } : {}),
+            ...(archiveIssue ? { archiveIssue } : {}),
           } satisfies ReviewList);
         }
         const id = path.slice('/api/review/trades/'.length);
@@ -398,13 +436,21 @@ export function createServer(config: Config) {
       res.end(JSON.stringify({ error: '请求失败，请重试。' }));
     });
   };
-  const server = config.tls ? createHttpsServer(config.tls, handler) : createHttpServer(handler);
+  const server = config.httpServer ?? (config.tls ? createHttpsServer(config.tls) : createHttpServer());
+  server.on('request', handler);
+  server.on('listening', () => {
+    if (source !== 'binance' || !config.reviewLedgerPath || !config.apiKey || !config.apiSecret) return;
+    startBackground();
+    archiveTimer = setInterval(startBackground, 5 * 60_000);
+    archiveTimer.unref();
+  });
   server.on('close', () => {
     closing = true;
+    clearInterval(archiveTimer);
     sessions.clear();
     for (const slot of accountSlots) slot.stop();
     observation.stop();
-    if (history) void history.stop().finally(() => reviewLedger?.close());
+    if (history) void Promise.all([history.stop(), archive?.stop()]).finally(() => reviewLedger?.close());
     else reviewLedger?.close();
   });
   server.requestTimeout = 15_000;

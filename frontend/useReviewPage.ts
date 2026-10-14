@@ -17,6 +17,7 @@ import type {
   ReviewSummary,
   ReviewTrade,
   SyncState,
+  ArchiveProgress,
 } from '../src/review-ledger.ts';
 
 type Source = ReviewList['source'];
@@ -306,11 +307,11 @@ function validateComparison(value: unknown, trade: Record<string, unknown>) {
   }
 }
 
-function validateSync(value: unknown): SyncState {
+function validateSync(value: unknown, discovery = false): SyncState {
   const data = object(value);
   if (
     typeof data.symbol !== 'string' ||
-    !/^[\p{L}\p{N}_]{1,30}USDT$/u.test(data.symbol) ||
+    !(discovery ? data.symbol === '*' : /^[\p{L}\p{N}_]{1,30}USDT$/u.test(data.symbol)) ||
     !['running', 'complete', 'failed', 'interrupted'].includes(String(data.status)) ||
     !Number.isSafeInteger(data.startTime) ||
     !Number.isSafeInteger(data.endTime) ||
@@ -326,14 +327,18 @@ function validateSync(value: unknown): SyncState {
       (typeof data.lastSuccessAt !== 'string' || !Number.isFinite(Date.parse(data.lastSuccessAt))))
   )
     throw new Error('同步进度格式无效。');
-  for (const key of ['pending', 'completed']) {
+  for (const key of [
+    'pending',
+    'completed',
+    ...(data.unavailable === undefined ? [] : ['unavailable']),
+  ]) {
     if (!Array.isArray(data[key])) throw new Error('同步区间缺失。');
     for (const value of data[key]) {
       const page = object(value);
       if (
-        !['trades', 'history', 'algoHistory', 'income', 'forceOrders'].includes(
-          String(page.source),
-        ) ||
+        !(
+          discovery ? ['income'] : ['trades', 'history', 'algoHistory', 'income', 'forceOrders']
+        ).includes(String(page.source)) ||
         !Number.isSafeInteger(page.startTime) ||
         !Number.isSafeInteger(page.endTime) ||
         Number(page.startTime) <= 0 ||
@@ -349,6 +354,49 @@ function validateSync(value: unknown): SyncState {
   return data as SyncState;
 }
 
+function validateArchive(value: unknown, accountId?: string | null): ArchiveProgress {
+  const data = object(value);
+  if (
+    data.source !== 'binance' ||
+    typeof data.accountId !== 'string' ||
+    !/^[1-9]\d{0,23}$/.test(data.accountId) ||
+    (accountId && data.accountId !== accountId) ||
+    !['running', 'complete', 'failed', 'interrupted'].includes(String(data.status)) ||
+    !Number.isSafeInteger(data.startTime) ||
+    Number(data.startTime) <= 0 ||
+    !Number.isSafeInteger(data.endTime) ||
+    Number(data.endTime) < Number(data.startTime) ||
+    (data.lastSuccessAt !== null &&
+      (typeof data.lastSuccessAt !== 'string' || !Number.isFinite(Date.parse(data.lastSuccessAt))))
+  )
+    throw new Error('全账户归档身份或进度无效。');
+  for (const key of ['symbols', 'pendingSymbols', 'completedSymbols', 'missing', 'scopeMissing']) {
+    const values = data[key];
+    if (
+      !Array.isArray(values) ||
+      !values.every((value) => typeof value === 'string') ||
+      ((key.includes('Symbols') || key === 'symbols') &&
+        (new Set(values).size !== values.length ||
+          !values.every((value) => /^[\p{L}\p{N}_]{1,30}USDT$/u.test(value))))
+    )
+      throw new Error('全账户归档范围无效。');
+  }
+  const result = data as ArchiveProgress;
+  validateSync(result.discovery, true);
+  if (
+    !Array.isArray(result.contracts) ||
+    result.contracts.some((value) => !result.symbols.includes(validateSync(value).symbol)) ||
+    result.pendingSymbols.some(
+      (symbol) => !result.symbols.includes(symbol) || result.completedSymbols.includes(symbol),
+    ) ||
+    result.completedSymbols.some((symbol) => !result.symbols.includes(symbol)) ||
+    (result.status === 'complete' &&
+      (result.pendingSymbols.length || result.discovery.status !== 'complete'))
+  )
+    throw new Error('全账户归档完成状态与范围不一致。');
+  return result;
+}
+
 export function useReviewPage(source: Source) {
   const list = shallowRef<ReviewList | null>(null);
   const trade = shallowRef<ReviewTrade | null>(null);
@@ -362,6 +410,8 @@ export function useReviewPage(source: Source) {
   const symbol = ref('BTCUSDT');
   const symbols = shallowRef<string[]>([]);
   const sync = shallowRef<SyncState | null>(null);
+  const archive = shallowRef<ArchiveProgress | null>(null);
+  const archiveIssue = ref('');
   const evidence = shallowRef<{
     symbol: string;
     records: RawRecord[];
@@ -373,7 +423,12 @@ export function useReviewPage(source: Source) {
   let cleanup = () => {};
   let polling: ReturnType<typeof setTimeout> | undefined;
 
-  async function read(id?: string, startSync = false, evidenceOffset?: number) {
+  async function read(
+    id?: string,
+    startSync = false,
+    evidenceOffset?: number,
+    fullAccount = false,
+  ) {
     if (suspended || relogin.value || document.hidden || !navigator.onLine) return;
     const current = ++sequence;
     clearTimeout(polling);
@@ -392,7 +447,9 @@ export function useReviewPage(source: Source) {
       const requestedSymbol = symbol.value.trim().toUpperCase();
       const response = await fetch(
         startSync
-          ? '/api/review/sync'
+          ? fullAccount
+            ? '/api/review/archive'
+            : '/api/review/sync'
           : evidenceOffset !== undefined
             ? `/api/review/evidence?symbol=${encodeURIComponent(requestedSymbol)}&offset=${evidenceOffset}`
             : `/api/review/trades${id ? `/${encodeURIComponent(id)}` : query ? `?${query}` : ''}`,
@@ -403,7 +460,9 @@ export function useReviewPage(source: Source) {
             ? {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ symbol: symbol.value.trim().toUpperCase() }),
+                body: JSON.stringify(
+                  fullAccount ? {} : { symbol: symbol.value.trim().toUpperCase() },
+                ),
               }
             : {}),
         },
@@ -425,10 +484,13 @@ export function useReviewPage(source: Source) {
         throw new Error('复盘账本读取失败，已有归档保留，请重试。');
       }
       if (startSync) {
-        sync.value = validateSync(data);
+        if (fullAccount) {
+          archive.value = validateArchive(data, list.value?.accountId);
+          archiveIssue.value = '';
+        } else sync.value = validateSync(data);
         list.value = null;
         evidence.value = null;
-        status.value = '正在同步真实历史…';
+        status.value = fullAccount ? '全账户归档正在运行…' : '正在同步真实历史…';
       } else if (evidenceOffset !== undefined) {
         const next = object(data);
         if (
@@ -464,15 +526,18 @@ export function useReviewPage(source: Source) {
         trade.value = next;
       } else {
         const next = object(data);
+        const knownAccountId =
+          typeof next.accountId === 'string' && /^[1-9]\d{0,23}$/.test(next.accountId);
         if (
           next.source !== source ||
           (source === 'demo'
             ? next.syncStatus !== 'demo' || next.accountId !== 'demo-account'
             : !(
-                (next.syncStatus === 'not-synced' && next.accountId === null) ||
-                (next.syncStatus === 'synced' &&
-                  typeof next.accountId === 'string' &&
-                  /^[1-9]\d{0,23}$/.test(next.accountId))
+                (next.syncStatus === 'not-synced' &&
+                  (next.accountId === null || knownAccountId) &&
+                  Array.isArray(next.trades) &&
+                  next.trades.length === 0) ||
+                (next.syncStatus === 'synced' && knownAccountId)
               )) ||
           !Array.isArray(next.trades) ||
           (next.accountId === null && next.trades.length)
@@ -556,6 +621,26 @@ export function useReviewPage(source: Source) {
         if (list.value?.accountId !== next.accountId) evidence.value = null;
         sync.value = next.sync === undefined || next.sync === null ? null : validateSync(next.sync);
         if (source === 'demo' && sync.value) throw new Error('演示模式不接受真实同步进度。');
+        const nextArchive =
+          next.archive === undefined || next.archive === null
+            ? null
+            : validateArchive(next.archive, String(next.accountId));
+        if (source === 'demo' && nextArchive) throw new Error('演示模式不接受真实账户归档。');
+        let issue = '';
+        if (next.archiveIssue !== undefined) {
+          const value = object(next.archiveIssue);
+          if (
+            source !== 'binance' ||
+            typeof value.code !== 'string' ||
+            typeof value.message !== 'string' ||
+            typeof value.attemptedAt !== 'string' ||
+            !Number.isFinite(Date.parse(value.attemptedAt))
+          )
+            throw new Error('后台归档失败状态无效。');
+          issue = `${value.message}（尝试时间：${new Date(value.attemptedAt).toLocaleString('zh-CN', { hour12: false })}）`;
+        }
+        archive.value = nextArchive;
+        archiveIssue.value = issue;
         list.value = next as ReviewList;
         stale.value = false;
       }
@@ -563,15 +648,31 @@ export function useReviewPage(source: Source) {
         status.value =
           source === 'demo'
             ? '演示归档 · 不是真实交易'
-            : sync.value
-              ? {
-                  running: '正在同步真实历史…',
-                  complete: '历史读取结束 · 交易完整性逐笔确认',
-                  failed: '同步失败 · 已有归档保留，请再次同步补查',
-                  interrupted: '同步中断 · 请再次同步补查',
-                }[sync.value.status]
-              : '尚未同步 · 无真实交易归档';
-      if (sync.value?.status === 'running') polling = setTimeout(() => void read(), 1000);
+            : archiveIssue.value
+              ? `后台归档暂停 · ${archiveIssue.value}`
+              : archive.value
+                ? {
+                    running: '全账户归档正在运行…',
+                    complete: '全账户读取结束 · 完整性按合约与交易分别确认',
+                    failed: '全账户归档失败 · 已有进度保留，下一轮补查',
+                    interrupted: '全账户归档中断 · 服务恢复后补查',
+                  }[archive.value.status]
+                : sync.value
+                  ? {
+                      running: '正在同步真实历史…',
+                      complete: '历史读取结束 · 交易完整性逐笔确认',
+                      failed: '同步失败 · 已有归档保留，请再次同步补查',
+                      interrupted: '同步中断 · 请再次同步补查',
+                    }[sync.value.status]
+                  : '尚未同步 · 无真实交易归档';
+      if (
+        !id &&
+        evidenceOffset === undefined &&
+        (sync.value?.status === 'running' || archive.value?.status === 'running')
+      )
+        polling = setTimeout(() => void read(), 1000);
+      else if (source === 'binance' && !id && evidenceOffset === undefined)
+        polling = setTimeout(() => void read(), 5000);
     } catch (error) {
       if (current !== sequence || controller.signal.aborted) return;
       status.value = error instanceof Error ? error.message : '复盘读取失败，请重试。';
@@ -720,9 +821,12 @@ export function useReviewPage(source: Source) {
     symbol,
     symbols,
     sync,
+    archive,
+    archiveIssue,
     evidence,
     readEvidence: (offset = 0) => read(undefined, false, offset),
     startSync: () => read(undefined, true),
+    startArchive: () => read(undefined, true, undefined, true),
     refresh: () => read(),
     open: (id: string) => read(id),
   };

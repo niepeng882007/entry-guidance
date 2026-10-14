@@ -47,9 +47,16 @@ export type SyncState = {
   pages: number; records: number; pending: HistoryPage[]; completed: HistoryPage[];
   unavailable?: HistoryPage[];
   attemptedAt?: string;
+  errorCode?: string;
   missing: string[]; lastSuccessAt: string | null;
 };
-export type ReviewList = { source: ReviewIdentity['source']; accountId: string | null; syncStatus: 'demo' | 'not-synced' | 'synced'; trades: ReviewSummary[]; filters: ReviewFilters; total: number; page: number; pageSize: number; nextPage: number | null; options: { symbols: string[]; tags: Pick<StyleTag, 'id' | 'name' | 'active'>[] }; sync?: SyncState | null };
+export type ArchiveState = {
+  status: SyncState['status']; startTime: number; endTime: number;
+  discovery: SyncState; symbols: string[]; pendingSymbols: string[]; completedSymbols: string[];
+  missing: string[]; scopeMissing: string[]; lastSuccessAt: string | null; errorCode?: string;
+};
+export type ArchiveProgress = ArchiveState & ReviewIdentity & { contracts: SyncState[] };
+export type ReviewList = { source: ReviewIdentity['source']; accountId: string | null; syncStatus: 'demo' | 'not-synced' | 'synced'; trades: ReviewSummary[]; filters: ReviewFilters; total: number; page: number; pageSize: number; nextPage: number | null; options: { symbols: string[]; tags: Pick<StyleTag, 'id' | 'name' | 'active'>[] }; sync?: SyncState | null; archive?: ArchiveProgress | null; archiveIssue?: { code: string; message: string; attemptedAt: string } };
 
 function signed(value: string, label: string) {
   return parseDecimal(value.startsWith('-') ? value.slice(1) : value, label) * (value.startsWith('-') ? -1n : 1n);
@@ -156,9 +163,14 @@ export class ReviewLedger {
           kind TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL,
           PRIMARY KEY (source, account, symbol, kind, id)
         ) STRICT;
+        CREATE INDEX IF NOT EXISTS history_raw_identity ON history_raw(source, account, kind, id);
         CREATE TABLE IF NOT EXISTS history_sync (
           source TEXT NOT NULL, account TEXT NOT NULL, symbol TEXT NOT NULL, payload TEXT NOT NULL,
           PRIMARY KEY (source, account, symbol)
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS account_archive (
+          source TEXT NOT NULL, account TEXT NOT NULL, payload TEXT NOT NULL,
+          PRIMARY KEY (source, account)
         ) STRICT;
       `);
     } catch (error) { this.db.close(); throw error; }
@@ -291,9 +303,26 @@ export class ReviewLedger {
   }
 
   sync(symbol?: string): SyncState | null {
-    const rows = this.db.prepare('SELECT payload FROM history_sync WHERE source=? AND account=?').all(this.identity.source, this.identity.accountId);
-    const states = rows.map((row) => JSON.parse(String(row.payload)) as SyncState).filter((state) => !symbol || state.symbol === symbol);
+    const states = this.syncs().filter((state) => !symbol || state.symbol === symbol);
     return states.sort((a, b) => (b.attemptedAt ? Date.parse(b.attemptedAt) : b.endTime) - (a.attemptedAt ? Date.parse(a.attemptedAt) : a.endTime))[0] ?? null;
+  }
+
+  syncs(): SyncState[] {
+    return this.db.prepare('SELECT payload FROM history_sync WHERE source=? AND account=? AND symbol<>? ORDER BY symbol').all(this.identity.source, this.identity.accountId, '*').map((row) => JSON.parse(String(row.payload)) as SyncState);
+  }
+
+  archiveState(): ArchiveState | null {
+    const row = this.db.prepare('SELECT payload FROM account_archive WHERE source=? AND account=?').get(this.identity.source, this.identity.accountId);
+    return row ? JSON.parse(String(row.payload)) as ArchiveState : null;
+  }
+
+  saveArchive(state: ArchiveState, records: RawRecord[] = []) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.saveRaw('*', records);
+      this.db.prepare('INSERT INTO account_archive VALUES (?, ?, ?) ON CONFLICT(source, account) DO UPDATE SET payload=excluded.payload').run(this.identity.source, this.identity.accountId, JSON.stringify(state));
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
   raw(symbol: string): RawRecord[] {
@@ -304,8 +333,19 @@ export class ReviewLedger {
     const { source, accountId } = this.identity;
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      for (const record of records) {
-        const existing = this.db.prepare('SELECT payload FROM history_raw WHERE source=? AND account=? AND symbol=? AND kind=? AND id=?').get(source, accountId, state.symbol, record.kind, record.id);
+      this.saveRaw(state.symbol, records);
+      this.db.prepare('INSERT INTO history_sync VALUES (?, ?, ?, ?) ON CONFLICT(source, account, symbol) DO UPDATE SET payload=excluded.payload').run(source, accountId, state.symbol, JSON.stringify(state));
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
+  private saveRaw(symbol: string, records: RawRecord[]) {
+    const { source, accountId } = this.identity;
+    for (const record of records) {
+        const recordSymbol = record.kind === 'income' && typeof record.payload.symbol === 'string' ? record.payload.symbol : symbol;
+        const existing = record.kind === 'income'
+          ? this.db.prepare('SELECT payload FROM history_raw WHERE source=? AND account=? AND kind=? AND id=?').get(source, accountId, record.kind, record.id)
+          : this.db.prepare('SELECT payload FROM history_raw WHERE source=? AND account=? AND symbol=? AND kind=? AND id=?').get(source, accountId, recordSymbol, record.kind, record.id);
         if (existing && ['trades', 'income'].includes(record.kind)) {
           const previous = JSON.parse(String(existing.payload)) as RawRecord;
           const fields = record.kind === 'trades' ? ['symbol', 'id', 'orderId', 'side', 'positionSide', 'qty', 'price', 'time', 'realizedPnl', 'commission', 'commissionAsset'] : ['symbol', 'tranId', 'incomeType', 'time', 'income', 'asset', 'tradeId'];
@@ -316,11 +356,8 @@ export class ReviewLedger {
             return ['id', 'orderId', 'tranId', 'tradeId'].includes(field) ? String(before) !== String(after) : before !== after;
           })) throw new Error('来源事实冲突，保留已有账本。');
         }
-        this.db.prepare('INSERT INTO history_raw VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(source, account, symbol, kind, id) DO UPDATE SET payload=excluded.payload').run(source, accountId, state.symbol, record.kind, record.id, JSON.stringify(record));
-      }
-      this.db.prepare('INSERT INTO history_sync VALUES (?, ?, ?, ?) ON CONFLICT(source, account, symbol) DO UPDATE SET payload=excluded.payload').run(source, accountId, state.symbol, JSON.stringify(state));
-      this.db.exec('COMMIT');
-    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+        this.db.prepare('INSERT INTO history_raw VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(source, account, symbol, kind, id) DO UPDATE SET payload=excluded.payload').run(source, accountId, recordSymbol, record.kind, record.id, JSON.stringify(record));
+    }
   }
 
   project(symbol: string, trades: ReviewTrade[]) {
