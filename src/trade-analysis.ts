@@ -4,6 +4,7 @@ import { reviewStatistics, type StatisticsSnapshot } from './review-statistics.t
 import { marketIntervals, type MarketArchive } from './trade-market.ts';
 import { AnalysisError, configuredModel, modelCapacity, callModel, modelRequest, modelUsage, validateReport, segmentSummaries, summaryCitations, type ModelConfig, type ModelCapacity, type ModelUsage, type AnalysisReport, type EvidenceRecord } from './analysis-model.ts';
 import type { ReviewFilters } from './review-filters.ts';
+import { validateBatchReport } from './analysis-contract.ts';
 
 export type AnalysisSnapshot = { trade: ReviewTrade | null; trades?: ReviewTrade[]; coverage?: { tradeId: string; missing: string[] }[]; notes: { tradeId?: string; id: string; version: number; updatedAt: string; entryReason: string; exitReason: string; executionProblem: string; improvement: string; freeNote: string }[]; tags: { id: string; name: string }[]; markets: MarketArchive[]; statistics: StatisticsSnapshot; missing: string[]; frozenAt: string };
 export type AnalysisRequest = { id: string; stage: 'evidence' | 'synthesis'; records: EvidenceRecord[]; segments: string[]; status: 'pending' | 'running' | 'complete' | 'failed'; report: AnalysisReport | null; usage: ModelUsage | null; attempts: { usage: ModelUsage | null; status: 'running' | 'complete' | 'failed' | 'cancelled' | 'interrupted' }[] };
@@ -46,12 +47,13 @@ function evidenceRecords(snapshot: AnalysisSnapshot): EvidenceRecord[] {
     return { trade: { ...trade, evidence: knownEvidence }, rawEvidence };
   }
   const excluded = new Set(statistics.pnl.excluded.map((row) => row.tradeId));
+  const selectedIds = new Set(snapshot.trades?.map((trade) => trade.id) ?? [snapshot.trade!.id]);
   const values = { ...(snapshot.trade ? cleanTrade(snapshot.trade) : { trades: snapshot.trades!.map((trade) => ({ tradeId: trade.id, performanceEligible: !excluded.has(trade.id), ...cleanTrade(trade) })), coverage: snapshot.coverage }), notes: snapshot.notes, tags: snapshot.tags, markets: snapshot.markets.map(({ source: _s, accountId: _a, evidence: _e, cacheKey: _k, ...market }) => market), statistics, missing: snapshot.missing };
   const records: EvidenceRecord[] = [];
   function visit(value: unknown, path: string, tradeId = snapshot.trade?.id ?? '$scope', time: string | null = snapshot.trade?.openedAt ?? null) {
     if (value && typeof value === 'object' && Object.keys(value).length) {
       const row = value as Record<string, unknown>;
-      if (typeof row.tradeId === 'string') tradeId = row.tradeId;
+      if (typeof row.tradeId === 'string' && selectedIds.has(row.tradeId)) tradeId = row.tradeId;
       else if (path.startsWith('/statistics/trades/') && typeof row.id === 'string') tradeId = row.id;
       if (typeof row.time === 'string') time = row.time;
       else if (typeof row.time === 'number') time = new Date(row.time).toISOString();
@@ -63,7 +65,7 @@ function evidenceRecords(snapshot: AnalysisSnapshot): EvidenceRecord[] {
         if (['account', 'accountId', 'reviewAccountId', 'raw'].includes(key)) continue;
         visit(item, `${path}/${key}`, tradeId, time);
       }
-    } else records.push({ ...(!snapshot.trade && snapshot.trades!.some((trade) => trade.id === tradeId) ? { pnlEligible: !excluded.has(tradeId) } : {}), id: `e${records.length + 1}`, path, kind: path.startsWith('/notes/') || path.startsWith('/tags/') ? 'user' : 'fact', tradeId, time, value });
+    } else records.push({ ...(!snapshot.trade && selectedIds.has(tradeId) ? { pnlEligible: !excluded.has(tradeId) } : {}), id: `e${records.length + 1}`, path, kind: path.startsWith('/notes/') || path.startsWith('/tags/') ? 'user' : 'fact', tradeId, time, value });
   }
   visit(values, '');
   return records;
@@ -185,7 +187,10 @@ export class TradeAnalysis {
       if (raw.status !== 'completed' || !Array.isArray(raw.output) || raw.output.some((item) => item.status && item.status !== 'completed')) throw new AnalysisError('模型输出未完成或被截断。');
       const text = raw.output.filter((item) => item.type === 'message').flatMap((item) => item.content ?? []).filter((item) => item.type === 'output_text').map((item) => item.text).join('');
       if (this.config?.apiKey && text.includes(this.config.apiKey)) throw new AnalysisError('模型内容包含敏感配置值，报告未保存。');
-      request.report = validateReport(JSON.parse(text), [...request.records, ...summaryCitations(summaries)], task.snapshot.trades?.map((trade) => trade.id) ?? [task.tradeId]); request.status = 'complete'; request.attempts.at(-1)!.status = 'complete';
+      const report = validateReport(JSON.parse(text), [...request.records, ...summaryCitations(summaries)], task.snapshot.trades?.map((trade) => trade.id) ?? [task.tradeId]);
+      const consumed = new Set(task.requests.flatMap((row) => row.segments));
+      if (request.stage === 'synthesis' && task.requests.filter((row) => !consumed.has(row.id)).length === 1) validateBatchReport(task, report);
+      request.report = report; request.status = 'complete'; request.attempts.at(-1)!.status = 'complete';
       this.save(task);
       }
       throw new AnalysisError('任务已取消或中断；已完成分段保留。');

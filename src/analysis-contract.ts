@@ -1,5 +1,5 @@
 import type { AnalysisTask } from './trade-analysis.ts';
-import { validateReport, segmentSummaries, summaryCitations } from './analysis-model.ts';
+import { AnalysisError, reportFields, validateReport, segmentSummaries, summaryCitations, type AnalysisReport } from './analysis-model.ts';
 
 export function validateAnalysisTask(value: unknown, trade: { id: string; source: string; accountId: string }): AnalysisTask {
   if (!value || typeof value !== 'object') throw new Error('分析任务格式无效。');
@@ -105,7 +105,25 @@ export function validateAnalysisTask(value: unknown, trade: { id: string; source
       JSON.stringify(task.report) !== JSON.stringify(roots[0]!.report)
     )
       throw new Error('整体分析尚未完整。');
+    validateBatchReport(task, task.report);
   } else if (task.report !== null) throw new Error('未完成任务不能显示完整报告。');
   return task;
 }
 
+
+// A whole segment does not identify which trade or metric supports a batch conclusion.
+export function validateBatchReport(task: AnalysisTask, report: AnalysisReport) {
+  if (task.tradeId !== '$batch') return;
+  const tradeIds = new Set(task.snapshot.trades!.map((trade) => trade.id));
+  const anchors = new Map(task.records.map((record) => [record.id, tradeIds.has(record.tradeId) || /^\/statistics\/(pnl|duration|curve|groups|trades|total)(?:\/|$)/.test(record.path)]));
+  for (const request of task.requests) {
+    if (request.status !== 'complete') continue;
+    const summary = segmentSummaries([request])[0]!;
+    for (const field of reportFields) for (const item of summary.report[field])
+      anchors.set(item.id, item.refs.some((ref) => anchors.get(ref) === true));
+    for (const item of summary.styleSuggestions)
+      anchors.set(item.id, item.refs.some((ref) => anchors.get(ref) === true));
+  }
+  for (const field of reportFields) for (const item of report[field])
+    if (!item.refs.some((ref) => anchors.get(ref) === true)) throw new AnalysisError('批量结论必须引用可追溯到具体交易或统计分组的分段条目，不能只引用整个分段。');
+}

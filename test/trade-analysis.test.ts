@@ -436,3 +436,31 @@ test('batch HTTP protects login, origin, input filters and single-trade task bou
   assert.equal((await fetch(single, { method: 'POST', headers: { Cookie: application.cookie, Origin: application.base, 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'continue', taskId: task.id }) })).status, 404);
   assert.equal((await (await fetch(single, { headers: { Cookie: application.cookie } })).json()).tasks.length, 0);
 });
+
+test('raw exchange tradeId stays an evidence value and cannot change a batch record cycle or sample eligibility', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'batch-raw-id-')); t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'demo.sqlite'); const ids = seedReviewFilters(path);
+  const ledger = new ReviewLedger(path, { source: 'demo', accountId: 'demo-account' });
+  const trade = ledger.get(ids.pending)!;
+  trade.evidence.raw = [{ kind: 'income', id: 'fee-income', time: Date.parse(trade.openedAt!), payload: { symbol: trade.symbol, tradeId: '21', income: '-0.01', incomeType: 'COMMISSION', asset: 'USDT', time: Date.parse(trade.openedAt!) } }];
+  ledger.project('SOLUSDT', ledger.list().filter((row) => row.symbol === 'SOLUSDT').map((row) => row.id === trade.id ? trade : ledger.get(row.id)!)); ledger.close();
+  const application = await app(t, simulatedModel(), path, '$batch');
+  await application.post({ ...startInput, query: 'symbol=SOLUSDT' }); const task = await finished(application);
+  assert.equal(task.status, 'complete');
+  const record = task.records.find((row) => row.path.endsWith('/payload/tradeId'))!;
+  assert.equal(record.value, '21'); assert.equal(record.tradeId, ids.pending); assert.equal(record.pnlEligible, false);
+  const income = task.records.find((row) => row.path.endsWith('/payload/income'))!;
+  assert.equal(income.tradeId, ids.pending); assert.equal(income.pnlEligible, false);
+});
+
+for (const reference of ['whole-segment', 'unanchored-item']) test(`batch final conclusions reject ${reference} references that cannot identify a trade or statistics group`, async (t) => {
+  const application = await app(t, simulatedModel(1000000, async (body) => {
+    const input = JSON.parse(String(body.input));
+    if (input.stage === 'synthesis') return modelResponse(body, { text: JSON.stringify({ observations: [{ text: '只引用整体分段，没有具体依据', kind: 'inference', timing: 'unknown', refs: [reference === 'whole-segment' ? input.summaries[0].id : input.summaries[0].report.observations[0].id] }], evidence: [], improvements: [], nextChecks: [] }) });
+    if (reference === 'unanchored-item') return modelResponse(body, { text: JSON.stringify({ observations: [{ text: '只有一般缺项描述', kind: 'inference', timing: 'unknown', refs: [input.records.find((row: { path: string }) => row.path === '/missing/0').id] }], evidence: [], improvements: [], nextChecks: [] }) });
+    return modelResponse(body);
+  }), undefined, '$batch');
+  await application.post(startInput); const task = await finished(application);
+  assert.equal(task.status, 'failed'); assert.equal(task.report, null);
+  assert.equal(task.requests[0]!.status, 'complete');
+});

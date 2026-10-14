@@ -92,7 +92,7 @@ function coverage(task: AnalysisTask, request: AnalysisTask['requests'][number])
     <p class="muted">DeepSeek · deepseek-v4-pro · high。仅点击发起时调用；可能产生费用。</p>
     <p v-if="batch" class="muted">
       当前选择
-      {{ unavailable ? '待确认' : (total ?? '待确认') }}
+      {{ selectionCount }}
       笔，使用全部筛选结果，与当前页无关。每次最多 100 笔，无调用次数限制。
     </p>
     <p v-if="batch && (total ?? 0) > 100" class="error">当前范围超过 100 笔，请缩小筛选范围。</p>

@@ -9,7 +9,7 @@ export function simulatedModel(contextWindow = 1000000, respond?: (body: Record<
 }
 export function modelResponse(body: Record<string, unknown>, options: { status?: string; usage?: unknown; text?: string } = {}) {
   const input = JSON.parse(String(body.input));
-  const ref = input.records[0]?.id ?? input.summaries[0]?.id;
+  const ref = input.records[0]?.id ?? input.summaries[0]?.report.observations[0]?.id;
   const report = { observations: [{ text: input.stage === 'synthesis' ? '依据分段结果复盘；无法判断动机或未记录时点。' : '依据记录复盘；无法判断动机或未记录时点。', kind: 'inference', timing: 'unknown', refs: [ref] }], evidence: [], improvements: [], nextChecks: [] };
   return new Response(JSON.stringify({ status: options.status ?? 'completed', usage: options.usage, output: [{ type: 'message', status: 'completed', content: [{ type: 'output_text', text: options.text ?? JSON.stringify(report) }] }] }));
 }
