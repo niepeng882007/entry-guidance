@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ReviewTrade } from '../src/review-ledger.ts';
+import PlanComparison from './components/PlanComparison.vue';
 import ReviewNotes from './components/ReviewNotes.vue';
 import { nextTick } from 'vue';
 import { useReviewPage } from './useReviewPage.ts';
@@ -263,7 +264,15 @@ async function show(id: string) {
           >（截至 {{ time(trade.observedAt) }}）</span
         >
       </p>
-      <p class="muted">历史杠杆：未知 · 保证金模式：未知 · 原方案：未关联</p>
+      <p class="muted">历史杠杆：未知 · 保证金模式：未知</p>
+      <PlanComparison
+        v-if="trade.planComparison"
+        :comparison="trade.planComparison"
+        :base-asset="trade.baseAsset"
+      />
+      <p v-else class="muted">
+        原方案：未关联 · 缺少原方案对照证据，预算、入场与历史止损偏离无法判断。
+      </p>
       <dl class="details details--card">
         <div class="details__row">
           <dt class="details__term">已实现盈亏</dt>
