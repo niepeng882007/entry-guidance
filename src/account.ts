@@ -20,7 +20,7 @@ export function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-const integerIdPaths = ['/api/v3/account', '/fapi/v1/openOrders', '/fapi/v1/userTrades', '/fapi/v1/allOrders', '/fapi/v1/allAlgoOrders', '/fapi/v1/income', '/fapi/v1/forceOrders'];
+const integerIdPaths = ['/api/v3/account', '/fapi/v1/openOrders', '/fapi/v1/openAlgoOrders', '/fapi/v1/userTrades', '/fapi/v1/allOrders', '/fapi/v1/allAlgoOrders', '/fapi/v1/income', '/fapi/v1/forceOrders'];
 
 const transport: Transport = (url, headers, signal) => new Promise((resolve, reject) => {
   const request = get(url, { headers, signal }, (response) => {

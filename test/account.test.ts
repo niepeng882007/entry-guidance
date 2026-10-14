@@ -276,7 +276,7 @@ test('read-only failures are explicit and never expose a balance or upstream sec
       },
     });
     const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-    for (const path of ['/api/account', '/api/account/assets', '/api/account/positions', '/api/account/orders']) {
+    for (const path of ['/api/account', '/api/account/assets', '/api/account/positions', '/api/account/orders', '/api/account/conditional-orders']) {
       const result = await fetch(base + path, { headers: { Cookie: cookie } });
       assert.equal(result.status, 502);
       const body = await result.json();
@@ -302,7 +302,7 @@ test('unknown routes, methods and URLs never become signed requests', async (t) 
     assert.equal((await fetch(base + path, { headers: { Cookie: cookie } })).status, 404);
   }
   for (const method of ['POST', 'PUT', 'DELETE']) {
-    for (const path of ['/api/account', '/api/account/assets', '/api/account/positions', '/api/account/orders', '/account']) {
+    for (const path of ['/api/account', '/api/account/assets', '/api/account/positions', '/api/account/orders', '/api/account/conditional-orders', '/account']) {
       assert.equal((await fetch(base + path, { method, headers: { Cookie: cookie, Origin: base } })).status, 405);
     }
   }
@@ -542,4 +542,106 @@ test('ordinary orders exclude known contracts outside USDT perpetual scope witho
   unexpected = false;
   missingMetadata = true;
   assert.equal((await read()).status, 502);
+});
+
+
+test('conditional orders preserve whole-account facts, close-all semantics and raw int64 identifiers', async (t) => {
+  const fixed = { symbol: 'BTCUSDT', algoId: '9007199254740993123', algoType: 'CONDITIONAL', side: 'SELL', positionSide: 'LONG', orderType: 'STOP_MARKET', algoStatus: 'NEW', quantity: '0.12345678', triggerPrice: '58000.12345678', workingType: 'MARK_PRICE', reduceOnly: true, closePosition: false, priceProtect: true, createTime: 1700000000000, updateTime: 1700000000100 };
+  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
+    if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+    if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
+    if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
+    if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: ['BTCUSDT', 'ETHUSDT'].map((symbol) => ({ symbol, quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'PERPETUAL' })) } };
+    assert.equal(url.pathname, '/fapi/v1/openAlgoOrders');
+    assert.equal(url.searchParams.has('symbol'), false);
+    return { status: 200, body: JSON.stringify([fixed,
+      { ...fixed, algoId: '2', side: 'BUY', positionSide: 'SHORT', orderType: 'TAKE_PROFIT_MARKET', closePosition: true, quantity: '0', workingType: 'CONTRACT_PRICE' },
+      { ...fixed, symbol: 'ETHUSDT', algoId: '3', orderType: 'TAKE_PROFIT', price: '2100.00000001', quantity: '1.00000001', executedQty: '1', timeInForce: 'GTC' },
+    ]).replace('"9007199254740993123"', '9007199254740993123') };
+  } });
+  const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+  const response = await fetch(`${base}/api/account/conditional-orders`, { headers: { Cookie: cookie } });
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.source, 'binance');
+  assert.ok(Number.isFinite(Date.parse(data.queriedAt)));
+  const long = data.orders.find((o: { algoId: string }) => o.algoId === fixed.algoId);
+  assert.equal(long.quantity, '0.12345678');
+  assert.equal(long.executedQty, null);
+  assert.equal(long.remainingQty, null);
+  assert.equal(long.price, null);
+  assert.equal(long.triggerPrice, '58000.12345678');
+  assert.equal(long.reduceOnly, true);
+  assert.equal(long.priceProtect, true);
+  const close = data.orders.find((o: { algoId: string }) => o.algoId === '2');
+  assert.equal(close.closePosition, true);
+  assert.equal(close.quantity, null);
+  assert.equal(close.executedQty, null);
+  assert.equal(close.remainingQty, null);
+  assert.equal(close.workingType, 'CONTRACT_PRICE');
+  const limit = data.orders.find((o: { algoId: string }) => o.algoId === '3');
+  assert.equal(limit.remainingQty, '0.00000001');
+  assert.equal(limit.price, '2100.00000001');
+  assert.equal((await fetch(`${base}/api/account/conditional-orders`)).status, 401);
+  assert.equal((await fetch(`${base}/api/account/conditional-orders?symbol=BTCUSDT`, { headers: { Cookie: cookie } })).status, 404);
+});
+
+test('conditional orders keep unknown settings and trailing facts while rejecting invalid or unconfirmed lists', async (t) => {
+  const valid: Record<string, unknown> = { symbol: 'BTCUSDT', algoId: '123', algoType: 'CONDITIONAL', side: 'SELL', positionSide: 'BOTH', orderType: 'TRAILING_STOP_MARKET', algoStatus: 'NEW', quantity: '0.00000001', activatePrice: '60000.12345678', callbackRate: '0.3', workingType: 'OTHER_PRICE' };
+  let row = { ...valid }, failed = false, missingMetadata = false, duplicate = false, empty = false;
+  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
+    if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+    if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
+    if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
+    if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: [
+      missingMetadata ? { symbol: 'BTCUSDT' } : { symbol: 'BTCUSDT', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'PERPETUAL' },
+      { symbol: 'ETHUSDC', quoteAsset: 'USDC', marginAsset: 'USDC', contractType: 'PERPETUAL' },
+      { symbol: 'BTCUSDT_261225', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'CURRENT_QUARTER' },
+    ] } };
+    assert.equal(url.pathname, '/fapi/v1/openAlgoOrders');
+    if (failed) return { status: 429, body: { code: -1003, msg: 'controlled-test-secret' } };
+    return { status: 200, body: empty ? [] : [row, ...(duplicate ? [row] : []), { symbol: 'ETHUSDC' }, { symbol: 'BTCUSDT_261225' }] };
+  } });
+  const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+  const read = () => fetch(`${base}/api/account/conditional-orders`, { headers: { Cookie: cookie } });
+  let data = await (await read()).json();
+  assert.equal(data.orders.length, 1);
+  assert.equal(data.orders[0].activatePrice, '60000.12345678');
+  assert.equal(data.orders[0].callbackRate, '0.30000000');
+  assert.equal(data.orders[0].triggerPrice, null);
+  assert.equal(data.orders[0].workingType, 'OTHER_PRICE');
+  for (const field of ['closePosition', 'priceProtect', 'reduceOnly', 'timeInForce', 'executedQty', 'remainingQty', 'createdAt', 'updatedAt']) assert.equal(data.orders[0][field], null);
+  for (const patch of [{ quantity: '-1' }, { quantity: '0.000000001' }, { quantity: '0', closePosition: false }, { executedQty: '1' }, { executedQty: '0', remainingQty: '0' }, { algoId: 9007199254740992 }, { priceProtect: 'false' }, { workingType: [] }, { createTime: -1 }, { symbol: 'UNKNOWNUSDT' }, { orderType: 'LIMIT' }]) {
+    row = { ...valid, ...patch };
+    const response = await read();
+    assert.equal(response.status, 502, JSON.stringify(patch));
+    data = await response.json();
+    assert.equal(data.orders, undefined);
+    assert.equal(data.code, 'invalid_response');
+  }
+  row = { ...valid, orderType: 'STOP', price: '59000.00000001', triggerPrice: '59500.00000001', timeInForce: 'GTD', executedQty: '0' };
+  data = await (await read()).json();
+  assert.equal(data.orders[0].remainingQty, '0.00000001');
+  assert.equal(data.orders[0].timeInForce, 'GTD');
+  row = { ...valid, closePosition: true, quantity: '0', executedQty: '0.1', remainingQty: '0.2', workingType: undefined };
+  data = await (await read()).json();
+  assert.equal(data.orders[0].quantity, null);
+  assert.equal(data.orders[0].executedQty, '0.10000000');
+  assert.equal(data.orders[0].remainingQty, '0.20000000');
+  assert.equal(data.orders[0].workingType, null);
+  duplicate = true;
+  assert.equal((await read()).status, 502);
+  duplicate = false;
+  empty = true;
+  assert.deepEqual((await (await read()).json()).orders, []);
+  empty = false;
+  missingMetadata = true;
+  assert.equal((await read()).status, 502);
+  missingMetadata = false;
+  failed = true;
+  const response = await read();
+  data = await response.json();
+  assert.equal(data.code, 'rate_limited');
+  assert.equal(data.orders, undefined);
+  assert.doesNotMatch(JSON.stringify(data), /controlled-test|signature/);
 });

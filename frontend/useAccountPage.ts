@@ -1,4 +1,4 @@
-import type { OrdersSnapshot } from '../src/orders.ts';
+import type { OrdersSnapshot, ConditionalOrdersSnapshot } from '../src/orders.ts';
 import { onMounted, onUnmounted, ref, shallowRef, type ShallowRef } from 'vue';
 import { parseDecimal } from '../public/draft.js';
 import type { readAccountAssets } from '../src/account.ts';
@@ -146,6 +146,92 @@ function validateOrders(value: unknown, expectedSource: Assets['source']): Order
   return data as OrdersSnapshot;
 }
 
+function validateConditionalOrders(
+  value: unknown,
+  expectedSource: Assets['source'],
+): ConditionalOrdersSnapshot {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new Error('条件委托响应无效。');
+  const data = value as Record<string, unknown>;
+  if (data.source !== expectedSource || !Array.isArray(data.orders))
+    throw new Error('条件委托来源或列表无效。');
+  queryTime(data.queriedAt);
+  const keys = new Set<string>();
+  for (const item of data.orders) {
+    if (!item || typeof item !== 'object' || Array.isArray(item))
+      throw new Error('条件委托记录无效。');
+    const o = item as Record<string, unknown>;
+    if (
+      typeof o.symbol !== 'string' ||
+      !/^[\p{L}\p{N}_]{1,30}USDT$/u.test(o.symbol) ||
+      typeof o.algoId !== 'string' ||
+      !/^\d{1,20}$/.test(o.algoId) ||
+      BigInt(o.algoId) <= 0n ||
+      (o.side !== 'BUY' && o.side !== 'SELL') ||
+      (o.positionSide !== 'BOTH' && o.positionSide !== 'LONG' && o.positionSide !== 'SHORT') ||
+      typeof o.type !== 'string' ||
+      ![
+        'STOP',
+        'STOP_MARKET',
+        'TAKE_PROFIT',
+        'TAKE_PROFIT_MARKET',
+        'TRAILING_STOP_MARKET',
+      ].includes(o.type) ||
+      typeof o.status !== 'string' ||
+      !/^[A-Z][A-Z0-9_]{0,39}$/.test(o.status)
+    )
+      throw new Error('条件委托标识、类型或状态无效。');
+    const key = `${o.symbol}:${o.algoId}`;
+    if (keys.has(key)) throw new Error('条件委托记录重复。');
+    keys.add(key);
+    for (const field of [
+      'quantity',
+      'executedQty',
+      'remainingQty',
+      'price',
+      'triggerPrice',
+      'activatePrice',
+      'callbackRate',
+    ])
+      if (o[field] !== null && decimal(o[field]) < 0n) throw new Error('条件委托数值无效。');
+    for (const field of ['reduceOnly', 'closePosition', 'priceProtect'])
+      if (o[field] !== null && typeof o[field] !== 'boolean') throw new Error('条件委托设置无效。');
+    if (
+      (o.closePosition === true && o.quantity !== null) ||
+      (o.closePosition === false && o.quantity === null) ||
+      (o.quantity !== null && decimal(o.quantity) <= 0n)
+    )
+      throw new Error('条件委托数量语义无效。');
+    if (
+      o.quantity !== null &&
+      o.executedQty !== null &&
+      (decimal(o.executedQty) > decimal(o.quantity) ||
+        o.remainingQty === null ||
+        decimal(o.remainingQty) !== decimal(o.quantity) - decimal(o.executedQty))
+    )
+      throw new Error('条件委托余量无效。');
+    if (
+      o.quantity !== null &&
+      o.remainingQty !== null &&
+      decimal(o.remainingQty) > decimal(o.quantity)
+    )
+      throw new Error('条件委托余量无效。');
+    for (const field of ['workingType', 'timeInForce'])
+      if (
+        o[field] !== null &&
+        (typeof o[field] !== 'string' || !/^[A-Z][A-Z0-9_]{0,39}$/.test(o[field]))
+      )
+        throw new Error('条件委托参数无效。');
+    for (const field of ['createdAt', 'updatedAt'])
+      if (
+        o[field] !== null &&
+        (typeof o[field] !== 'string' || !Number.isFinite(Date.parse(o[field])))
+      )
+        throw new Error('条件委托时间无效。');
+  }
+  return data as ConditionalOrdersSnapshot;
+}
+
 function validateMarket<T extends LastPrice | Funding>(
   value: unknown,
   kind: 'last' | 'funding',
@@ -195,6 +281,9 @@ export function useAccountPage(expectedSource: Assets['source']) {
   const orders = shallowRef<OrdersSnapshot | null>(null);
   const ordersStale = ref(true);
   const ordersStatus = ref('等待首次普通委托查询');
+  const conditionalOrders = shallowRef<ConditionalOrdersSnapshot | null>(null);
+  const conditionalOrdersStale = ref(true);
+  const conditionalOrdersStatus = ref('等待首次条件委托查询');
   const attemptedAt = ref('');
   const busy = ref(false);
   const stale = ref(true);
@@ -291,24 +380,32 @@ export function useAccountPage(expectedSource: Assets['source']) {
         funding.value = { ...funding.value, stale: true };
       }
     }
-    async function ordersRead() {
+    async function ordersRead(conditional = false) {
+      const name = conditional ? '条件委托' : '普通委托';
+      const snapshot = conditional ? conditionalOrders : orders;
+      const stale = conditional ? conditionalOrdersStale : ordersStale;
+      const status = conditional ? conditionalOrdersStatus : ordersStatus;
       try {
-        const data = await request('/api/account/orders');
+        const data = await request(
+          conditional ? '/api/account/conditional-orders' : '/api/account/orders',
+        );
         if (!current()) return;
-        const next = validateOrders(data, expectedSource);
-        if (orders.value && Date.parse(next.queriedAt) < Date.parse(orders.value.queriedAt))
-          throw new Error('普通委托响应早于上次成功查询。');
-        orders.value = next;
-        ordersStale.value = false;
-        ordersStatus.value = `${expectedSource === 'demo' ? '模拟' : 'Binance '}普通委托查询成功 · 仅代表查询时点`;
+        const next = conditional
+          ? validateConditionalOrders(data, expectedSource)
+          : validateOrders(data, expectedSource);
+        if (snapshot.value && Date.parse(next.queriedAt) < Date.parse(snapshot.value.queriedAt))
+          throw new Error(`${name}响应早于上次成功查询。`);
+        snapshot.value = next;
+        stale.value = false;
+        status.value = `${expectedSource === 'demo' ? '模拟' : 'Binance '}${name}查询成功 · 仅代表查询时点`;
       } catch (error) {
         if (!current()) return;
-        ordersStale.value = true;
-        ordersStatus.value = `${error instanceof Error ? error.message : '普通委托读取失败。'} ${orders.value ? '上次普通委托已过期，原列表与成功时间保留。' : '尚无成功普通委托数据。'}`;
+        stale.value = true;
+        status.value = `${error instanceof Error ? error.message : `${name}读取失败。`} ${snapshot.value ? `上次${name}已过期，原列表与成功时间保留。` : `尚无成功${name}数据。`}`;
       }
     }
     try {
-      await Promise.all([assetsRead(), positionsRead(), ordersRead()]);
+      await Promise.all([assetsRead(), positionsRead(), ordersRead(), ordersRead(true)]);
     } finally {
       if (pending === controller) {
         pending = undefined;
@@ -325,6 +422,8 @@ export function useAccountPage(expectedSource: Assets['source']) {
     busy.value = false;
     stale.value = true;
     positionsStale.value = true;
+    conditionalOrdersStale.value = true;
+    conditionalOrdersStatus.value = `${reason} ${conditionalOrders.value ? '上次条件委托已过期。' : '尚无成功条件委托数据。'}`;
     ordersStale.value = true;
     ordersStatus.value = `${reason} ${orders.value ? '上次普通委托已过期。' : '尚无成功普通委托数据。'}`;
     last.value = { ...last.value, stale: true };
@@ -378,6 +477,9 @@ export function useAccountPage(expectedSource: Assets['source']) {
     positions,
     positionsStale,
     positionsStatus,
+    conditionalOrders,
+    conditionalOrdersStale,
+    conditionalOrdersStatus,
     orders,
     ordersStale,
     ordersStatus,
