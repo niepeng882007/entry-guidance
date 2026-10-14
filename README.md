@@ -37,7 +37,7 @@ APP_MODE=real pnpm start
 
 ## 前端开发与检查
 
-电脑本机开发运行 `APP_MODE=demo pnpm dev`，使用本机 HTTP 的 `APP_ORIGIN`（默认 `http://127.0.0.1:3000`）。Vue/样式热更新通过本机 24678 端口连接，登录与接口仍由原 Node 后端提供；修改后端须重启。已有手机 HTTPS 配置时，可用 `APP_ORIGIN=http://127.0.0.1:3000 APP_MODE=demo pnpm dev` 临时覆盖访问地址。
+电脑本机开发运行 `APP_MODE=demo pnpm dev`，使用本机 HTTP 的 `APP_ORIGIN`（默认 `http://127.0.0.1:3000`）。Vue/样式热更新通过当前 HTTP 端口连接，登录与接口仍由原 Node 后端提供；修改后端或其导入的共享计算模块会自动重启，内存会话和未保存的本单状态随之失效，须刷新并重新登录。多个 worktree 同时开发时各自设置不同的 `APP_ORIGIN` 端口即可，不再共用固定 HMR 端口。已有手机 HTTPS 配置时，可用 `APP_ORIGIN=http://127.0.0.1:3000 APP_MODE=demo pnpm dev` 临时覆盖访问地址。
 
 首次运行浏览器测试前执行 `pnpm exec playwright install chromium webkit`；之后 `pnpm check` 完成类型、规范、格式、生产构建、Node 与浏览器测试。`pnpm format` 仅格式化迁移涉及的前端、工具配置和浏览器测试。定向检查与架构入口见 [开发与验证](docs/development.md)。
 
