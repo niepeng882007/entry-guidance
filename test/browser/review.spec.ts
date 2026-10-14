@@ -643,7 +643,8 @@ test.describe('review loading with classic scrollbars', () => {
       );
       await navigate(page, '首页');
       await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
-      expect(await measure()).toEqual(loading);
+      // WebKit can expose the new heading before its forced scrollbar layout settles.
+      await expect.poll(measure).toEqual(loading);
     });
   }
 });

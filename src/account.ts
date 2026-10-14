@@ -74,6 +74,8 @@ const endpoints = {
   algoHistory: 'https://fapi.binance.com/fapi/v1/allAlgoOrders',
   income: 'https://fapi.binance.com/fapi/v1/income',
   forceOrders: 'https://fapi.binance.com/fapi/v1/forceOrders',
+  klines: 'https://fapi.binance.com/fapi/v1/klines',
+  markKlines: 'https://fapi.binance.com/fapi/v1/markPriceKlines',
 } as const;
 
 export function signBinanceRequest(config: AccountConfig, url: URL) {
@@ -83,13 +85,20 @@ export function signBinanceRequest(config: AccountConfig, url: URL) {
   url.searchParams.set('signature', createHmac('sha256', config.apiSecret).update(url.searchParams.toString()).digest('hex'));
 }
 
-export async function readBinance(config: AccountConfig, operation: keyof typeof endpoints, signal: AbortSignal, symbol?: string, period?: { startTime: number; endTime: number; page?: number; autoCloseType?: 'LIQUIDATION' | 'ADL' }, priority: ReadPriority = 'foreground'): Promise<unknown> {
+export async function readBinance(config: AccountConfig, operation: keyof typeof endpoints, signal: AbortSignal, symbol?: string, period?: { startTime: number; endTime: number; page?: number; autoCloseType?: 'LIQUIDATION' | 'ADL' }, priority: ReadPriority = 'foreground', candlePeriod?: { interval: string; startTime: number; endTime: number }): Promise<unknown> {
   const url = new URL(endpoints[operation]);
-  const isPublic = operation === 'exchange' || operation === 'book' || operation === 'mark' || operation === 'last' || operation === 'time';
+  const isPublic = ['exchange', 'book', 'mark', 'last', 'time', 'klines', 'markKlines'].includes(operation);
   if (symbol !== undefined) {
-    if (!/^[\p{L}\p{N}_]{1,30}USDT$/u.test(symbol) || !['book', 'mark', 'last', 'brackets', 'fee', 'orders', 'algoOrders', 'positions', 'trades', 'history', 'algoHistory', 'income', 'forceOrders'].includes(operation)) throw new AccountError('invalid_symbol', '币种参数无效。', 400);
+    if (!/^[\p{L}\p{N}_]{1,30}USDT$/u.test(symbol) || !['book', 'mark', 'last', 'brackets', 'fee', 'orders', 'algoOrders', 'positions', 'trades', 'history', 'algoHistory', 'income', 'forceOrders', 'klines', 'markKlines'].includes(operation)) throw new AccountError('invalid_symbol', '币种参数无效。', 400);
     url.searchParams.set('symbol', symbol);
   }
+  if (operation === 'klines' || operation === 'markKlines') {
+    if (!symbol || !candlePeriod || period || !['1m', '5m', '15m', '1h', '4h'].includes(candlePeriod.interval) || !Number.isSafeInteger(candlePeriod.startTime) || !Number.isSafeInteger(candlePeriod.endTime) || candlePeriod.startTime <= 0 || candlePeriod.endTime < candlePeriod.startTime) throw new AccountError('invalid_period', '行情查询参数无效。', 400);
+    url.searchParams.set('interval', candlePeriod.interval);
+    url.searchParams.set('startTime', String(candlePeriod.startTime));
+    url.searchParams.set('endTime', String(candlePeriod.endTime));
+    url.searchParams.set('limit', '499');
+  } else if (candlePeriod) throw new AccountError('invalid_period', '行情查询参数无效。', 400);
   if (period) {
     if ((!symbol && operation !== 'income') || !['trades', 'history', 'algoHistory', 'income', 'forceOrders'].includes(operation) || !Number.isSafeInteger(period.startTime) || !Number.isSafeInteger(period.endTime) || period.startTime <= 0 || period.endTime < period.startTime || period.endTime - period.startTime >= 7 * 86_400_000) throw new AccountError('invalid_period', '成交查询区间无效或超过支持范围。', 400);
     url.searchParams.set('startTime', String(period.startTime));

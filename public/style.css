@@ -513,6 +513,27 @@ p { margin: 0 0 var(--space-12); }
 .review-page__sync > .field { width: 100%; }
 .review-page__detail { scroll-margin-top: var(--space-24); overflow-wrap: anywhere; }
 .review-order, .review-fill, .review-funding { border-top: 1px solid var(--color-border-soft); padding: var(--space-12) 0; }
+.trade-chart { border-top: 1px solid var(--color-border); padding: var(--space-24) 0; }
+.trade-chart__controls { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-12); }
+.trade-chart__events { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); margin: var(--space-12) 0; }
+.trade-chart__plot { display: block; width: 100%; height: auto; min-height: 240px; }
+.trade-chart__axis { fill: var(--color-muted); font-size: 14px; }
+.trade-chart__axis-line { stroke: var(--color-border); }
+.trade-chart__before { fill: var(--color-border-soft); opacity: 0.35; }
+.trade-chart__after { fill: var(--color-border); opacity: 0.35; }
+.trade-chart__candle { stroke: var(--color-error); stroke-width: 1; cursor: pointer; }
+.trade-chart__candle[data-up="true"] { stroke: var(--color-success); }
+.trade-chart__body { stroke-width: 3; }
+.trade-chart__plan { stroke: var(--color-muted); stroke-dasharray: 5 4; }
+.trade-chart__stop { fill: none; stroke: var(--color-error); stroke-width: 2; }
+.trade-chart__marker { fill: var(--color-text); stroke: var(--color-surface); stroke-width: 2; cursor: pointer; }
+.trade-chart__marker[data-selected="true"] { fill: var(--color-success); stroke: var(--color-text); }
+.trade-chart__selection { border-left: 2px solid var(--color-border); padding: var(--space-12); overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .trade-chart__controls { align-items: stretch; }
+  .trade-chart__controls > .field { flex: 1 1 100px; min-width: 0; }
+  .trade-chart__plot { min-height: 190px; }
+}
 @media (max-width: 560px) {
   .review-page__filter-grid { grid-template-columns: minmax(0, 1fr); }
   .review-page__detail .details__row--risk { flex-direction: column; align-items: flex-start; }

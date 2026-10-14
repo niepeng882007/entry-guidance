@@ -74,9 +74,48 @@ for (const two of [false, true])
     page,
   }) => {
     const { plan, check } = await comparisonFixture(page, two);
+    await page.route('**/market?interval=*', async (route) => {
+      const response = await route.fetch();
+      const chart = await response.json();
+      chart.stops = [
+        {
+          id: `${plan.id}-final`,
+          kind: 'plan',
+          price: plan.stopPrice,
+          time: Date.parse(plan.startedAt),
+          basis: 'MARK_PRICE',
+          label: '原计划最终止损',
+        },
+      ];
+      if (plan.nearStop)
+        chart.stops.push({
+          id: `${plan.id}-near`,
+          kind: 'plan',
+          price: plan.nearStop.price,
+          time: Date.parse(plan.startedAt),
+          basis: 'MARK_PRICE',
+          label: '原计划近端止损',
+        });
+      const observed = check.reviewEvidence!.stops[0]!;
+      chart.stops.push({
+        id: observed.id,
+        kind: 'observed',
+        price: observed.triggerPrice,
+        time: Date.parse(check.queriedAt),
+        basis: observed.workingType,
+        label: '查询时点实际止损设置',
+      });
+      await route.fulfill({ json: chart });
+    });
     await page.goto('/review');
     await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
     await expect(page.locator('#review-plan-link')).toContainText('原方案：已关联');
+    const chart = page.getByRole('region', { name: '行情与交易事件' });
+    await expect(chart).toContainText('原计划最终止损');
+    await expect(chart).toContainText('查询时点实际止损设置');
+    await expect(chart).toContainText('标记价触发依据');
+    await expect(chart).toContainText('不能推导持续保护');
+    if (two) await expect(chart).toContainText('原计划近端止损');
     await expect(page.locator('#review-plan-budget')).toHaveText('10 USDT');
     await expect(page.locator('#review-plan-stop')).toContainText(plan.stopPrice);
     await expect(page.locator('#review-budget-excess')).toHaveText('12.4735 USDT / 2.4735 USDT');

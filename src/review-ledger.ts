@@ -1,5 +1,6 @@
 import { entryType, matchesReview, sortReview, defaultReviewFilters, type EntryType, type ReviewFilters } from './review-filters.ts';
 import { randomUUID } from 'node:crypto';
+import { gzipSync, gunzipSync } from 'node:zlib';
 import { noteBasis, noteBelongsTo, noteInput, tagInput, ReviewWriteError, type ReviewJournal, type ReviewNote, type StyleTag } from './review-notes.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -8,6 +9,7 @@ import { comparePlan, type ArchivedPlan, type PlanComparison, type PlanLink } fr
 import type { Plan, Verification } from './verification.ts';
 import type { EntryInput } from '../public/draft.js';
 import { formatDecimal, parseDecimal } from '../public/draft.js';
+import type { MarketArchive } from './trade-market.ts';
 
 export type ReviewIdentity = { source: 'demo' | 'binance'; accountId: string };
 export type ReviewOrder = {
@@ -57,6 +59,11 @@ export type ArchiveState = {
 };
 export type ArchiveProgress = ArchiveState & ReviewIdentity & { contracts: SyncState[] };
 export type ReviewList = { source: ReviewIdentity['source']; accountId: string | null; syncStatus: 'demo' | 'not-synced' | 'synced'; trades: ReviewSummary[]; filters: ReviewFilters; total: number; page: number; pageSize: number; nextPage: number | null; options: { symbols: string[]; tags: Pick<StyleTag, 'id' | 'name' | 'active'>[] }; sync?: SyncState | null; archive?: ArchiveProgress | null; archiveIssue?: { code: string; message: string; attemptedAt: string } };
+
+function marketPayload(value: unknown): MarketArchive {
+  if (!(value instanceof Uint8Array)) throw new Error('行情归档格式无效。');
+  return JSON.parse(gunzipSync(value).toString('utf8')) as MarketArchive;
+}
 
 function signed(value: string, label: string) {
   return parseDecimal(value.startsWith('-') ? value.slice(1) : value, label) * (value.startsWith('-') ? -1n : 1n);
@@ -132,6 +139,11 @@ export class ReviewLedger {
       if (path !== ':memory:') chmodSync(path, 0o600);
       this.db.exec(`
         PRAGMA foreign_keys = ON;
+        CREATE TABLE IF NOT EXISTS review_market (
+          source TEXT NOT NULL, account TEXT NOT NULL, id TEXT NOT NULL, cache_key TEXT NOT NULL, queried_at TEXT NOT NULL, payload BLOB NOT NULL,
+          PRIMARY KEY (source, account, id)
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS review_market_cache ON review_market(source, account, cache_key, queried_at);
         CREATE TABLE IF NOT EXISTS review_notes (
           source TEXT NOT NULL, account TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL,
           PRIMARY KEY (source, account, id)
@@ -225,6 +237,21 @@ export class ReviewLedger {
   get(id: string): ReviewTrade | null {
     const row = this.db.prepare('SELECT payload FROM trades WHERE source=? AND account=? AND id=?').get(this.identity.source, this.identity.accountId, id);
     return row ? this.withPlan(JSON.parse(String(row.payload)) as ReviewTrade) : null;
+  }
+
+  market(id: string): MarketArchive | null {
+    const row = this.db.prepare('SELECT payload FROM review_market WHERE source=? AND account=? AND id=?').get(this.identity.source, this.identity.accountId, id);
+    return row ? marketPayload(row.payload) : null;
+  }
+
+  latestMarket(key: string): MarketArchive | null {
+    const row = this.db.prepare('SELECT payload FROM review_market WHERE source=? AND account=? AND cache_key=? ORDER BY queried_at DESC, rowid DESC LIMIT 1').get(this.identity.source, this.identity.accountId, key);
+    return row ? marketPayload(row.payload) : null;
+  }
+
+  saveMarket(value: MarketArchive) {
+    if (value.source !== this.identity.source || value.accountId !== this.identity.accountId) throw new Error('行情账户身份不一致。');
+    this.db.prepare('INSERT INTO review_market VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(source, account, id) DO UPDATE SET queried_at=excluded.queried_at, payload=excluded.payload').run(this.identity.source, this.identity.accountId, value.snapshotId, value.cacheKey, value.queriedAt, gzipSync(JSON.stringify(value)));
   }
 
   private archivedPlans(): ArchivedPlan[] {
