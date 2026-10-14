@@ -22,6 +22,7 @@ type Config = AccountConfig & {
   origin?: string;
   tls?: { cert: Buffer; key: Buffer };
   frontend?: ViteDevServer;
+  httpServer?: ReturnType<typeof createHttpServer>;
   reviewLedgerPath?: string;
 };
 
@@ -103,8 +104,9 @@ export function createServer(config: Config) {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
+    const origin = config.origin ?? `http://127.0.0.1:${req.socket.localPort}`;
     res.setHeader('Content-Security-Policy', config.frontend
-      ? "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:24678; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+      ? `default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ${origin.replace(/^http:/, 'ws:')}; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`
       : "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
     const send = (status: number, value: unknown) => {
       if (status >= 400 && value && typeof value === 'object' && 'scopeConfirmed' in value && value.scopeConfirmed === false) {
@@ -117,7 +119,6 @@ export function createServer(config: Config) {
       res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' }).end(value);
     };
     const redirect = (location: string) => res.writeHead(303, { Location: location }).end();
-    const origin = config.origin ?? `http://127.0.0.1:${req.socket.localPort}`;
     if (req.headers.host !== new URL(origin).host) return send(403, { error: '访问地址不匹配。' });
     if (req.method === 'POST' && req.headers.origin !== origin) return send(403, { error: '请从本应用页面提交。' });
     const path = req.url;
@@ -388,7 +389,8 @@ export function createServer(config: Config) {
       res.end(JSON.stringify({ error: '请求失败，请重试。' }));
     });
   };
-  const server = config.tls ? createHttpsServer(config.tls, handler) : createHttpServer(handler);
+  const server = config.httpServer ?? (config.tls ? createHttpsServer(config.tls) : createHttpServer());
+  server.on('request', handler);
   server.on('close', () => {
     closing = true;
     sessions.clear();

@@ -1,5 +1,6 @@
 import { resolve, join } from 'node:path';
 import { readFileSync } from 'node:fs';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer } from './server.ts';
 
 try {
@@ -18,11 +19,14 @@ try {
     try { tls = { cert: readFileSync(process.env.TLS_CERT_FILE), key: readFileSync(process.env.TLS_KEY_FILE) }; }
     catch { throw new Error('无法读取本地 HTTPS 证书或私钥文件。'); }
   }
+  const httpServer = development ? createHttpServer() : undefined;
   const frontend = development ? await (await import('vite')).createServer({
-    server: { middlewareMode: true, hmr: { host: '127.0.0.1', port: 24678 } },
+    // Node watch must not restart when Vite deletes its bundled temporary config.
+    configLoader: 'native',
+    server: { middlewareMode: true, ws: { server: httpServer, host: origin.hostname, clientPort: Number(origin.port || 80) } },
   }) : undefined;
   const server = createServer({
-    password: process.env.APP_PASSWORD ?? '', origin: origin.origin, tls, mode, frontend,
+    password: process.env.APP_PASSWORD ?? '', origin: origin.origin, tls, mode, frontend, httpServer,
     apiKey: process.env.BINANCE_API_KEY, apiSecret: process.env.BINANCE_API_SECRET,
     reviewLedgerPath: join(resolve(process.env.REVIEW_DATA_DIR ?? '.local/review'), `${mode}.sqlite`),
   });
