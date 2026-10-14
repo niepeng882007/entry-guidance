@@ -496,6 +496,10 @@ p { margin: 0 0 var(--space-12); }
 }
 
 /* Review page: archived evidence uses shared amounts and native disclosures. */
+.review-page__filters { margin: var(--space-24) 0; }
+.review-page__filter-form { display: grid; gap: var(--space-16); margin-top: var(--space-16); }
+.review-page__filter-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-16); }
+.review-page__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
 .review-page__list { list-style: none; padding: 0; }
 /* Hallmark · macrostructure: filterable ledger + trade detail · theme: existing monochrome */
 .review-page__back { margin-bottom: var(--space-16); }
@@ -505,6 +509,7 @@ p { margin: 0 0 var(--space-12); }
 .review-filters__control { width: 100%; }
 .review-filters__hint { grid-column: 1 / -1; margin: 0; }
 .review-table { min-width: 0; font-variant-numeric: tabular-nums; }
+.review-table__hint { display: none; }
 .review-table__row { cursor: pointer; }
 .review-table__amount { font-family: var(--font-data); }
 .review-table__amount[data-state="loss"] { color: var(--color-error); }
@@ -519,9 +524,9 @@ p { margin: 0 0 var(--space-12); }
   .review-filters__dates { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr); }
   .review-page .page-header { flex-direction: row; align-items: center; }
   .review-page .page-title { font-size: 28px; }
+  .review-table__hint { display: block; color: var(--color-muted); font-size: var(--text-xs); }
 }
-.review-page__record, .review-page__detail { border-top: 1px solid var(--color-border); padding: var(--space-24) 0; }
-.review-page__amount { font-size: clamp(24px, 5vw, 36px); }
+.review-page__detail { border-top: 1px solid var(--color-border); padding: var(--space-24) 0; }
 .review-notes__form { display: grid; gap: var(--space-16); margin-top: var(--space-16); }
 .review-notes__text { resize: vertical; }
 .review-notes__tags { min-width: 0; margin: 0; padding: var(--space-12); border: 1px solid var(--color-border); border-radius: var(--radius-control); }
@@ -554,6 +559,7 @@ p { margin: 0 0 var(--space-12); }
   .trade-chart__plot { min-height: 190px; }
 }
 @media (max-width: 560px) {
+  .review-page__filter-grid { grid-template-columns: minmax(0, 1fr); }
   .review-page__detail .details__row--risk { flex-direction: column; align-items: flex-start; }
   .review-page__detail .details__value { max-width: 100%; }
 }

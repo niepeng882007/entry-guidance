@@ -1,3 +1,6 @@
+import type { ReviewList } from '../src/review-ledger.ts';
+import { defaultReviewFilters } from '../src/review-filters.ts';
+import { seedReviewFilters } from './review-filter-fixtures.ts';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createHash, createHmac, scryptSync } from 'node:crypto';
@@ -78,6 +81,7 @@ test('real review explicitly remains unsynced and never opens a demo ledger or c
   assert.match(html, /真实模式/);
   assert.deepEqual(await (await app.get('/api/review/trades')).json(), {
     source: 'binance', accountId: null, syncStatus: 'not-synced', trades: [],
+    filters: defaultReviewFilters(), total: 0, page: 1, pageSize: 20, nextPage: null, options: { symbols: [], tags: [] },
   });
   assert.equal((await app.get('/api/review/trades/BTCUSDT-demo-fill-1')).status, 404);
   assert.equal((await fetch(`${app.base}/api/review/trades`, { method: 'POST', headers: { Cookie: app.cookie, Origin: app.base } })).status, 405);
@@ -231,4 +235,85 @@ test('personal writes reject unauthenticated, foreign-origin, malformed and over
   const failed = await fetch(`${broken.base}/api/review/tags`, { method: 'POST', headers: { Cookie: broken.cookie, Origin: broken.base, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: null, version: 0, name: '顺势', active: true }) });
   assert.equal(failed.status, 503);
   assert.doesNotMatch(JSON.stringify(await failed.json()), /review-write-failure|sqlite|browser-test/);
+});
+
+
+test('trade filters compose on the HTTP boundary with Shanghai calendar dates', async (t) => {
+  const app = await start(t, { mode: 'demo' });
+  const response = await app.get('/api/review/trades?from=2026-10-10&to=2026-10-10&symbol=BTCUSDT&side=long&pnl=win&status=closed&entryType=LIMIT&plan=unconfirmed');
+  assert.equal(response.status, 200);
+  const list = await response.json();
+  assert.equal(list.total, 1);
+  assert.equal(list.page, 1);
+  assert.equal(list.pageSize, 20);
+  assert.equal(list.nextPage, null);
+  assert.equal(list.filters.timeZone, 'Asia/Shanghai');
+  assert.equal(list.filters.dateField, 'openedAt');
+  assert.equal(list.trades[0].entryType, 'LIMIT');
+  assert.deepEqual(list.trades[0].tagIds, []);
+  const empty = await (await app.get('/api/review/trades?side=short&pnl=win')).json();
+  assert.equal(empty.total, 0);
+  assert.deepEqual(empty.trades, []);
+});
+
+
+test('filtered pagination preserves the whole range, boundaries, unknowns and saved tags', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'review-filters-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'demo.sqlite');
+  const seeded = seedReviewFilters(path);
+  const app = await start(t, { mode: 'demo', reviewLedgerPath: path });
+  const read = async (query = ''): Promise<ReviewList> => {
+    const response = await app.get(`/api/review/trades${query ? `?${query}` : ''}`);
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const first = await read();
+  const second = await read('page=2');
+  assert.equal(first.total, 29);
+  assert.equal(first.trades.length, 20);
+  assert.equal(first.nextPage, 2);
+  assert.equal(second.total, 29);
+  assert.equal(second.trades.length, 9);
+  assert.equal(second.nextPage, null);
+  assert.equal(new Set([...first.trades, ...second.trades].map((trade) => trade.id)).size, 29);
+  assert.equal(second.trades.at(-1)!.id, seeded.unknownStart);
+  assert.equal(first.trades[0]!.id, seeded.end);
+  const btc = await read('symbol=BTCUSDT');
+  assert.equal(btc.total, 22);
+  assert.equal(btc.trades[0]!.id, 'BTCUSDT-demo-fill-1');
+  assert.equal(btc.trades.at(-1)!.id, 'BTCUSDT-demo-fill-1-page-19');
+  assert.deepEqual((await read('symbol=BTCUSDT&page=2')).trades.map((trade) => trade.id), ['BTCUSDT-demo-fill-1-page-20', 'BTCUSDT-demo-fill-1-page-21']);
+  assert.deepEqual((await read('symbol=ETHUSDT&from=2026-10-10&to=2026-10-10')).trades.map((trade) => trade.id), [seeded.start]);
+  assert.deepEqual((await read('symbol=ETHUSDT&dateField=closedAt&from=2026-10-10&to=2026-10-10')).trades.map((trade) => trade.id), [seeded.start, seeded.before]);
+  const tags = seeded.tags.map((id) => `tag=${id}`).join('&');
+  const combined = await read(`symbol=ETHUSDT&side=short&pnl=loss&status=closed&entryType=mixed&plan=unconfirmed&${tags}`);
+  assert.equal(combined.total, 1);
+  assert.equal(combined.trades[0]!.id, seeded.start);
+  assert.equal(combined.options.tags.find((tag) => tag.id === seeded.tags[0])!.active, false);
+  assert.equal((await read(`tag=${seeded.tags[0]}`)).total, 2); // Pending note is excluded.
+  assert.equal((await read('pnl=flat')).trades[0]!.id, seeded.flat);
+  assert.equal((await read('pnl=pending')).total, 3);
+  assert.equal((await read('status=open')).trades[0]!.id, seeded.open);
+  assert.equal((await read('entryType=unknown&status=incomplete')).total, 2);
+  assert.equal((await read('status=open&dateField=closedAt&from=2026-10-10')).total, 0);
+  const detail = await (await app.get(`/api/review/trades/${seeded.pending}`)).json();
+  assert.equal(detail.netPnl, null);
+  assert.equal(detail.evidence.fills[0].commissionAsset, 'BNB');
+  assert.equal((await fetch(`${app.base}/api/review/trades?${tags}`)).status, 401);
+});
+
+test('invalid filter parameters fail before querying an archive', async (t) => {
+  const app = await start(t, { mode: 'demo' });
+  for (const query of [
+    'from=2026-02-30', 'to=2026-13-01', 'from=2026-10-11&to=2026-10-10', 'from=',
+    'dateField=time', 'timeZone=UTC', 'symbol=btc', 'side=BUY', 'pnl=positive', 'status=complete',
+    'entryType=FAKE', 'plan=ambiguous', 'tag=foreign', 'page=0', 'page=1.5', 'page=1000000',
+    'side=long&side=short', 'page=1&page=2', 'tag=00000000-0000-0000-0000-000000000000&tag=00000000-0000-0000-0000-000000000000',
+    'source=binance', 'accountId=other-account', 'limit=9999',
+  ]) {
+    const response = await app.get(`/api/review/trades?${query}`);
+    assert.equal(response.status, 400, query);
+    assert.match((await response.json()).error, /筛选参数无效/);
+  }
 });

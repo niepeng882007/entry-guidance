@@ -1,5 +1,14 @@
+import { defaultReviewFilters } from '../../src/review-filters.ts';
 import { navigate } from './navigation';
 import { test, expect } from '@playwright/test';
+const emptyRange = {
+  filters: defaultReviewFilters(),
+  total: 0,
+  page: 1,
+  pageSize: 20,
+  nextPage: null,
+  options: { symbols: [], tags: [] },
+};
 
 test('opening a trade during background archiving keeps a note draft visible', async ({ page }) => {
   await page.goto('/');
@@ -53,10 +62,11 @@ test('opening a trade during background archiving keeps a note draft visible', a
   await page.route('**/api/review/trades', (route) =>
     route.fulfill({
       json: {
+        ...original,
         source: 'binance',
         accountId: '12345',
         syncStatus: 'synced',
-        trades: [detail],
+        trades: [{ ...detail, entryType: original.trades[0].entryType, tagIds: [] }],
         archive,
       },
     }),
@@ -131,6 +141,7 @@ test('account archive shows overall, contract and expired discovery progress wit
   await page.route('**/api/review/trades', (route) =>
     route.fulfill({
       json: {
+        ...emptyRange,
         source: 'binance',
         accountId: '12345',
         syncStatus: 'synced',
@@ -328,7 +339,13 @@ test('the real-mode page clearly displays an unsynced empty ledger', async ({ pa
   });
   await page.route('**/api/review/trades', (route) =>
     route.fulfill({
-      json: { source: 'binance', accountId: null, syncStatus: 'not-synced', trades: [] },
+      json: {
+        ...emptyRange,
+        source: 'binance',
+        accountId: null,
+        syncStatus: 'not-synced',
+        trades: [],
+      },
     }),
   );
   await page.goto('/review');
@@ -339,7 +356,13 @@ test('the real-mode page clearly displays an unsynced empty ledger', async ({ pa
   await page.unroute('**/api/review/trades');
   await page.route('**/api/review/trades', (route) =>
     route.fulfill({
-      json: { source: 'binance', accountId: '12345', syncStatus: 'not-synced', trades: [] },
+      json: {
+        ...emptyRange,
+        source: 'binance',
+        accountId: '12345',
+        syncStatus: 'not-synced',
+        trades: [],
+      },
     }),
   );
   await page.getByRole('button', { name: '重新读取', exact: true }).click();
@@ -390,6 +413,7 @@ test('real history sync shows progress, gaps and retry without claiming old resu
     route.fulfill({
       json: started
         ? {
+            ...emptyRange,
             source: 'binance',
             accountId: '12345',
             syncStatus: 'synced',
@@ -402,7 +426,13 @@ test('real history sync shows progress, gaps and retry without claiming old resu
               lastSuccessAt: failed ? null : '2026-10-07T00:00:00Z',
             },
           }
-        : { source: 'binance', accountId: null, syncStatus: 'not-synced', trades: [] },
+        : {
+            ...emptyRange,
+            source: 'binance',
+            accountId: null,
+            syncStatus: 'not-synced',
+            trades: [],
+          },
     }),
   );
   await page.route('**/api/review/sync', async (route) => {
@@ -460,7 +490,13 @@ test('a late sync response after leaving the page cannot restore current progres
   await page.route('**/api/symbols', (route) => route.fulfill({ json: { symbols: ['BTCUSDT'] } }));
   await page.route('**/api/review/trades', (route) =>
     route.fulfill({
-      json: { source: 'binance', accountId: null, syncStatus: 'not-synced', trades: [] },
+      json: {
+        ...emptyRange,
+        source: 'binance',
+        accountId: null,
+        syncStatus: 'not-synced',
+        trades: [],
+      },
     }),
   );
   let release!: () => void;
@@ -525,7 +561,7 @@ test('complex trade detail shows mixed execution types, shared reversal evidence
   detail.missing = ['资金费无法唯一归属'];
   detail.fundingNet = null;
   await page.route('**/api/review/trades', (route) =>
-    route.fulfill({ json: { ...list, trades: [detail] } }),
+    route.fulfill({ json: { ...list, trades: [{ ...detail, entryType: 'mixed', tagIds: [] }] } }),
   );
   await page.route('**/api/review/trades/*', (route) => route.fulfill({ json: detail }));
   await page.goto('/review');

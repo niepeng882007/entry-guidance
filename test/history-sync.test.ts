@@ -1,3 +1,4 @@
+import { defaultReviewFilters } from '../src/review-filters.ts';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -238,7 +239,10 @@ test('history refuses an unverifiable account before reading or archiving histor
   const response = await app.sync();
   assert.equal(response.status, 502);
   assert.equal((await response.json()).code, 'unverified_identity');
-  assert.deepEqual(await (await app.get('/api/review/trades')).json(), { source: 'binance', accountId: null, syncStatus: 'not-synced', trades: [] });
+  assert.deepEqual(await (await app.get('/api/review/trades')).json(), {
+    source: 'binance', accountId: null, syncStatus: 'not-synced', trades: [],
+    filters: defaultReviewFilters(), total: 0, page: 1, pageSize: 20, nextPage: null, options: { symbols: [], tags: [] },
+  });
 });
 
 test('stable UID preserves history on key rotation and isolates another account', async (t) => {

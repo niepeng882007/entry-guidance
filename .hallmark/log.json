@@ -1,6 +1,29 @@
 [
   {
     "date": "2026-10-14",
+    "scope": "review-module",
+    "macrostructure": "Filterable ledger + separate trade detail",
+    "theme": "monochrome (existing system)",
+    "enrichment": "none",
+    "brief": "日期与交易对筛选、Ant Design Vue分页表格、独立详情和折叠证据；沿用服务端范围验证",
+    "project_overrides": [
+      "reuse existing stylesheet and system fonts",
+      "Ant Design Vue theme mirrors existing tokens",
+      "preserve existing app shell"
+    ],
+    "validation": {
+      "reviewBrowserTests": 70,
+      "viewports": [
+        320,
+        390,
+        1280
+      ],
+      "physicalPhone": false,
+      "realAccount": false
+    }
+  },
+  {
+    "date": "2026-10-14",
     "scope": "app",
     "macrostructure": "Workbench",
     "theme": "monochrome (existing system)",

@@ -1,6 +1,33 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { ReviewList, ReviewTrade } from '../../src/review-ledger.ts';
 
+import {
+  parseReviewQuery,
+  matchesReview,
+  sortReview,
+  reviewPageSize,
+} from '../../src/review-filters.ts';
+
+async function mockTrades(page: Page, list: ReviewList, trades: ReviewList['trades']) {
+  await page.route(new RegExp('/api/review/trades(?:[?]|$)'), (route) => {
+    const query = parseReviewQuery(new URL(route.request().url()).searchParams);
+    const selected = trades.filter((trade) => matchesReview(trade, query.filters)).sort(sortReview);
+    const offset = (query.page - 1) * reviewPageSize;
+    return route.fulfill({
+      json: {
+        ...list,
+        filters: query.filters,
+        page: query.page,
+        pageSize: reviewPageSize,
+        total: selected.length,
+        nextPage: offset + reviewPageSize < selected.length ? query.page + 1 : null,
+        trades: selected.slice(offset, offset + reviewPageSize),
+        options: { symbols: [...new Set(trades.map((trade) => trade.symbol))], tags: [] },
+      },
+    });
+  });
+}
+
 async function login(page: Page) {
   await page.goto('/review');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
@@ -22,18 +49,18 @@ test('date and searchable symbol filters paginate a real table without CSP viola
   await login(page);
   const list: ReviewList = await (await page.request.get('/api/review/trades')).json();
   const original = list.trades[0]!;
-  const trades = Array.from({ length: 24 }, (_, index) => ({
+  const trades = Array.from({ length: 44 }, (_, index) => ({
     ...original,
     id: `row-${String(index).padStart(2, '0')}`,
-    symbol: index < 13 ? 'BTCUSDT' : 'ETHUSDT',
-    baseAsset: index < 13 ? 'BTC' : 'ETH',
+    symbol: index < 23 ? 'BTCUSDT' : 'ETHUSDT',
+    baseAsset: index < 23 ? 'BTC' : 'ETH',
   }));
-  await page.route('**/api/review/trades', (route) => route.fulfill({ json: { ...list, trades } }));
+  await mockTrades(page, list, trades);
   await page.goto('/review?from=2026-10-10&to=2026-10-10');
-  await expect(page.locator('.review-table tbody tr[data-row-key]')).toHaveCount(10);
+  await expect(page.locator('.review-table tbody tr[data-row-key]')).toHaveCount(20);
   await page.getByLabel('交易对', { exact: true }).fill('BTC');
   await page.locator('.ant-select-item-option').filter({ hasText: 'BTCUSDT' }).click();
-  await expect(page.getByText('当前匹配 13 笔', { exact: true })).toBeVisible();
+  await expect(page.getByText('当前匹配 23 笔', { exact: true })).toBeVisible();
   await page.locator('.ant-pagination-item-2').click();
   await expect(page).toHaveURL(/page=2/);
   await expect(page.locator('.review-table tbody tr[data-row-key]')).toHaveCount(3);
@@ -44,7 +71,7 @@ test('date and searchable symbol filters paginate a real table without CSP viola
   await expect(page.locator('.review-table tbody tr[data-row-key]')).toHaveCount(0);
   await page.getByRole('button', { name: '重置', exact: true }).click();
   await expect(page).toHaveURL('/review');
-  await expect(page.getByText('当前匹配 24 笔', { exact: true })).toBeVisible();
+  await expect(page.getByText('当前匹配 44 笔', { exact: true })).toBeVisible();
   for (const width of [320, 390, 1280]) {
     await page.setViewportSize({ width, height: 844 });
     await expect
@@ -57,10 +84,6 @@ test('date and searchable symbol filters paginate a real table without CSP viola
     await page.getByLabel('开仓开始日期').click();
     const calendar = page.locator('.ant-picker-dropdown:visible');
     await expect(calendar).toBeVisible();
-    await page.screenshot({
-      path: test.info().outputPath(`review-calendar-${width}.png`),
-      fullPage: true,
-    });
     await expect
       .poll(async () => {
         const box = await calendar.boundingBox();
@@ -69,12 +92,16 @@ test('date and searchable symbol filters paginate a real table without CSP viola
       .toBe(true);
     await page.keyboard.press('Escape');
     await expect(calendar).toBeHidden();
+  }
+  // Playwright WebKit inserts a temporary stylesheet while taking screenshots.
+  expect(violations).toEqual([]);
+  for (const width of [320, 390, 1280]) {
+    await page.setViewportSize({ width, height: 844 });
     await page.screenshot({
       path: test.info().outputPath(`review-table-${width}.png`),
       fullPage: true,
     });
   }
-  expect(violations).toEqual([]);
 });
 
 test('detail URLs reload directly and browser navigation preserves list state and unsaved notes', async ({
@@ -111,11 +138,11 @@ test('returning to a paginated list rejects a late detail response and restores 
   const detail: ReviewTrade = await (
     await page.request.get(`/api/review/trades/${list.trades[0]!.id}`)
   ).json();
-  const trades = Array.from({ length: 12 }, (_, index) => ({
+  const trades = Array.from({ length: 22 }, (_, index) => ({
     ...list.trades[0]!,
     id: `trade-${index}`,
   }));
-  await page.route('**/api/review/trades', (route) => route.fulfill({ json: { ...list, trades } }));
+  await mockTrades(page, list, trades);
   let release!: () => void;
   await page.route('**/api/review/trades/*', async (route) => {
     await new Promise<void>((resolve) => {

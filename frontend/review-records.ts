@@ -1,4 +1,4 @@
-import type { ReviewSummary } from '../src/review-ledger.ts';
+import { dateBoundary } from '../src/review-filters.ts';
 
 export type ReviewLocation = {
   tradeId: string | null;
@@ -7,7 +7,6 @@ export type ReviewLocation = {
   symbol: string;
   page: number;
 };
-export const reviewPageSize = 10;
 
 export function readReviewLocation(url: URL): ReviewLocation {
   const page = Number(url.searchParams.get('page') ?? 1);
@@ -29,34 +28,18 @@ export function reviewUrl(location: ReviewLocation) {
 }
 
 function validDate(value: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const date = new Date(`${value}T00:00:00Z`);
-  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  try {
+    dateBoundary(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function dateRangeError(from: string, to: string) {
   if ((from && !validDate(from)) || (to && !validDate(to))) return '日期无效，请重新选择。';
   if (from && to && from > to) return '开始日期不能晚于结束日期。';
   return '';
-}
-
-export function filterReviewTrades(trades: ReviewSummary[], location: ReviewLocation) {
-  if (dateRangeError(location.from, location.to)) return [];
-  const start = location.from ? Date.parse(`${location.from}T00:00:00+08:00`) : -Infinity;
-  const end = location.to ? Date.parse(`${location.to}T00:00:00+08:00`) + 86_400_000 : Infinity;
-  return trades
-    .filter((trade) => {
-      if (location.symbol && trade.symbol !== location.symbol) return false;
-      if (!location.from && !location.to) return true;
-      if (!trade.openedAt) return false;
-      const opened = Date.parse(trade.openedAt);
-      return opened >= start && opened < end;
-    })
-    .sort((a, b) => {
-      const first = a.openedAt ? Date.parse(a.openedAt) : -Infinity;
-      const second = b.openedAt ? Date.parse(b.openedAt) : -Infinity;
-      return second - first || a.id.localeCompare(b.id);
-    });
 }
 
 export function reviewTime(value: string | null) {

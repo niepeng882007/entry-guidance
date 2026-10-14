@@ -49,7 +49,7 @@ test('dev reloads Vue and CSS across concurrent instances, and restarts changed 
         }
       } finally { rmSync(directory, { recursive: true, force: true }); }
     });
-    for (const name of ['src', 'frontend', 'public', 'package.json', 'vite.config.ts']) cpSync(join(root, name), join(directory, name), { recursive: true });
+    for (const name of ['src', 'frontend', 'public', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'vite.config.ts']) cpSync(join(root, name), join(directory, name), { recursive: true });
     symlinkSync(join(root, 'node_modules'), join(directory, 'node_modules'), 'dir');
     const portServer = createHttpServer();
     portServer.listen(0, '127.0.0.1');
@@ -58,11 +58,17 @@ test('dev reloads Vue and CSS across concurrent instances, and restarts changed 
     assert.ok(address && typeof address !== 'string');
     const origin = `http://127.0.0.1:${address.port}`;
     await new Promise<void>((resolve) => portServer.close(() => resolve()));
+    let output = '';
+    // The temporary checkout reuses verified modules; pnpm must not reinstall or purge the shared symlink.
     child = spawn('pnpm', ['dev'], {
-      cwd: directory, detached: true, stdio: 'ignore',
-      env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, APP_MODE: 'demo', APP_ORIGIN: origin, APP_PASSWORD: 'development-test-only', REVIEW_DATA_DIR: join(directory, 'review') },
+      cwd: directory, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, pnpm_config_verify_deps_before_run: 'false', APP_MODE: 'demo', APP_ORIGIN: origin, APP_PASSWORD: 'development-test-only', REVIEW_DATA_DIR: join(directory, 'review') },
     });
+    const recordOutput = (chunk: Buffer) => { output = (output + chunk.toString()).slice(-8000); };
+    child.stdout?.on('data', recordOutput);
+    child.stderr?.on('data', recordOutput);
     await expect.poll(async () => {
+      if (child?.exitCode !== null) throw new Error(`Development server exited: ${output}`);
       try { return (await fetch(`${origin}/login`)).status; } catch { return 0; }
     }, { timeout: 10_000 }).toBe(200);
     return { directory, origin };
@@ -88,6 +94,13 @@ test('dev reloads Vue and CSS across concurrent instances, and restarts changed 
   }
   const page = await openPage(first.origin);
   const secondPage = await openPage(second.origin);
+  const reviewPage = await browser.newPage();
+  await reviewPage.goto(`${first.origin}/login`);
+  await reviewPage.locator('#password').fill('development-test-only');
+  await reviewPage.locator('button[type="submit"]').click();
+  await reviewPage.goto(`${first.origin}/review`);
+  await expect(reviewPage.locator('.review-table tbody tr[data-row-key]')).toHaveCount(1);
+  await reviewPage.close();
   const secondComponent = join(second.directory, 'frontend/HomePage.vue');
   writeFileSync(secondComponent, readFileSync(secondComponent, 'utf8').replace('规划开仓、复盘交易，或查看账户状况。', '第二实例热更新。'));
   await expect(secondPage.locator('.workspace__intro')).toHaveText('第二实例热更新。');

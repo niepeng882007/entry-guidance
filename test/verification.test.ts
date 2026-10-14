@@ -945,6 +945,10 @@ test('review links direct fill evidence, preserves fixed plan and old checks thr
   const id = list.trades[0].id;
   const detail = await (await app.read(`/api/review/trades/${id}`)).json();
   assert.equal(detail.planComparison.status, 'linked');
+  const linked = await (await app.read('/api/review/trades?plan=linked&symbol=BTCUSDT&pnl=loss&entryType=MARKET')).json();
+  assert.equal(linked.total, 1);
+  assert.equal(linked.trades[0].id, id);
+  assert.equal((await (await app.read('/api/review/trades?plan=unconfirmed')).json()).total, 0);
   assert.equal(detail.planComparison.plan.budget, '20');
   assert.equal(detail.planComparison.plan.stopPrice, '98');
   assert.equal(detail.planComparison.actualEntry.quantity, '0.4');
@@ -981,6 +985,10 @@ test('multiple plans sharing the same verified fills remain ambiguous; a never-v
     const comparison = (await (await app.read(`/api/review/trades/${list.trades[0].id}`)).json()).planComparison;
     assert.equal(comparison.status, verified ? 'ambiguous' : 'unlinked');
     assert.equal(list.trades[0].planLink.status, comparison.status);
+    assert.equal((await (await app.read('/api/review/trades?plan=linked')).json()).total, 0);
+    const unconfirmed = await (await app.read('/api/review/trades?plan=unconfirmed')).json();
+    assert.equal(unconfirmed.total, 1);
+    assert.equal(unconfirmed.trades[0].planLink.status, comparison.status);
     assert.equal(comparison.plan, null);
     assert.equal(comparison.budgetExcess, null);
     assert.equal(comparison.candidatePlanIds.length, verified ? 2 : 0);

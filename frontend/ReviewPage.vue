@@ -10,31 +10,38 @@ import ReviewTradeDetail from './components/ReviewTradeDetail.vue';
 import ReviewNotes from './components/ReviewNotes.vue';
 import { useReviewPage } from './useReviewPage';
 import { useReviewLocation } from './useReviewLocation';
-import { dateRangeError, filterReviewTrades, reviewPageSize, reviewTime } from './review-records';
+import { dateRangeError, reviewTime } from './review-records';
 import { reviewTheme } from './review-theme';
 import 'virtual:review-antd.css';
+import { reviewPageSize } from '../src/review-filters.ts';
 
 const { source, expectedSource } = defineProps<{
   source: string;
   expectedSource: 'binance' | 'demo';
 }>();
 const { location, filter, paginate, show, back } = useReviewLocation();
-const review = useReviewPage(expectedSource, () => location.value.tradeId);
-const { list, trade, busy, relogin, status, refresh, archive, sync } = review;
+const review = useReviewPage(expectedSource, () => location.value);
+const {
+  list,
+  trade,
+  busy,
+  relogin,
+  status,
+  refresh,
+  archive,
+  sync,
+  stale,
+  filterOptions,
+  cancelRead,
+  journalSaved,
+} = review;
 const rangeError = computed(() => dateRangeError(location.value.from, location.value.to));
-const filtered = computed(() => filterReviewTrades(list.value?.trades ?? [], location.value));
-const lastPage = computed(() => Math.max(1, Math.ceil(filtered.value.length / reviewPageSize)));
+const total = computed(() => list.value?.total ?? 0);
+const lastPage = computed(() => Math.max(1, Math.ceil(total.value / reviewPageSize)));
 const currentPage = computed(() => Math.min(location.value.page, lastPage.value));
-const rows = computed(() =>
-  filtered.value.slice(
-    (currentPage.value - 1) * reviewPageSize,
-    currentPage.value * reviewPageSize,
-  ),
-);
+const rows = computed(() => list.value?.trades ?? []);
 const symbolOptions = computed(() =>
-  [...new Set(list.value?.trades.map((item) => item.symbol) ?? [])]
-    .sort()
-    .map((value) => ({ value, label: value })),
+  filterOptions.value.symbols.map((value) => ({ value, label: value })),
 );
 const hasFilters = computed(
   () => !!(location.value.from || location.value.to || location.value.symbol),
@@ -57,6 +64,7 @@ function rowProps(record: ReviewSummary) {
     onClick: (event: MouseEvent) => {
       if (
         !busy.value &&
+        !stale.value &&
         !relogin.value &&
         event.target instanceof Element &&
         !event.target.closest('button, a')
@@ -91,7 +99,13 @@ watch(trade, async (value) => {
   }
 });
 watch([lastPage, busy], () => {
-  if (list.value && !busy.value && !location.value.tradeId && location.value.page > lastPage.value)
+  if (
+    list.value &&
+    !busy.value &&
+    !stale.value &&
+    !location.value.tradeId &&
+    location.value.page > lastPage.value
+  )
     paginate(lastPage.value);
 });
 </script>
@@ -113,6 +127,7 @@ watch([lastPage, busy], () => {
       <p class="source">{{ source }}</p>
       <div id="review-status" class="review-page__status" role="status" aria-live="polite">
         <p class="status__message">{{ status }}</p>
+        <Button v-if="busy" @click="cancelRead">取消读取</Button>
         <a v-if="relogin" class="button button--text button--link" href="/login">重新登录</a>
       </div>
 
@@ -172,26 +187,33 @@ watch([lastPage, busy], () => {
         </div>
         <div class="section-heading">
           <h2 id="review-list-title" class="section-title" tabindex="-1">
-            {{ list ? `${list.trades.length} 笔归档交易` : '交易列表' }}
+            {{ list ? `${list.total} 笔归档交易` : '交易列表' }}
           </h2>
-          <p class="muted review-table__count" role="status">当前匹配 {{ filtered.length }} 笔</p>
+          <p v-if="list" class="muted review-table__count" role="status">
+            {{ stale ? '上次匹配' : '当前匹配' }} {{ total }} 笔
+          </p>
         </div>
+        <p v-if="stale && list" class="error" role="status">
+          上次读取结果 · 当前范围需重新读取确认，详情暂不可打开。
+        </p>
+        <p class="review-table__hint">左右滑动查看更多，点击一行进入详情。</p>
         <Table
           class="review-table"
-          :columns="columns"
+          :columns="rows.length ? columns : []"
           :data-source="rows"
           row-key="id"
           :pagination="false"
           :loading="busy"
-          :scroll="{ x: 934 }"
+          :scroll="rows.length ? { x: 934 } : undefined"
           :custom-row="rowProps"
           size="middle"
         >
           <template #emptyText>
             <div class="review-table__empty">
-              <template v-if="rangeError">{{ rangeError }}</template>
-              <template v-else-if="hasFilters">没有符合条件的交易，请调整日期或交易对。</template>
+              <template v-if="busy">正在读取交易记录…</template>
+              <template v-else-if="rangeError">{{ rangeError }}</template>
               <template v-else-if="!list">暂未读取到交易记录，请重新读取。</template>
+              <template v-else-if="hasFilters">没有符合条件的交易，请调整日期或交易对。</template>
               <template v-else-if="sync || archive"
                 >当前没有可归并的成交记录；查询范围与缺口见同步状态。</template
               >
@@ -240,7 +262,7 @@ watch([lastPage, busy], () => {
               v-else-if="column.key === 'action'"
               type="link"
               :data-review-trade="record.id"
-              :disabled="busy || relogin"
+              :disabled="busy || relogin || stale"
               :aria-label="`查看 ${record.symbol} 交易详情`"
               @click.stop="show(record.id)"
               >详情</Button
@@ -248,11 +270,11 @@ watch([lastPage, busy], () => {
           </template>
         </Table>
         <Pagination
-          v-if="filtered.length > reviewPageSize"
+          v-if="total > reviewPageSize"
           class="review-table__pagination"
           :current="currentPage"
           :page-size="reviewPageSize"
-          :total="filtered.length"
+          :total="total"
           :show-size-changer="false"
           :show-less-items="true"
           responsive
@@ -276,6 +298,7 @@ watch([lastPage, busy], () => {
           :source="expectedSource"
           :account-id="list?.accountId ?? null"
           :trade="trade"
+          @journal-saved="journalSaved"
         />
       </details>
     </div>
