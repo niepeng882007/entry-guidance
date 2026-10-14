@@ -11,6 +11,7 @@ import ReviewNotes from './components/ReviewNotes.vue';
 import ReviewStatistics from './components/ReviewStatistics.vue';
 import TradeAnalysis from './components/TradeAnalysis.vue';
 import ReviewBackup from './components/ReviewBackup.vue';
+import ReviewOrders from './components/ReviewOrders.vue';
 import { useReviewPage } from './useReviewPage';
 import { useReviewLocation } from './useReviewLocation';
 import { dateRangeError, reviewTime } from './review-records';
@@ -22,7 +23,7 @@ const { source, expectedSource } = defineProps<{
   source: string;
   expectedSource: 'binance' | 'demo';
 }>();
-const { location, filter, paginate, show, back } = useReviewLocation();
+const { location, filter, paginate, show, back, view } = useReviewLocation();
 const review = useReviewPage(expectedSource, () => location.value);
 const {
   list,
@@ -116,6 +117,7 @@ watch([lastPage, busy], () => {
     !busy.value &&
     !stale.value &&
     !location.value.tradeId &&
+    location.value.view === 'cycles' &&
     location.value.page > lastPage.value
   )
     paginate(lastPage.value);
@@ -132,18 +134,41 @@ watch([lastPage, busy], () => {
           >
           <h1 class="page-title">{{ location.tradeId ? '交易详情' : '交易记录分析' }}</h1>
         </div>
-        <Button aria-label="重新读取" :disabled="busy || relogin" :loading="busy" @click="refresh"
-          >重新读取</Button
+        <Button
+          v-if="location.tradeId || location.view"
+          :aria-label="busy ? '取消读取' : '重新读取'"
+          :disabled="relogin"
+          @click="busy ? cancelRead() : refresh()"
+          >{{ busy ? '取消读取' : '重新读取' }}</Button
         >
       </header>
       <p class="source">{{ source }}</p>
-      <div id="review-status" class="review-page__status" role="status" aria-live="polite">
+      <div
+        v-if="location.tradeId || location.view"
+        id="review-status"
+        class="review-page__status"
+        role="status"
+        aria-live="polite"
+      >
         <p class="status__message">{{ status }}</p>
-        <Button v-if="busy" @click="cancelRead">取消读取</Button>
         <a v-if="relogin" class="button button--text button--link" href="/login">重新登录</a>
       </div>
 
-      <section v-if="!location.tradeId" aria-labelledby="review-list-title">
+      <div v-if="!location.tradeId" class="review-page__actions" aria-label="复盘视图">
+        <Button :type="location.view ? 'default' : 'primary'" @click="view()">订单记录</Button>
+        <Button :type="location.view ? 'primary' : 'default'" @click="view('cycles')"
+          >完整交易复盘</Button
+        >
+      </div>
+      <ReviewOrders
+        v-if="!location.tradeId && !location.view"
+        :source="expectedSource"
+        :location="location"
+        @filter="filter"
+        @paginate="paginate"
+        @trade="show"
+      />
+      <section v-else-if="!location.tradeId" aria-labelledby="review-list-title">
         <div class="review-filters" role="group" aria-label="交易记录筛选">
           <div class="review-filters__dates">
             <div class="field">

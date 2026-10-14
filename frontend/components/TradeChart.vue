@@ -92,7 +92,7 @@ watch([chart, source], () => {
         type="button"
         :disabled="busy || relogin"
         :aria-busy="busy"
-        @click="read"
+        @click="read()"
       >
         继续读取 / 重试行情
       </button>

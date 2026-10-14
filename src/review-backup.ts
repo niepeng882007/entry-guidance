@@ -154,6 +154,13 @@ function archive(value: unknown) {
   requireValue(['running', 'complete', 'failed', 'interrupted'].includes(String(row.status)));
   for (const key of ['symbols', 'pendingSymbols', 'completedSymbols', 'missing', 'scopeMissing']) strings(row[key]);
   date(row.lastSuccessAt, true);
+  if (row.orderDownload !== undefined) {
+    const download = object(row.orderDownload);
+    requireValue(['submitting', 'processing', 'complete', 'failed', 'unknown'].includes(String(download.status)));
+    requireValue(download.downloadId === null || typeof download.downloadId === 'string' && /^\d{1,30}$/.test(download.downloadId));
+    integer(download.startTime); integer(download.endTime); integer(download.records); string(download.message);
+    requireValue(Number(download.endTime) >= Number(download.startTime));
+  }
 }
 function market(value: unknown, scope: ReviewIdentity) {
   const row = object(value); scoped(row, scope); id(row.tradeId); trade(row.evidence, scope);

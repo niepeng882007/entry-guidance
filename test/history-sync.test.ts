@@ -92,7 +92,7 @@ test('market pagination retains full raw evidence, separates sources and freezes
   });
   await app.sync();
   const list = await finished(app);
-  const path = `/api/review/trades/${list.trades[0].id}/market?interval=1m`;
+  const path = `/api/review/trades/${list.trades[0].id}/market?interval=1m&refresh=1`;
   const first = await (await app.get(path)).json();
   assert.equal(first.series.contract.rawCount, 1996);
   assert.equal(first.series.contract.complete, false);
@@ -139,7 +139,7 @@ test('missing or malformed candles and a failed mark source never produce comple
   });
   await app.sync();
   const list = await finished(app);
-  const path = `/api/review/trades/${list.trades[0].id}/market?interval=15m`;
+  const path = `/api/review/trades/${list.trades[0].id}/market?interval=15m&refresh=1`;
   const partial = await (await app.get(path)).json();
   assert.equal(partial.series.contract.complete, false);
   assert.equal(partial.series.contract.rawCount, 20);
@@ -164,7 +164,7 @@ test('an ordinary historical stop is shown only through its actual linked order 
   const app = await start(t, async (url, headers, signal) => url.pathname.includes('Klines') || url.pathname.endsWith('/klines') ? { status: 200, body: marketRows(url) } : base(url, headers, signal));
   await app.sync();
   const list = await finished(app);
-  const chart = await (await app.get(`/api/review/trades/${list.trades[0].id}/market?interval=15m`)).json();
+  const chart = await (await app.get(`/api/review/trades/${list.trades[0].id}/market?interval=15m&refresh=1`)).json();
   assert.equal(chart.stops.length, 1);
   assert.equal(chart.stops[0].kind, 'historical');
   assert.equal(chart.stops[0].price, '99');
@@ -183,7 +183,7 @@ test('a permanent early market gap cannot block later available candles', async 
   });
   await app.sync();
   const list = await finished(app);
-  const path = `/api/review/trades/${list.trades[0].id}/market?interval=1m`;
+  const path = `/api/review/trades/${list.trades[0].id}/market?interval=1m&refresh=1`;
   const first = await (await app.get(path)).json();
   const second = await (await app.get(path)).json();
   assert.equal(first.series.contract.rawCount, 1995);
@@ -200,7 +200,7 @@ test('a historical stop without an update timestamp is not backdated to its crea
   const app = await start(t, base);
   await app.sync();
   const list = await finished(app);
-  const chart = await (await app.get(`/api/review/trades/${list.trades[0].id}/market?interval=15m`)).json();
+  const chart = await (await app.get(`/api/review/trades/${list.trades[0].id}/market?interval=15m&refresh=1`)).json();
   assert.equal(chart.stops[0].price, '99');
   assert.match(chart.stops[0].label, /来源更新时间未知/);
   assert.ok(chart.stops[0].time > closed + 86_400_000);
@@ -216,7 +216,7 @@ test('open-trade market pagination survives a changing time boundary and same-mi
   await app.sync();
   const list = await finished(app);
   assert.equal(list.trades[0].status, 'open');
-  const path = `/api/review/trades/${list.trades[0].id}/market?interval=1m`;
+  const path = `/api/review/trades/${list.trades[0].id}/market?interval=1m&refresh=1`;
   const first = await (await app.get(path)).json();
   t.mock.timers.setTime(now + 60_000);
   const second = await (await app.get(path)).json();
@@ -258,13 +258,16 @@ test('stable UID preserves history on key rotation and isolates another account'
   await finished(app);
   await new Promise<void>((resolve) => { app.server.closeAllConnections(); app.server.close(() => resolve()); });
   app = await start(t, fixture(), path, 'rotated-test-key');
+  assert.equal((await (await app.get('/api/review/trades')).json()).accountId, null);
+  await app.sync();
+  await finished(app);
   assert.equal((await (await app.get('/api/review/trades')).json()).trades[0].netPnl, '9.6');
   await new Promise<void>((resolve) => { app.server.closeAllConnections(); app.server.close(() => resolve()); });
   app = await start(t, fixture({ '/api/v3/account': { uid: 67890 } }), path, 'another-test-key');
   const isolated = await (await app.get('/api/review/trades')).json();
-  assert.equal(isolated.accountId, '67890');
+  assert.equal(isolated.accountId, null);
   assert.equal(isolated.trades.length, 0);
-  assert.equal(isolated.sync, null);
+  assert.equal(isolated.sync ?? null, null);
 });
 
 test('forced-order evidence distinguishes liquidation and ADL rather than guessing from market type', async (t) => {
@@ -615,8 +618,13 @@ test('one-way reversal shares original evidence and allocates fee remainder to t
   assert.equal(right.evidence.fills[0].quantity, '2');
   assert.equal(left.evidence.fills[1].realizedPnl, '10');
   assert.equal(right.evidence.fills[0].realizedPnl, '0');
-  const leftChart = await (await app.get(`/api/review/trades/${long.id}/market?interval=15m`)).json();
-  const rightChart = await (await app.get(`/api/review/trades/${short.id}/market?interval=15m`)).json();
+  const orderList = await (await app.get('/api/review/orders')).json();
+  const reversalOrder = orderList.orders.find((row: { orderId: string }) => row.orderId === '31');
+  assert.equal(reversalOrder.realizedPnl, '10');
+  assert.deepEqual(reversalOrder.commissions, [{ asset: 'USDT', amount: '0.1' }]);
+  assert.deepEqual(reversalOrder.tradeIds.sort(), [long.id, short.id].sort());
+  const leftChart = await (await app.get(`/api/review/trades/${long.id}/market?interval=15m&refresh=1`)).json();
+  const rightChart = await (await app.get(`/api/review/trades/${short.id}/market?interval=15m&refresh=1`)).json();
   assert.equal(leftChart.events[1].event, 'exit');
   assert.equal(leftChart.events[1].allocation, 'close');
   assert.equal(rightChart.events[0].event, 'entry');
@@ -790,8 +798,8 @@ test('a first visible reversal retains an incomplete old fragment and a distinct
   assert.equal(next.realizedPnl, '0');
   const oldDetail = await (await app.get(`/api/review/trades/${old.id}`)).json();
   const nextDetail = await (await app.get(`/api/review/trades/${next.id}`)).json();
-  const oldChart = await (await app.get(`/api/review/trades/${old.id}/market?interval=15m`)).json();
-  const nextChart = await (await app.get(`/api/review/trades/${next.id}/market?interval=15m`)).json();
+  const oldChart = await (await app.get(`/api/review/trades/${old.id}/market?interval=15m&refresh=1`)).json();
+  const nextChart = await (await app.get(`/api/review/trades/${next.id}/market?interval=15m&refresh=1`)).json();
   assert.equal(oldChart.openedAt, null);
   assert.equal(nextChart.closedAt, null);
   assert.equal(oldChart.stops.length, 0);

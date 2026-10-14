@@ -8,6 +8,8 @@ import { createServer } from '../src/server.ts';
 import { readBinance, AccountError, type Transport } from '../src/account.ts';
 import { coordinateAccountReads } from '../src/account-refresh.ts';
 import { calendarStart } from '../src/history-sync.ts';
+import { orderDownloadHost } from '../src/account.ts';
+import { zipOrderCsv } from './order-file-fixture.ts';
 
 const permissions = { enableReading: true, enableWithdrawals: false, enableInternalTransfer: false, enableMargin: false, enableFutures: false, permitsUniversalTransfer: false, enableVanillaOptions: false, enableFixApiTrade: false, enableSpotAndMarginTrading: false, enablePortfolioMarginTrading: false };
 const at = Date.now() - 86_400_000;
@@ -68,7 +70,54 @@ test('account archive discovers historical delisted contracts and exposes conser
   assert.equal(data.trades.find((trade: { symbol: string }) => trade.symbol === 'OLDUSDT').status, 'incomplete');
 });
 
-test('a running service archives without an open browser and advances incrementally every five minutes', async (t) => {
+test('one manual archive downloads orders first, skips covered ordinary order pages and supplements realized pnl', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-14T17:00:00Z') });
+  const base = fixture();
+  let generations = 0, ordinaryOrders = 0;
+  const fillTime = Date.parse('2026-10-13T16:00:00Z');
+  const app = await start(t, async (url, headers, signal) => {
+    if (url.hostname === orderDownloadHost) { assert.deepEqual(headers, {}); return { status: 200, body: zipOrderCsv() }; }
+    if (url.pathname === '/fapi/v1/order/asyn') { generations++; return { status: 200, body: { downloadId: '123' } }; }
+    if (url.pathname === '/fapi/v1/order/asyn/id') return { status: 200, body: { status: 'completed', url: `https://${orderDownloadHost}/controlled.zip` } };
+    if (url.pathname === '/fapi/v1/allOrders') ordinaryOrders++;
+    if (url.pathname === '/fapi/v1/userTrades' && url.searchParams.get('symbol') === 'BTCUSDT') return { status: 200, body: Number(url.searchParams.get('startTime')) <= fillTime && Number(url.searchParams.get('endTime')) >= fillTime ? [{ symbol: 'BTCUSDT', id: '44', orderId: '9007199254740993123', time: fillTime, side: 'SELL', positionSide: 'BOTH', qty: '0.5', price: '123', realizedPnl: '1.23456789', commission: '0.01', commissionAsset: 'USDT' }] : [] };
+    return base(url, headers, signal);
+  });
+  assert.equal(generations, 0);
+  await app.sync();
+  const result = await finished(app);
+  assert.equal(result.archive.orderDownload.status, 'complete');
+  assert.equal(generations, 1); assert.equal(ordinaryOrders, 0);
+  const response = await fetch(`${app.base}/api/review/orders`, { headers: { Cookie: app.cookie } });
+  const rows = await response.json();
+  assert.equal(rows.orders.find((row: { orderId: string }) => row.orderId === '9007199254740993123').realizedPnl, '1.23456789');
+  await app.get();
+  assert.equal(generations, 1);
+});
+
+test('a restarted bound ledger serves orders, reports, notes and exports without external identity reads', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'manual-review-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'real.sqlite');
+  let app = await start(t, fixture(), path);
+  await app.sync();
+  const first = await finished(app);
+  const id = first.trades[0].id as string;
+  await new Promise<void>((resolve) => { app.server.closeAllConnections(); app.server.close(() => resolve()); });
+  await new Promise((resolve) => setImmediate(resolve));
+  let externalReads = 0;
+  app = await start(t, async () => { externalReads++; throw new Error('browsing must remain local'); }, path);
+  for (const route of ['/api/review/orders', '/api/review/trades', `/api/review/trades/${id}`, '/api/review/journal', '/api/review/analysis', `/api/review/trades/${id}/analysis`, '/api/review/evidence?symbol=BTCUSDT']) {
+    const response = await fetch(app.base + route, { headers: { Cookie: app.cookie } });
+    assert.equal(response.status, 200, route);
+  }
+  assert.equal((await fetch(`${app.base}/api/review/trades/${id}/market?interval=1h`, { headers: { Cookie: app.cookie } })).status, 404);
+  const backup = await fetch(`${app.base}/api/review/backup`, { method: 'POST', headers: { Cookie: app.cookie, Origin: app.base, 'Content-Type': 'application/json' }, body: '{}' });
+  assert.equal(backup.status, 200);
+  assert.equal(externalReads, 0);
+});
+
+test('startup and five-minute ticks never read Binance; manual updates advance incrementally', async (t) => {
   t.mock.timers.enable({ apis: ['Date', 'setInterval'], now: Date.now() });
   const directory = mkdtempSync(join(tmpdir(), 'account-archive-timer-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -78,12 +127,17 @@ test('a running service archives without an open browser and advances incrementa
     if (url.searchParams.has('startTime')) queried.push(Number(url.searchParams.get('startTime')));
     return base(url, headers, signal);
   }, join(directory, 'real.sqlite'));
+  assert.equal(queried.length, 0);
+  assert.equal((await (await app.get()).json()).accountId, null);
+  await app.sync();
   const first = await finished(app);
   assert.equal(first.archive.status, 'complete');
   queried.length = 0;
-  // No review-page request triggers this round; the service timer does.
   t.mock.timers.tick(300_000);
   await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(queried.length, 0);
+  assert.equal((await (await app.get()).json()).archive.endTime, first.archive.endTime);
+  await app.sync();
   const second = await finished(app);
   assert.equal(second.archive.endTime, first.archive.endTime + 300_000);
   assert.ok(queried.length > 0);
@@ -91,7 +145,7 @@ test('a running service archives without an open browser and advances incrementa
   assert.equal(second.trades.length, 2);
 });
 
-test('full discovery reads every income page and a failed page remains pending until the next timer retry', async (t) => {
+test('full discovery preserves a failed page until the next manual retry', async (t) => {
   t.mock.timers.enable({ apis: ['Date', 'setInterval'], now: Date.now() });
   const directory = mkdtempSync(join(tmpdir(), 'account-archive-pages-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -104,6 +158,7 @@ test('full discovery reads every income page and a failed page remains pending u
     }
     return base(url, headers, signal);
   }, join(directory, 'real.sqlite'));
+  await app.sync();
   const failed = await finished(app);
   assert.equal(failed.archive.status, 'failed');
   assert.equal(failed.archive.errorCode, 'rate_limited');
@@ -112,6 +167,8 @@ test('full discovery reads every income page and a failed page remains pending u
   limited = false;
   t.mock.timers.tick(300_000);
   await new Promise((resolve) => setImmediate(resolve));
+  assert.equal((await (await app.get()).json()).archive.status, 'failed');
+  await app.sync();
   const recovered = await finished(app);
   assert.equal(recovered.archive.status, 'complete', JSON.stringify(recovered.archive.missing));
   assert.ok(recovered.archive.symbols.includes('OLDUSDT'));
@@ -144,7 +201,7 @@ test('overlapping full triggers coalesce while account reads share the same exte
   assert.equal(data.trades.length, 2);
 });
 
-test('identity loss pauses automatic writes and never presents an old archive as freshly successful', async (t) => {
+test('a manual update with an unverified identity cannot advance the previous archive', async (t) => {
   t.mock.timers.enable({ apis: ['Date', 'setInterval'], now: Date.now() });
   const directory = mkdtempSync(join(tmpdir(), 'account-archive-identity-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -155,22 +212,21 @@ test('identity loss pauses automatic writes and never presents an old archive as
     if (url.searchParams.has('startTime')) reads++;
     return base(url, headers, signal);
   }, join(directory, 'real.sqlite'));
+  await app.sync();
   const first = await finished(app);
   verified = false;
   const before = reads;
   t.mock.timers.tick(300_000);
   await new Promise((resolve) => setImmediate(resolve));
-  let data = await (await app.get()).json();
-  for (let index = 0; !data.archiveIssue && index < 50; index++) {
-    await new Promise((resolve) => setTimeout(resolve, 10)); data = await (await app.get()).json();
-  }
-  assert.equal(data.archiveIssue.code, 'unverified_identity');
+  const refusal = await app.sync();
+  assert.equal((await refusal.json()).code, 'unverified_identity');
+  const data = await (await app.get()).json();
   assert.equal(data.archive.lastSuccessAt, first.archive.lastSuccessAt);
   assert.equal(reads, before);
   assert.equal(data.trades.length, 2);
 });
 
-test('restart resumes failed contract pages and preserves expired gaps across a long service outage', async (t) => {
+test('after restart only a manual action resumes pages and preserves expired gaps', async (t) => {
   t.mock.timers.enable({ apis: ['Date', 'setInterval'], now: Date.now() });
   const directory = mkdtempSync(join(tmpdir(), 'account-archive-expiry-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -179,6 +235,7 @@ test('restart resumes failed contract pages and preserves expired gaps across a 
   let limited = true;
   const transport: Transport = async (url, headers, signal) => limited && url.pathname === '/fapi/v1/allOrders' ? { status: 429, body: { code: -1003 } } : base(url, headers, signal);
   let app = await start(t, transport, path);
+  await app.sync();
   const failed = await finished(app);
   assert.equal(failed.archive.status, 'failed');
   const originalEnd = failed.archive.discovery.endTime;
@@ -187,6 +244,8 @@ test('restart resumes failed contract pages and preserves expired gaps across a 
   limited = false;
   t.mock.timers.tick(120 * 86_400_000);
   app = await start(t, transport, path);
+  assert.equal((await (await app.get()).json()).archive.status, 'failed');
+  await app.sync();
   const resumed = await finished(app);
   assert.equal(resumed.archive.status, 'complete');
   assert.ok(resumed.archive.discovery.unavailable.length > 0);
@@ -197,7 +256,7 @@ test('restart resumes failed contract pages and preserves expired gaps across a 
   assert.ok((await raw.json()).records.some((row: { kind: string }) => row.kind === 'trades'));
 });
 
-test('a service stopped mid-discovery resumes automatically without advancing its unfinished page', async (t) => {
+test('a service stopped mid-discovery remains interrupted until a manual resume', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'account-archive-interrupt-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, 'real.sqlite');
@@ -211,6 +270,7 @@ test('a service stopped mid-discovery resumes automatically without advancing it
     }
     return base(url, headers, signal);
   }, path);
+  await app.sync();
   await waiting;
   const progress = await (await app.get()).json();
   assert.equal(progress.syncStatus, 'synced');
@@ -218,6 +278,8 @@ test('a service stopped mid-discovery resumes automatically without advancing it
   await new Promise<void>((resolve) => { app.server.closeAllConnections(); app.server.close(() => resolve()); });
   await new Promise((resolve) => setImmediate(resolve));
   app = await start(t, base, path);
+  assert.equal((await (await app.get()).json()).archive.status, 'interrupted');
+  await app.sync();
   const resumed = await finished(app);
   assert.equal(resumed.archive.status, 'complete');
   assert.equal(resumed.trades.length, 2);
@@ -347,7 +409,7 @@ test('discovery and contract responses cannot disagree about the same funding id
   assert.equal((await evidence.json()).records.find((row: { kind: string }) => row.kind === 'income').payload.income, '-0.1');
 });
 
-test('immediate synchronization clears a recovered bootstrap failure instead of retaining a paused status', async (t) => {
+test('a failed manual identity check can be retried without a background bootstrap', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'account-archive-bootstrap-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   let unavailable = true;
@@ -356,9 +418,9 @@ test('immediate synchronization clears a recovered bootstrap failure instead of 
     if (url.pathname === '/api/v3/account' && unavailable) throw new Error('temporary identity failure');
     return base(url, headers, signal);
   }, join(directory, 'real.sqlite'));
-  let data = await (await app.get()).json();
-  for (let index = 0; !data.archiveIssue && index < 50; index++) { await new Promise((resolve) => setTimeout(resolve, 10)); data = await (await app.get()).json(); }
-  assert.equal(data.archiveIssue.code, 'connection_failed');
+  assert.equal((await (await app.get()).json()).accountId, null);
+  const failed = await app.sync();
+  assert.equal((await failed.json()).code, 'connection_failed');
   unavailable = false;
   assert.equal((await app.sync()).status, 202);
   const recovered = await finished(app);

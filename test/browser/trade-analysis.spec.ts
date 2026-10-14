@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 test('analysis is explicit, reports are text, and leaving the detail preserves the task', async ({
   page,
 }) => {
-  await page.goto('/review');
+  await page.goto('/review?view=cycles');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
   let starts = 0;
@@ -21,7 +21,7 @@ test('analysis is explicit, reports are text, and leaving the detail preserves t
     analysis.getByText('用量未知，可能产生费用', { exact: false }).first(),
   ).toBeVisible();
   expect(starts).toBe(1);
-  await page.goto('/review');
+  await page.goto('/review?view=cycles');
   await page.goto('/review/trades/BTCUSDT-demo-fill-1');
   await expect(analysis.getByText('完整报告', { exact: true }).first()).toBeVisible();
   expect(starts).toBe(1);
@@ -38,13 +38,13 @@ test('analysis is explicit, reports are text, and leaving the detail preserves t
 test('cancel and continue require explicit clicks; model text is escaped and invalid references are rejected', async ({
   page,
 }) => {
-  await page.goto('/review');
+  await page.goto('/review?view=cycles');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
   const endpoint = '/api/review/trades/BTCUSDT-demo-fill-1/analysis';
   await page.request.post(endpoint, {
     data: { includeNotes: false, regenerate: true, query: '' },
-    headers: { Origin: 'http://127.0.0.1:4179' },
+    headers: { Origin: new URL(page.url()).origin },
   });
   await expect
     .poll(async () => (await (await page.request.get(endpoint)).json()).tasks[0].status)

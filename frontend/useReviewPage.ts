@@ -446,6 +446,7 @@ export function useReviewPage(source: Source, location: () => ReviewLocation) {
   } | null>(null);
   let sequence = 0;
   let pending: AbortController | undefined;
+  let startingSync = false;
   let suspended = false;
   let cleanup = () => {};
 
@@ -460,11 +461,12 @@ export function useReviewPage(source: Source, location: () => ReviewLocation) {
     pending?.abort();
     const controller = new AbortController();
     pending = controller;
+    startingSync = startSync;
     busy.value = true;
-    trade.value = null;
+    if (!startSync) trade.value = null;
     const requestedPage = page.value;
     let requestedFilters: ReviewFilters;
-    if (!id && evidenceOffset === undefined) stale.value = true;
+    if (!id && !startSync && evidenceOffset === undefined) stale.value = true;
     status.value = id ? '正在读取交易详情…' : startSync ? '正在发起历史同步…' : '正在读取归档…';
     try {
       requestedFilters = parseReviewQuery(reviewQuery(filters.value, requestedPage)).filters;
@@ -513,8 +515,6 @@ export function useReviewPage(source: Source, location: () => ReviewLocation) {
           archive.value = validateArchive(data, list.value?.accountId);
           archiveIssue.value = '';
         } else sync.value = validateSync(data);
-        list.value = null;
-        evidence.value = null;
         status.value = fullAccount ? '全账户归档正在运行…' : '正在同步真实历史…';
       } else if (evidenceOffset !== undefined) {
         const next = object(data);
@@ -691,6 +691,7 @@ export function useReviewPage(source: Source, location: () => ReviewLocation) {
           .join('');
         if (fingerprint !== statistics.evidenceId) throw new Error('统计证据指纹与内容不一致。');
         filterOptions.value = options as ReviewList['options'];
+        symbols.value = [...filterOptions.value.symbols];
         if (list.value?.accountId !== next.accountId) evidence.value = null;
         sync.value = next.sync === undefined || next.sync === null ? null : validateSync(next.sync);
         if (source === 'demo' && sync.value) throw new Error('演示模式不接受真实同步进度。');
@@ -745,6 +746,7 @@ export function useReviewPage(source: Source, location: () => ReviewLocation) {
     } finally {
       if (current === sequence) {
         pending = undefined;
+        startingSync = false;
         busy.value = false;
       }
     }
@@ -769,9 +771,11 @@ export function useReviewPage(source: Source, location: () => ReviewLocation) {
     pending?.abort();
     pending = undefined;
     busy.value = false;
-    trade.value = null;
-    stale.value = true;
-    status.value = '读取已取消，上次读取结果需重新确认。';
+    if (!startingSync) stale.value = true;
+    status.value = startingSync
+      ? '同步请求已取消，后台归档可能继续；点击「重新读取」更新。'
+      : '读取已取消，上次读取结果需重新确认。';
+    startingSync = false;
   }
 
   watch(symbol, () => {
@@ -788,14 +792,16 @@ export function useReviewPage(source: Source, location: () => ReviewLocation) {
     sequence++;
     pending?.abort();
     pending = undefined;
+    if (busy.value || !list.value) {
+      if (!startingSync) stale.value = true;
+      status.value = reason;
+    }
+    startingSync = false;
     busy.value = false;
-    stale.value = true;
-    status.value = reason;
   }
   function resume() {
     if (document.hidden || !navigator.onLine || relogin.value) return;
     suspended = false;
-    void refresh();
   }
   async function refresh() {
     const id = selectedTrade();
@@ -817,22 +823,6 @@ export function useReviewPage(source: Source, location: () => ReviewLocation) {
   onMounted(() => {
     const events = new AbortController();
     const options = { signal: events.signal };
-    if (source === 'binance')
-      void fetch('/api/symbols', { cache: 'no-store', signal: events.signal })
-        .then(async (response) => {
-          if (!response.ok) return;
-          const data = object(await response.json());
-          if (
-            Array.isArray(data.symbols) &&
-            data.symbols.every(
-              (value) => typeof value === 'string' && /^[\p{L}\p{N}_]{1,30}USDT$/u.test(value),
-            )
-          )
-            symbols.value = data.symbols;
-        })
-        .catch(() => {
-          /* The contract can still be entered when suggestions are unavailable. */
-        });
     window.addEventListener('pagehide', () => pause('页面已离开，待完成读取已取消。'), options);
     window.addEventListener('pageshow', resume, options);
     window.addEventListener('offline', () => pause('网络已断开，已有归档保留。'), options);
@@ -847,7 +837,10 @@ export function useReviewPage(source: Source, location: () => ReviewLocation) {
     );
     cleanup = () => events.abort();
     if (!navigator.onLine) pause('网络已断开，已有归档保留。');
-    else resume();
+    else {
+      resume();
+      void refresh();
+    }
   });
   onUnmounted(() => {
     cleanup();

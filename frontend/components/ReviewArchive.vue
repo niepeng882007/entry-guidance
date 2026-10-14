@@ -25,7 +25,7 @@ const {
     <section class="review-page__detail" aria-labelledby="account-archive-title">
       <h2 id="account-archive-title" class="section-title">全账户历史归档</h2>
       <p class="muted">
-        首次读取最近 3 个月；服务运行期间每 5 分钟增量归档。关闭页面继续，服务停止暂停，重启后补查。
+        仅手动触发：首次读取最近 3 个月，后续补到本次点击时刻。服务重启或网络恢复不会自动补查。
       </p>
       <button
         class="button button--primary"

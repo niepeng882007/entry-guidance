@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { AccountError, object, readBinance, readReviewIdentity, type AccountConfig } from './account.ts';
 import { calendarStart, clipExpiredPage, compactPages, HistorySync, normalize, uncoveredPages, windows } from './history-sync.ts';
 import { ReviewLedger, type ArchiveProgress, type ArchiveState, type ReviewIdentity, type SyncState } from './review-ledger.ts';
+import { updateOrderHistory } from './order-download.ts';
 
 const symbolPattern = /^[\p{L}\p{N}_]{1,30}USDT$/u;
 const scopeMissing = ['发现范围：全账户收入流水、当前 USDT 永续合约与已归档合约；无法证明未出现在这些来源的历史合约无遗漏。', '已下架合约的持仓或历史可能不可读取；缺少证据的交易保持不完整。'];
@@ -24,10 +25,10 @@ export class AccountArchive {
     return { ...state, ...this.identity, status: state.status === 'running' && !this.busy() ? 'interrupted' : state.status,
       contracts: this.ledger.syncs().map((contract) => contract.status === 'running' && (!this.history.busy() || this.history.state()?.symbol !== contract.symbol) ? { ...contract, status: 'interrupted' as const } : contract) };
   }
-  start(): Promise<ArchiveProgress> {
+  start(range?: { startTime: number; endTime: number }): Promise<ArchiveProgress> {
     if (this.starting) return this.starting;
     if (this.task) return Promise.resolve(this.state()!);
-    this.starting = this.begin().finally(() => { this.starting = undefined; });
+    this.starting = this.begin(range).finally(() => { this.starting = undefined; });
     return this.starting;
   }
   async wait() { await this.starting; await this.task; }
@@ -36,7 +37,7 @@ export class AccountArchive {
   private async confirmIdentity() {
     if (await readReviewIdentity(this.config, this.signal(), 'archive') !== this.identity.accountId) throw new AccountError('identity_changed', '账户身份已变化，暂停当前账户新增归档。');
   }
-  private async begin(): Promise<ArchiveProgress> {
+  private async begin(range?: { startTime: number; endTime: number }): Promise<ArchiveProgress> {
     await this.history.wait();
     await this.confirmIdentity();
     const endTime = Number(object(await readBinance(this.config, 'time', this.signal(), undefined, undefined, 'archive')).serverTime);
@@ -49,16 +50,20 @@ export class AccountArchive {
       pending: windows('income', previous ? Math.max(startTime, previous.discovery.endTime - 7 * 86_400_000 + 1) : startTime, endTime),
       completed: previous?.discovery.completed ?? [], unavailable: previous?.discovery.unavailable ?? [], missing: [], lastSuccessAt: previous?.discovery.lastSuccessAt ?? null,
     };
-    const state: ArchiveState = { status: 'running', startTime, endTime, discovery, symbols: previous?.symbols ?? [], pendingSymbols: previous?.pendingSymbols ?? [], completedSymbols: [], missing: [], scopeMissing, lastSuccessAt: previous?.lastSuccessAt ?? null };
+    const state: ArchiveState = { status: 'running', startTime, endTime, discovery, symbols: previous?.symbols ?? [], pendingSymbols: previous?.pendingSymbols ?? [], completedSymbols: [], missing: [], scopeMissing: [...scopeMissing], lastSuccessAt: previous?.lastSuccessAt ?? null, ...(previous?.orderDownload ? { orderDownload: previous.orderDownload } : {}) };
     this.ledger.saveArchive(state);
-    this.task = this.run(state).finally(() => { this.task = undefined; });
+    this.task = this.run(state, range).finally(() => { this.task = undefined; });
     return this.state()!;
   }
-  private async run(state: ArchiveState) {
+  private async run(state: ArchiveState, range?: { startTime: number; endTime: number }) {
     try {
       const info = object(await readBinance(this.config, 'exchange', this.signal(), undefined, undefined, 'archive'));
       if (!Array.isArray(info.symbols)) throw new AccountError('invalid_history', '当前合约范围读取失败，不能确认发现范围。');
-      state.symbols = [...new Set([...state.symbols, ...this.ledger.syncs().map((sync) => sync.symbol), ...info.symbols.map(object).filter((row) => row.contractType === 'PERPETUAL' && row.quoteAsset === 'USDT' && row.marginAsset === 'USDT').map((row) => row.symbol).filter((symbol): symbol is string => typeof symbol === 'string' && symbolPattern.test(symbol))])].sort();
+      const currentSymbols = info.symbols.map(object).filter((row) => row.contractType === 'PERPETUAL' && row.quoteAsset === 'USDT' && row.marginAsset === 'USDT').map((row) => row.symbol).filter((symbol): symbol is string => typeof symbol === 'string' && symbolPattern.test(symbol));
+      state.symbols = [...new Set([...state.symbols, ...this.ledger.syncs().map((sync) => sync.symbol)])].sort();
+      this.ledger.saveArchive(state);
+      await updateOrderHistory(this.config, this.ledger, state, this.controller.signal, range);
+      if (state.orderDownload?.status !== 'complete' || state.orderDownload.startTime > calendarStart(state.endTime) || state.orderDownload.endTime < state.endTime) state.symbols = [...new Set([...state.symbols, ...currentSymbols])].sort();
       this.ledger.saveArchive(state);
       while (state.discovery.pending.length) {
         let page = state.discovery.pending[0]!;

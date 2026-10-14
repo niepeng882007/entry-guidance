@@ -135,6 +135,13 @@ export class HistorySync {
         unavailable: previous?.unavailable ?? [], missing: (previous?.unavailable ?? []).map(unavailableMessage), lastSuccessAt: previous?.lastSuccessAt ?? null,
       };
       state.attemptedAt = new Date().toISOString();
+      const download = this.ledger.archiveState()?.orderDownload;
+      if (download?.status === 'complete') {
+        const from = Math.max(state.startTime, download.startTime), to = Math.min(state.endTime, download.endTime);
+        const coverage = from <= to ? windows('history', from, to) : [];
+        state.pending = state.pending.flatMap((page) => page.source === 'history' ? uncoveredPages(page, coverage) : [page]);
+        state.completed = compactPages([...state.completed, ...coverage]);
+      }
       this.ledger.saveSync(state);
       this.activeSymbol = symbol;
       this.task = this.run(state).finally(() => { this.running = false; });

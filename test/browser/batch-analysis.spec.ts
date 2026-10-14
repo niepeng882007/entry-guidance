@@ -3,10 +3,10 @@ import { test, expect } from '@playwright/test';
 test('list batch analysis is explicit, freezes its range and preserves old reports across filters and reloads', async ({
   page,
 }) => {
-  await page.goto('/review');
+  await page.goto('/review?view=cycles');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
-  await page.goto('/review?symbol=BTCUSDT');
+  await page.goto('/review?view=cycles&symbol=BTCUSDT');
   const analysis = page.getByRole('region', { name: '筛选范围模型复盘' });
   let starts = 0;
   page.on('request', (request) => {
@@ -19,7 +19,7 @@ test('list batch analysis is explicit, freezes its range and preserves old repor
   await expect(analysis.getByText('完整报告', { exact: true }).first()).toBeVisible();
   await expect(analysis).toContainText('基于已完成分段结果综合');
   await expect(analysis).toContainText('选择范围 1 笔');
-  await page.goto('/review?symbol=ETHUSDT');
+  await page.goto('/review?view=cycles&symbol=ETHUSDT');
   await expect(analysis).toContainText('BTCUSDT');
   await expect(
     analysis.getByRole('button', { name: '发起分析 / 复用报告', exact: true }),
@@ -39,7 +39,7 @@ test('list batch analysis is explicit, freezes its range and preserves old repor
 test('over 100 selected trades blocks a new analysis independently of the visible page size', async ({
   page,
 }) => {
-  await page.goto('/review');
+  await page.goto('/review?view=cycles');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
   const list = await (await page.request.get('/api/review/trades')).json();
@@ -56,7 +56,7 @@ test('over 100 selected trades blocks a new analysis independently of the visibl
       ),
     }),
   );
-  await page.goto('/review?page=2');
+  await page.goto('/review?view=cycles&page=2');
   const analysis = page.getByRole('region', { name: '筛选范围模型复盘' });
   await expect(page.locator('.review-table tbody tr[data-row-key]')).toHaveCount(20);
   await expect(analysis).toContainText('当前范围超过 100 笔，请缩小筛选范围');
@@ -68,13 +68,13 @@ test('over 100 selected trades blocks a new analysis independently of the visibl
 test('a model style suggestion stays separate until the user saves a personal tag in the trade detail', async ({
   page,
 }) => {
-  await page.goto('/review');
+  await page.goto('/review?view=cycles');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
   const endpoint = '/api/review/analysis';
   await page.request.post(endpoint, {
     data: { includeNotes: false, regenerate: true, query: 'symbol=BTCUSDT' },
-    headers: { Origin: 'http://127.0.0.1:4179' },
+    headers: { Origin: new URL(page.url()).origin },
   });
   await expect
     .poll(async () => (await (await page.request.get(endpoint)).json()).tasks[0].status)
@@ -91,13 +91,13 @@ test('a model style suggestion stays separate until the user saves a personal ta
   await page.route(`**${endpoint}`, (route) =>
     route.fulfill({ json: { ...payload, tasks: [task] } }),
   );
-  await page.goto('/review?symbol=BTCUSDT');
+  await page.goto('/review?view=cycles&symbol=BTCUSDT');
   const analysis = page.getByRole('region', { name: '筛选范围模型复盘' });
   await expect(analysis.getByRole('region', { name: '风格推测' })).toContainText(name);
   let journal = await (await page.request.get('/api/review/journal')).json();
   expect(journal.tags.some((tag: { name: string }) => tag.name === name)).toBe(false);
   await analysis.getByRole('link', { name: '进入交易详情确认标签' }).click();
-  await expect(page).toHaveURL(/review\/trades\/BTCUSDT-demo-fill-1\?symbol=BTCUSDT/);
+  await expect(page).toHaveURL(/review\/trades\/BTCUSDT-demo-fill-1\?view=cycles&symbol=BTCUSDT/);
   await page.getByText('维护交易风格标签', { exact: true }).click();
   await page.getByLabel('新标签名称', { exact: true }).fill(name);
   await page.getByRole('button', { name: '新建标签', exact: true }).click();

@@ -74,7 +74,7 @@ test('downloads, previews and confirms a backup, preserving current notes and sh
     await page.goto('/');
     await page.getByLabel('个人访问密码').fill('browser-test-only');
     await page.getByRole('button', { name: '进入账户' }).click();
-    await page.goto('/review');
+    await page.goto('/review?view=cycles');
     await page.getByText('导出与备份恢复', { exact: true }).click();
     await expect(page.getByRole('button', { name: '下载完整备份' })).toBeEnabled();
     const csvEvent = page.waitForEvent('download');

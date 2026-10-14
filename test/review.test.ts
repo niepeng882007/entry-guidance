@@ -186,7 +186,7 @@ test('market evidence is protected, source-labelled and persists across restart'
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const config = { mode: 'demo' as const, reviewLedgerPath: join(directory, 'demo.sqlite'), transport: async () => { throw new Error('demo must not query Binance'); } };
   let app = await start(t, config);
-  const path = '/api/review/trades/BTCUSDT-demo-fill-1/market?interval=15m';
+  const path = '/api/review/trades/BTCUSDT-demo-fill-1/market?interval=15m&refresh=1';
   assert.equal((await fetch(`${app.base}${path}`)).status, 401);
   const response = await app.get(path);
   assert.equal(response.status, 200);

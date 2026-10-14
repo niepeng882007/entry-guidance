@@ -129,7 +129,7 @@ test('all archived periods include full raw candle coverage despite screen sampl
     for (const row of input.records) seen.add(row.path);
     return modelResponse(body);
   }));
-  const read = (interval: string) => fetch(`${application.base}/api/review/trades/BTCUSDT-demo-fill-1/market?interval=${interval}`, { headers: { Cookie: application.cookie } });
+  const read = (interval: string) => fetch(`${application.base}/api/review/trades/BTCUSDT-demo-fill-1/market?interval=${interval}&refresh=1`, { headers: { Cookie: application.cookie } });
   const small = await (await read('1m')).json(); assert.ok(small.series.contract.sampled);
   await read('1h');
   await application.post(startInput); const task = await finished(application);
@@ -387,7 +387,7 @@ test('batch cancellation and explicit continue keep the original range, saved no
     if (waiting) { entered(); await new Promise<void>((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true })); }
     return modelResponse(body);
   }), path, '$batch');
-  for (const id of ['BTCUSDT-demo-fill-1', trade.id]) assert.equal((await fetch(`${application.base}/api/review/trades/${id}/market?interval=1h`, { headers: { Cookie: application.cookie } })).status, 200);
+  for (const id of ['BTCUSDT-demo-fill-1', trade.id]) assert.equal((await fetch(`${application.base}/api/review/trades/${id}/market?interval=1h&refresh=1`, { headers: { Cookie: application.cookie } })).status, 200);
   const started = await (await application.post({ ...startInput, includeNotes: true })).json() as AnalysisTask; await gate;
   const saved = ledger.journal().notes.find((row) => row.id === note.id)!;
   ledger.saveNote(trade.id, { ...fields, version: saved.version, freeNote: '新笔记' });
@@ -395,7 +395,7 @@ test('batch cancellation and explicit continue keep the original range, saved no
   ledger.saveTag({ id: tag.id, version: tag.version, active: tag.active, name: '改名后标签' });
   const others = ledger.list().filter((row) => row.symbol === 'ETHUSDT').map((row) => ledger.get(row.id)!);
   ledger.project('ETHUSDT', [...others, { ...structuredClone(trade), id: 'ETHUSDT-new-trade' }]);
-  await fetch(`${application.base}/api/review/trades/${trade.id}/market?interval=5m`, { headers: { Cookie: application.cookie } });
+  await fetch(`${application.base}/api/review/trades/${trade.id}/market?interval=5m&refresh=1`, { headers: { Cookie: application.cookie } });
   assert.equal(calls, 1);
   const cancelled = await (await application.post({ action: 'cancel', taskId: started.id })).json() as AnalysisTask;
   assert.equal(cancelled.status, 'cancelled'); assert.deepEqual(cancelled.snapshot, started.snapshot);

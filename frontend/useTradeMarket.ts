@@ -139,7 +139,7 @@ export function useTradeMarket(trade: Ref<ReviewTrade>) {
     busy.value = false;
     status.value = message;
   }
-  async function read() {
+  async function read(refresh = true) {
     if (suspended || relogin.value) return;
     pending?.abort();
     const current = ++sequence;
@@ -148,14 +148,19 @@ export function useTradeMarket(trade: Ref<ReviewTrade>) {
     const basis = trade.value,
       period = interval.value;
     busy.value = true;
-    status.value = '正在读取并保存历史行情…';
+    status.value = refresh ? '正在读取并保存历史行情…' : '正在读取已归档行情…';
     const timeout = setTimeout(() => controller.abort(), 35_000);
     try {
       const response = await fetch(
-        `/api/review/trades/${encodeURIComponent(basis.id)}/market?interval=${period}`,
+        `/api/review/trades/${encodeURIComponent(basis.id)}/market?interval=${period}${refresh ? '&refresh=1' : ''}`,
         { cache: 'no-store', signal: controller.signal },
       );
       if (current !== sequence) return;
+      if (response.status === 404 && !refresh) {
+        chart.value = null;
+        status.value = '尚无该周期的本地行情，请手动读取行情。';
+        return;
+      }
       if (response.status === 401) {
         chart.value = null;
         relogin.value = true;
@@ -190,7 +195,7 @@ export function useTradeMarket(trade: Ref<ReviewTrade>) {
     sequence++;
     pending?.abort();
     chart.value = null;
-    void read();
+    void read(false);
   });
   onMounted(() => {
     const events = new AbortController();
@@ -198,7 +203,6 @@ export function useTradeMarket(trade: Ref<ReviewTrade>) {
     const resume = () => {
       if (document.hidden || !navigator.onLine) return;
       suspended = false;
-      void read();
     };
     window.addEventListener(
       'pagehide',
@@ -219,7 +223,10 @@ export function useTradeMarket(trade: Ref<ReviewTrade>) {
     );
     cleanup = () => events.abort();
     if (!navigator.onLine) cancel('网络已断开，无法读取行情。');
-    else resume();
+    else {
+      resume();
+      void read(false);
+    }
   });
   let cleanup = () => {};
   onUnmounted(() => {

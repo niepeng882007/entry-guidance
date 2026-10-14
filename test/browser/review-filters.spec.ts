@@ -24,7 +24,7 @@ async function startFiltersPage(page: Page) {
   await page.goto(`${base}/`);
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
-  await page.goto(`${base}/review`);
+  await page.goto(`${base}/review?view=cycles`);
   return {
     base,
     seeded,
@@ -53,7 +53,7 @@ test('server pagination preserves total range and resets to page one after a sym
     await expect(tableRows(page)).toHaveCount(9);
     await selectSymbol(page, 'ETHUSDT');
     await expect(tableRows(page)).toHaveCount(3);
-    await expect(page).toHaveURL(app.base + '/review?symbol=ETHUSDT');
+    await expect(page).toHaveURL(app.base + '/review?view=cycles&symbol=ETHUSDT');
     await page.getByRole('button', { name: '查看 ETHUSDT 交易详情' }).first().click();
     await expect(page.locator('#trade-detail')).toBeFocused();
     await page.getByRole('button', { name: '← 返回交易记录' }).click();
@@ -71,20 +71,20 @@ test('Beijing day boundaries, unknown opening dates and pending PnL stay explici
 }) => {
   const app = await startFiltersPage(page);
   try {
-    await page.goto(app.base + '/review?from=2026-10-10&to=2026-10-10&symbol=ETHUSDT');
+    await page.goto(app.base + '/review?view=cycles&from=2026-10-10&to=2026-10-10&symbol=ETHUSDT');
     await expect(tableRows(page)).toHaveCount(1);
     await expect(tableRows(page)).toContainText('-13.5265');
-    await page.goto(app.base + '/review?symbol=SOLUSDT');
+    await page.goto(app.base + '/review?view=cycles&symbol=SOLUSDT');
     await expect(tableRows(page)).toHaveCount(4);
     await expect(page.locator('.review-table__amount').filter({ hasText: '待确认' })).toHaveCount(
       3,
     );
-    await page.goto(app.base + '/review?from=2026-10-10&to=2026-10-10&symbol=SOLUSDT');
+    await page.goto(app.base + '/review?view=cycles&from=2026-10-10&to=2026-10-10&symbol=SOLUSDT');
     await expect(tableRows(page)).toHaveCount(3);
-    await page.goto(app.base + '/review?symbol=ADAUSDT');
+    await page.goto(app.base + '/review?view=cycles&symbol=ADAUSDT');
     await expect(page.getByText('没有符合条件的交易，请调整日期或交易对。')).toBeVisible();
     await expect(tableRows(page)).toHaveCount(0);
-    await page.goto(app.base + '/review?from=2026-10-11&to=2026-10-10');
+    await page.goto(app.base + '/review?view=cycles&from=2026-10-11&to=2026-10-10');
     await expect(page.getByRole('alert')).toContainText('开始日期不能晚于结束日期');
     await expect(tableRows(page)).toHaveCount(0);
     expect((await page.request.get(app.base + '/api/review/trades?pnl=invalid')).status()).toBe(
@@ -179,7 +179,7 @@ test('failed or mismatched responses cannot pass as the selected range', async (
 test('reading raw evidence cannot make a failed trade list current again', async ({ page }) => {
   const app = await startFiltersPage(page);
   try {
-    await page.route('**/review', async (route) => {
+    await page.route('**/review?view=cycles', async (route) => {
       const response = await route.fetch();
       await route.fulfill({
         response,
@@ -289,7 +289,7 @@ test('statistics and charts use the full range, overlap tags, and remain readabl
     await page.locator('.ant-pagination-item-2').click();
     await expect(tableRows(page)).toHaveCount(9);
     await expect(panel.locator('.review-statistics__evidence-id')).toHaveText(evidence!);
-    await page.goto(app.base + '/review?symbol=ETHUSDT&from=2026-10-10&to=2026-10-10');
+    await page.goto(app.base + '/review?view=cycles&symbol=ETHUSDT&from=2026-10-10&to=2026-10-10');
     await page.getByText('表现统计 · 当前筛选范围', { exact: true }).click();
     await expect(panel).toContainText('净盈亏有效 1 笔');
     await expect(panel).toContainText('-13.5265 USDT');
@@ -321,7 +321,7 @@ test('statistics and charts use the full range, overlap tags, and remain readabl
         .scrollIntoViewIfNeeded();
       await page.screenshot({ path: test.info().outputPath(`statistics-${width}.png`) });
     }
-    await page.goto(app.base + '/review?symbol=ADAUSDT');
+    await page.goto(app.base + '/review?view=cycles&symbol=ADAUSDT');
     await page.getByText('表现统计 · 当前筛选范围', { exact: true }).click();
     await expect(panel).toContainText('净盈亏有效 0 笔');
     await expect(panel).toContainText('没有可判定净盈亏的已结束交易');

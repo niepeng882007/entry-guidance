@@ -107,11 +107,12 @@ for (const two of [false, true])
       });
       await route.fulfill({ json: chart });
     });
-    await page.goto('/review');
+    await page.goto('/review?view=cycles');
     await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
     await page.locator('summary').filter({ hasText: '原方案与执行对照' }).click();
     await expect(page.locator('#review-plan-link')).toContainText('原方案：已关联');
     const chart = page.getByRole('region', { name: '行情与交易事件' });
+    await chart.getByRole('button', { name: '继续读取 / 重试行情' }).click();
     await expect(chart).toContainText('原计划最终止损');
     await expect(chart).toContainText('查询时点实际止损设置');
     await expect(chart).toContainText('标记价触发依据');
@@ -165,7 +166,7 @@ test('ambiguous plans retain actual records and explain why execution deviations
     stopChecks: [],
     limitations: ['未唯一关联原方案，预算偏离、计划入场与止损偏离无法判断。'],
   };
-  await page.goto('/review');
+  await page.goto('/review?view=cycles');
   await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
   await page.locator('summary').filter({ hasText: '原方案与执行对照' }).click();
   await expect(page.locator('#review-plan-link')).toContainText('关联歧义');
@@ -177,7 +178,7 @@ test('ambiguous plans retain actual records and explain why execution deviations
 test('a plan from another account cannot appear as a confirmed comparison', async ({ page }) => {
   const { detail } = await comparisonFixture(page);
   detail.planComparison!.plan!.reviewAccountId = 'another-account';
-  await page.goto('/review');
+  await page.goto('/review?view=cycles');
   await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
   await expect(page.locator('#review-status')).toContainText('原方案来源、账户或交易关联无效');
   await expect(page.locator('#trade-detail')).toHaveCount(0);

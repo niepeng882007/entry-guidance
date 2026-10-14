@@ -33,7 +33,7 @@ async function mockTrades(page: Page, list: ReviewList, trades: ReviewList['trad
 }
 
 async function login(page: Page) {
-  await page.goto('/review');
+  await page.goto('/review?view=cycles');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
 }
@@ -60,7 +60,7 @@ test('date and searchable symbol filters paginate a real table without CSP viola
     baseAsset: index < 23 ? 'BTC' : 'ETH',
   }));
   await mockTrades(page, list, trades);
-  await page.goto('/review?from=2026-10-10&to=2026-10-10');
+  await page.goto('/review?view=cycles&from=2026-10-10&to=2026-10-10');
   await expect(page.locator('.review-table tbody tr[data-row-key]')).toHaveCount(20);
   await page.getByLabel('交易对', { exact: true }).fill('BTC');
   await page.locator('.ant-select-item-option').filter({ hasText: 'BTCUSDT' }).click();
@@ -74,7 +74,7 @@ test('date and searchable symbol filters paginate a real table without CSP viola
   await expect(page.getByRole('alert')).toContainText('开始日期不能晚于结束日期');
   await expect(page.locator('.review-table tbody tr[data-row-key]')).toHaveCount(0);
   await page.getByRole('button', { name: '重置', exact: true }).click();
-  await expect(page).toHaveURL('/review');
+  await expect(page).toHaveURL('/review?view=cycles');
   await expect(page.getByText('当前匹配 44 笔', { exact: true })).toBeVisible();
   for (const width of [320, 390, 1280]) {
     await page.setViewportSize({ width, height: 844 });
@@ -112,11 +112,11 @@ test('detail URLs reload directly and browser navigation preserves list state an
   page,
 }) => {
   await login(page);
-  await page.goto('/review?symbol=BTCUSDT&from=2026-10-10');
+  await page.goto('/review?view=cycles&symbol=BTCUSDT&from=2026-10-10');
   await expect(page.locator('#trade-detail')).toHaveCount(0);
   await page.locator('.review-table tbody tr[data-row-key]').click();
   await expect(page).toHaveURL(
-    /\/review\/trades\/BTCUSDT-demo-fill-1\?from=2026-10-10&symbol=BTCUSDT/,
+    /\/review\/trades\/BTCUSDT-demo-fill-1\?view=cycles&from=2026-10-10&symbol=BTCUSDT/,
   );
   await expect(page.getByRole('group', { name: '交易记录筛选' })).toHaveCount(0);
   await page.reload();
@@ -154,7 +154,7 @@ test('returning to a paginated list rejects a late detail response and restores 
     });
     await route.fulfill({ json: { ...detail, id: route.request().url().split('/').at(-1) } });
   });
-  await page.goto('/review?page=2');
+  await page.goto('/review?view=cycles&page=2');
   const button = page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).first();
   await button.focus();
   await page.keyboard.press('Enter');
@@ -162,7 +162,7 @@ test('returning to a paginated list rejects a late detail response and restores 
   await page.getByRole('button', { name: '← 返回交易记录' }).click();
   release();
   await page.unrouteAll({ behavior: 'wait' });
-  await expect(page).toHaveURL('/review?page=2');
+  await expect(page).toHaveURL('/review?view=cycles&page=2');
   await expect(page.locator('#trade-detail')).toHaveCount(0);
   await expect(button).toBeFocused();
   await expect(page.locator('.review-table tbody tr[data-row-key]')).toHaveCount(2);

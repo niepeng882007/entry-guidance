@@ -70,7 +70,7 @@ function citation(task: AnalysisTask, id: string) {
   return '已完成分段结果（非原始证据），见下方分段清单';
 }
 function tradeLink(task: AnalysisTask, id: string) {
-  const query = new URLSearchParams();
+  const query = new URLSearchParams({ view: 'cycles' });
   for (const key of ['from', 'to', 'symbol'] as const)
     if (task.snapshot.statistics.filters[key])
       query.set(key, task.snapshot.statistics.filters[key]);

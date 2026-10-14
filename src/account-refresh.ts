@@ -96,6 +96,7 @@ export function coordinateAccountReads(config: AccountConfig) {
       '/fapi/v1/allAlgoOrders': 5, '/fapi/v1/income': 30, '/fapi/v1/forceOrders': single ? 20 : 50,
       '/fapi/v1/ticker/bookTicker': single ? 2 : 5, '/fapi/v1/leverageBracket': 1,
       '/fapi/v1/commissionRate': 20, '/fapi/v1/positionSide/dual': 30,
+      '/fapi/v1/order/asyn': 1000, '/fapi/v1/order/asyn/id': 10,
     };
     return weights[url.pathname] ?? 0;
   };
@@ -123,7 +124,7 @@ export function coordinateAccountReads(config: AccountConfig) {
       for (const budget of budgets.values()) budget.used += weight(url);
     }
     // Re-sign after queueing; the original request may have waited beyond recvWindow.
-    if (url.searchParams.has('signature')) signBinanceRequest(config, url);
+    if (['api.binance.com', 'fapi.binance.com'].includes(url.hostname) && url.searchParams.has('signature')) signBinanceRequest(config, url);
     const response = await upstream(url, headers, signal);
     if (response.status === 429 || response.status === 418) {
       const retry = Object.entries(response.headers ?? {}).find(([key]) => key.toLowerCase() === 'retry-after')?.[1];

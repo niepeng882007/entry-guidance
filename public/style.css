@@ -496,6 +496,9 @@ p { margin: 0 0 var(--space-12); }
 }
 
 /* Review page: archived evidence uses shared amounts and native disclosures. */
+.review-orders { margin-top: var(--space-24); }
+.review-orders .section-title { margin-bottom: var(--space-16); }
+.review-orders__details { max-width: min(640px, calc(100vw - 80px)); }
 .review-page__filters { margin: var(--space-24) 0; }
 .review-page__filter-form { display: grid; gap: var(--space-16); margin-top: var(--space-16); }
 .review-page__filter-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-16); }

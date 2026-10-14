@@ -99,6 +99,8 @@ test('dev reloads Vue and CSS across concurrent instances, and restarts changed 
   await reviewPage.locator('#password').fill('development-test-only');
   await reviewPage.locator('button[type="submit"]').click();
   await reviewPage.goto(`${first.origin}/review`);
+  await expect(reviewPage.locator('.review-table tbody tr[data-row-key]')).toHaveCount(3);
+  await reviewPage.getByRole('button', { name: '完整交易复盘', exact: true }).click();
   await expect(reviewPage.locator('.review-table tbody tr[data-row-key]')).toHaveCount(1);
   await reviewPage.close();
   const secondComponent = join(second.directory, 'frontend/HomePage.vue');

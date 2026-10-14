@@ -1,6 +1,7 @@
 import { dateBoundary } from '../src/review-filters.ts';
 
 export type ReviewLocation = {
+  view?: 'cycles';
   tradeId: string | null;
   from: string;
   to: string;
@@ -11,6 +12,7 @@ export type ReviewLocation = {
 export function readReviewLocation(url: URL): ReviewLocation {
   const page = Number(url.searchParams.get('page') ?? 1);
   return {
+    ...(url.searchParams.get('view') === 'cycles' ? { view: 'cycles' as const } : {}),
     tradeId: url.pathname.match(/^\/review\/trades\/([A-Za-z0-9-]{1,160})$/)?.[1] ?? null,
     from: url.searchParams.get('from') ?? '',
     to: url.searchParams.get('to') ?? '',
@@ -21,6 +23,7 @@ export function readReviewLocation(url: URL): ReviewLocation {
 
 export function reviewUrl(location: ReviewLocation) {
   const query = new URLSearchParams();
+  if (location.view === 'cycles') query.set('view', 'cycles');
   for (const key of ['from', 'to', 'symbol'] as const)
     if (location[key]) query.set(key, location[key]);
   if (location.page > 1) query.set('page', String(location.page));

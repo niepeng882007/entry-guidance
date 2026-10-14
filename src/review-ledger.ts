@@ -60,6 +60,7 @@ export type ArchiveState = {
   status: SyncState['status']; startTime: number; endTime: number;
   discovery: SyncState; symbols: string[]; pendingSymbols: string[]; completedSymbols: string[];
   missing: string[]; scopeMissing: string[]; lastSuccessAt: string | null; errorCode?: string;
+  orderDownload?: { status: 'submitting' | 'processing' | 'complete' | 'failed' | 'unknown'; downloadId: string | null; startTime: number; endTime: number; records: number; message: string };
 };
 export type ArchiveProgress = ArchiveState & ReviewIdentity & { contracts: SyncState[] };
 export type ReviewList = { source: ReviewIdentity['source']; accountId: string | null; syncStatus: 'demo' | 'not-synced' | 'synced'; trades: ReviewSummary[]; statistics: StatisticsEvidence; filters: ReviewFilters; total: number; page: number; pageSize: number; nextPage: number | null; options: { symbols: string[]; tags: Pick<StyleTag, 'id' | 'name' | 'active'>[] }; sync?: SyncState | null; archive?: ArchiveProgress | null; archiveIssue?: { code: string; message: string; attemptedAt: string } };
@@ -134,6 +135,19 @@ export class ReviewLedger {
   private db: DatabaseSync;
   private identity: ReviewIdentity;
 
+  static boundAccount(path: string, binding: string): string | null {
+    const db = new DatabaseSync(path, { readOnly: true });
+    try {
+      if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='review_bindings'").get()) return null;
+      const row = db.prepare('SELECT account FROM review_bindings WHERE binding=?').get(binding);
+      return row ? String(row.account) : null;
+    } finally { db.close(); }
+  }
+
+  bindAccount(binding: string) {
+    this.db.prepare('INSERT INTO review_bindings VALUES (?, ?) ON CONFLICT(binding) DO UPDATE SET account=excluded.account').run(binding, this.identity.accountId);
+  }
+
   constructor(path: string, identity: ReviewIdentity) {
     if (!identity.accountId.trim() || !['demo', 'binance'].includes(identity.source)) throw new Error('账本需明确来源与账户身份。');
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -143,6 +157,9 @@ export class ReviewLedger {
       if (path !== ':memory:') chmodSync(path, 0o600);
       this.db.exec(`
         PRAGMA foreign_keys = ON;
+        CREATE TABLE IF NOT EXISTS review_bindings (
+          binding TEXT PRIMARY KEY, account TEXT NOT NULL
+        ) STRICT;
         CREATE TABLE IF NOT EXISTS review_versions (
           source TEXT NOT NULL, account TEXT NOT NULL, id TEXT NOT NULL, kind TEXT NOT NULL, record_id TEXT NOT NULL, payload TEXT NOT NULL,
           PRIMARY KEY (source, account, id)
@@ -404,6 +421,10 @@ export class ReviewLedger {
     return this.db.prepare('SELECT payload FROM history_raw WHERE source=? AND account=? AND symbol=?').all(this.identity.source, this.identity.accountId, symbol).map((row) => JSON.parse(String(row.payload)) as RawRecord);
   }
 
+  allRaw(): RawRecord[] {
+    return this.db.prepare('SELECT payload FROM history_raw WHERE source=? AND account=?').all(this.identity.source, this.identity.accountId).map((row) => JSON.parse(String(row.payload)) as RawRecord);
+  }
+
   saveSync(state: SyncState, records: RawRecord[] = []) {
     const { source, accountId } = this.identity;
     this.db.exec('BEGIN IMMEDIATE');
@@ -416,8 +437,8 @@ export class ReviewLedger {
 
   private saveRaw(symbol: string, records: RawRecord[]) {
     const { source, accountId } = this.identity;
-    for (const record of records) {
-        const recordSymbol = record.kind === 'income' && typeof record.payload.symbol === 'string' ? record.payload.symbol : symbol;
+    for (let record of records) {
+        const recordSymbol = typeof record.payload.symbol === 'string' ? record.payload.symbol : symbol;
         const existing = record.kind === 'income'
           ? this.db.prepare('SELECT payload FROM history_raw WHERE source=? AND account=? AND kind=? AND id=?').get(source, accountId, record.kind, record.id)
           : this.db.prepare('SELECT payload FROM history_raw WHERE source=? AND account=? AND symbol=? AND kind=? AND id=?').get(source, accountId, recordSymbol, record.kind, record.id);
@@ -430,6 +451,11 @@ export class ReviewLedger {
             if (enrichable.includes(field) && (before === null || before === undefined || (field === 'tradeId' && before === ''))) return false;
             return ['id', 'orderId', 'tranId', 'tradeId'].includes(field) ? String(before) !== String(after) : before !== after;
           })) throw new Error('来源事实冲突，保留已有账本。');
+        }
+        if (existing && record.kind === 'history') {
+          const previous = JSON.parse(String(existing.payload)) as RawRecord;
+          if (Number(record.payload.updateTime ?? record.time) < Number(previous.payload.updateTime ?? previous.time)) continue;
+          record = { ...record, payload: { ...previous.payload, ...record.payload } };
         }
         this.db.prepare('INSERT INTO history_raw VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(source, account, symbol, kind, id) DO UPDATE SET payload=excluded.payload').run(source, accountId, recordSymbol, record.kind, record.id, JSON.stringify(record));
     }

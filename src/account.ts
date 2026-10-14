@@ -5,6 +5,8 @@ import { parseDecimal, formatDecimal } from '../public/draft.js';
 export type ReadPriority = 'foreground' | 'archive';
 export type Transport = (url: URL, headers: Record<string, string>, signal: AbortSignal, priority?: ReadPriority) => Promise<{ status: number; body: unknown; headers?: Record<string, string | undefined> }>;
 export type AccountConfig = { apiKey?: string; apiSecret?: string; transport?: Transport };
+// Confirmed from a completed Binance order export on 2026-10-14; never follow arbitrary file hosts.
+export const orderDownloadHost = 'd11ggcthlh2gdm.cloudfront.net';
 
 export class AccountError extends Error {
   code: string;
@@ -32,16 +34,20 @@ export const binanceTransport: Transport = (url, headers, signal) => new Promise
     let size = 0;
     response.on('data', (chunk: Buffer) => {
       size += chunk.length;
-      if (size > 8_000_000) response.destroy(new Error('response too large'));
+      if (size > (url.hostname === orderDownloadHost ? 64_000_000 : 8_000_000)) response.destroy(new Error('response too large'));
       else chunks.push(chunk);
     });
     response.on('error', reject);
     response.on('end', () => {
       let data: unknown;
       try {
-        const text = Buffer.concat(chunks).toString('utf8');
-        // Signed source IDs are int64; keep their JSON tokens until the read boundary.
-        data = integerIdPaths.includes(url.pathname) && response.statusCode === 200 ? text : JSON.parse(text);
+        const body = Buffer.concat(chunks);
+        if (url.hostname === orderDownloadHost) data = body;
+        else {
+          const text = body.toString('utf8');
+          // Signed source IDs are int64; keep their JSON tokens until the read boundary.
+          data = integerIdPaths.includes(url.pathname) && response.statusCode === 200 ? text : JSON.parse(text);
+        }
       }
       catch {
         if (response.statusCode === 429 || response.statusCode === 418) data = null;

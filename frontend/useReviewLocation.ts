@@ -24,5 +24,6 @@ export function useReviewLocation() {
     paginate: (page: number) => navigate({ ...location.value, page }, true),
     show: (tradeId: string) => navigate({ ...location.value, tradeId }),
     back: () => navigate({ ...location.value, tradeId: null }),
+    view: (view?: 'cycles') => navigate({ ...location.value, view, tradeId: null, page: 1 }),
   };
 }

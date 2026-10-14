@@ -22,7 +22,7 @@ async function startNotesPage(page: Page) {
   await page.goto(`${base}/`);
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
-  await page.goto(`${base}/review`);
+  await page.goto(`${base}/review?view=cycles`);
   return {
     base,
     path: join(directory, 'demo.sqlite'),
@@ -222,7 +222,7 @@ test('changing accounts through an unsynced state cannot reuse another account d
       await page.request.get(`${app.base}/api/review/trades/${list.trades[0].id}`)
     ).json();
     let account: string | null = '12345';
-    await page.route('**/review', async (route) => {
+    await page.route('**/review?view=cycles', async (route) => {
       const response = await route.fetch();
       await route.fulfill({
         response,
