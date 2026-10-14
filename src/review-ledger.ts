@@ -1,5 +1,6 @@
 import { entryType, matchesReview, sortReview, defaultReviewFilters, type EntryType, type ReviewFilters } from './review-filters.ts';
 import { randomUUID } from 'node:crypto';
+import { backupTables, recordKey, canonical, fingerprint, personal, validateBackup, BackupError, type BackupTable, type BackupRecord, type ReviewBackup, type RestorePreview, type RecordVersion } from './review-backup.ts';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { noteBasis, noteBelongsTo, noteInput, tagInput, ReviewWriteError, type ReviewJournal, type ReviewNote, type StyleTag } from './review-notes.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
@@ -142,6 +143,10 @@ export class ReviewLedger {
       if (path !== ':memory:') chmodSync(path, 0o600);
       this.db.exec(`
         PRAGMA foreign_keys = ON;
+        CREATE TABLE IF NOT EXISTS review_versions (
+          source TEXT NOT NULL, account TEXT NOT NULL, id TEXT NOT NULL, kind TEXT NOT NULL, record_id TEXT NOT NULL, payload TEXT NOT NULL,
+          PRIMARY KEY (source, account, id)
+        ) STRICT;
         CREATE TABLE IF NOT EXISTS review_analysis (
           source TEXT NOT NULL, account TEXT NOT NULL, id TEXT NOT NULL, trade_id TEXT NOT NULL, payload BLOB NOT NULL,
           PRIMARY KEY (source, account, id)
@@ -440,6 +445,142 @@ export class ReviewLedger {
         this.db.prepare('INSERT INTO trades VALUES (?, ?, ?, ?, ?)').run(source, accountId, trade.id, trade.openedAt ?? trade.evidence.fills[0]?.time ?? '', JSON.stringify(trade));
       }
       this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
+  private backupRecords(): BackupRecord[] {
+    const records: BackupRecord[] = [];
+    for (const [table, schema] of Object.entries(backupTables)) {
+      for (const row of this.db.prepare('SELECT ' + schema.columns.join(',') + ' FROM ' + table + ' WHERE source=? AND account=?').all(this.identity.source, this.identity.accountId)) {
+        const compressed = table === 'review_market' || table === 'review_analysis';
+        const payload = compressed ? gunzipSync(row.payload as Uint8Array).toString('utf8') : String(row.payload);
+        records.push({ table: table as BackupTable, data: { ...row, payload: JSON.parse(payload) as unknown } });
+      }
+    }
+    // Identical observations have no installation-local integer ID in the portable format.
+    const observations = new Set<string>();
+    const unique = records.filter((row) => {
+      if (row.table !== 'review_verifications') return true;
+      const key = recordKey(row);
+      if (observations.has(key)) return false;
+      observations.add(key); return true;
+    });
+    return unique.sort((a, b) => recordKey(a).localeCompare(recordKey(b)));
+  }
+
+  backup(): ReviewBackup {
+    this.db.exec('BEGIN');
+    try {
+      return { ...this.identity, format: 'entry-guidance-review', version: 1, exportedAt: new Date().toISOString(), records: this.backupRecords() };
+    } finally { this.db.exec('ROLLBACK'); }
+  }
+
+  previewRestore(value: unknown): RestorePreview {
+    const checked = validateBackup(value, this.identity);
+    return this.restorePreview(checked, this.backup().records);
+  }
+
+  private restorePreview(checked: ReturnType<typeof validateBackup>, current: BackupRecord[]): RestorePreview {
+    const incoming = checked.backup?.records ?? [];
+    const existing = new Map(current.map((row) => [recordKey(row), row]));
+    const compared = [...current];
+    const result: RestorePreview = { added: 0, duplicates: 0, conflicts: [], rejected: checked.rejected, token: fingerprint([checked.backup, checked.rejected, current]) };
+    for (const row of incoming) {
+      const key = recordKey(row), previous = this.restorePrevious(row, compared, existing);
+      if (!previous) {
+        result.added++;
+        if (row.table === 'style_tags') compared.push(row);
+      }
+      else if (canonical(previous) === canonical(row)) result.duplicates++;
+      else result.conflicts.push({ key, table: row.table, id: String(row.data.id ?? row.data.symbol ?? '账户'), overwritable: personal(row.table) && recordKey(previous) === key, current: previous.data.payload, incoming: row.data.payload });
+    }
+    const available = incoming.filter((row) => row.table === 'style_tags' && !result.conflicts.some((conflict) => conflict.key === recordKey(row)) && (existing.has(recordKey(row)) || !this.retainedRestoreVersion(row, existing)));
+    const tags = new Set([...current, ...available].filter((row) => row.table === 'style_tags').map((row) => row.data.id));
+    const trades = new Map(current.filter((row) => row.table === 'trades').map((row) => [row.data.id, row.data.payload as ReviewTrade]));
+    for (const row of incoming) if (row.table === 'trades' && !trades.has(row.data.id)) trades.set(row.data.id, row.data.payload as ReviewTrade);
+    const boundNotes = new Map<string, ReviewNote>();
+    for (const row of current) if (row.table === 'review_notes') {
+      const note = row.data.payload as ReviewNote;
+      if (noteBelongsTo(note, trades.get(note.trade.id) ?? null)) boundNotes.set(note.trade.id, note);
+    }
+    for (const row of incoming) {
+      if (row.table !== 'review_notes') continue;
+      if (!existing.has(recordKey(row)) && this.retainedRestoreVersion(row, existing)) continue;
+      const note = row.data.payload as ReviewNote;
+      const bound = boundNotes.get(note.trade.id);
+      if (note.tagIds.some((id) => !tags.has(id)) || !noteBelongsTo(note, trades.get(note.trade.id) ?? null) || bound && bound.id !== note.id) {
+        const conflict = result.conflicts.find((item) => item.key === recordKey(row));
+        if (conflict) { conflict.overwritable = false; continue; }
+        if (existing.has(recordKey(row))) continue;
+        result.added--;
+        result.conflicts.push({ key: recordKey(row), table: row.table, id: note.id, overwritable: false, current: bound ?? null, incoming: note });
+      } else boundNotes.set(note.trade.id, note);
+    }
+    return result;
+  }
+
+  private restorePrevious(row: BackupRecord, current: BackupRecord[], existing: Map<string, BackupRecord>) {
+    const exact = existing.get(recordKey(row));
+    if (exact) return exact;
+    if (this.retainedRestoreVersion(row, existing)) return row;
+    if (row.table === 'style_tags') return current.find((item) => item.table === row.table && (item.data.payload as StyleTag).name === (row.data.payload as StyleTag).name);
+    if (row.table === 'review_notes') {
+      const note = row.data.payload as ReviewNote;
+      return current.find((item) => item.table === row.table && noteBelongsTo(item.data.payload as ReviewNote, note.trade));
+    }
+    return undefined;
+  }
+
+  private retainedRestoreVersion(row: BackupRecord, existing: Map<string, BackupRecord>): boolean {
+    return personal(row.table) && existing.has(canonical(['review_versions', fingerprint([row.table, row.data.id, row.data.payload])]));
+  }
+
+  restoreVersions(): RecordVersion[] {
+    return this.db.prepare('SELECT id,kind,record_id,payload FROM review_versions WHERE source=? AND account=? ORDER BY id').all(this.identity.source, this.identity.accountId).map((row) => ({ id: String(row.id), kind: String(row.kind) as RecordVersion['kind'], recordId: String(row.record_id), value: JSON.parse(String(row.payload)) as unknown }));
+  }
+
+  private keepRestoreVersion(row: BackupRecord) {
+    const id = fingerprint([row.table, row.data.id, row.data.payload]);
+    this.db.prepare('INSERT OR IGNORE INTO review_versions VALUES (?,?,?,?,?,?)').run(this.identity.source, this.identity.accountId, id, row.table, String(row.data.id), JSON.stringify(row.data.payload));
+  }
+
+  restoreBackup(value: unknown, token: string, overwrite: string[]): RestorePreview {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const checked = validateBackup(value, this.identity), current = this.backupRecords();
+      const preview = this.restorePreview(checked, current);
+      if (preview.rejected.length) throw new BackupError('备份校验失败：' + preview.rejected.join('；'));
+      if (preview.token !== token) throw new BackupError('账本或备份已变化，请重新预览。', 409);
+      if (!Array.isArray(overwrite) || new Set(overwrite).size !== overwrite.length || overwrite.some((key) => !preview.conflicts.some((row) => row.key === key && row.overwritable))) throw new BackupError('仅可选择预览中的笔记或标签冲突进行覆盖。');
+      const existing = new Map(current.map((row) => [recordKey(row), row]));
+      const conflicts = new Map(preview.conflicts.map((row) => [row.key, row]));
+      for (const row of checked.backup!.records) {
+        const key = recordKey(row);
+        const conflict = conflicts.get(key);
+        if (conflict) {
+          if (personal(row.table)) this.keepRestoreVersion(row);
+          if (!overwrite.includes(key)) continue;
+          const previous = existing.get(key)!;
+          this.keepRestoreVersion(previous);
+          const payload = row.data.payload as ReviewNote | StyleTag;
+          row.data.payload = { ...payload, version: Math.max(payload.version, (previous.data.payload as ReviewNote | StyleTag).version) + 1, updatedAt: new Date().toISOString() };
+        } else if (existing.has(key) || this.retainedRestoreVersion(row, existing)) continue;
+        const schema = backupTables[row.table];
+        const columns: readonly string[] = schema.columns;
+        const compressed = row.table === 'review_market' || row.table === 'review_analysis';
+        const payload = JSON.stringify(row.data.payload);
+        const values = columns.map((column) => column === 'payload' ? (compressed ? gzipSync(payload) : payload) : String(row.data[column]));
+        if (existing.has(key)) {
+          this.db.prepare('DELETE FROM ' + row.table + ' WHERE source=? AND account=? AND id=?').run(this.identity.source, this.identity.accountId, String(row.data.id));
+        }
+        this.db.prepare('INSERT INTO ' + row.table + '(source,account,' + columns.join(',') + ') VALUES (' + Array(columns.length + 2).fill('?').join(',') + ')').run(this.identity.source, this.identity.accountId, ...values);
+      }
+      const tags = this.tags();
+      if (tags.length > 100 || new Set(tags.map((tag) => tag.name)).size !== tags.length) throw new BackupError('标签冲突选择产生同名标签或超过 100 个；现有账本保留。');
+      // Exercise the public readers before commit: malformed merged associations must roll back too.
+      this.list(); this.journal(); this.analyses();
+      this.db.exec('COMMIT');
+      return preview;
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 

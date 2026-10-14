@@ -12,6 +12,8 @@ import { demoAccount, demoAccountAssets, readMarket, readSymbols } from './marke
 import { createPlan, verifyPosition, type Plan } from './verification.ts';
 import { ReviewLedger, demoTrade, type ReviewList } from './review-ledger.ts';
 import { ReviewWriteError } from './review-notes.ts';
+import { BackupError } from './review-backup.ts';
+import { reviewCsv } from './review-export.ts';
 import { HistorySync } from './history-sync.ts';
 import { readTradeMarket, marketView, marketIntervals, type MarketInterval } from './trade-market.ts';
 import { AccountArchive } from './account-archive.ts';
@@ -248,6 +250,52 @@ export function createServer(config: Config) {
       } catch (error) {
         if (!(error instanceof AccountError)) throw error;
         return send(error.status, { error: error.message, code: error.code, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt, scopeConfirmed: error.scopeConfirmed });
+      }
+    }
+    if (['/api/review/export', '/api/review/backup', '/api/review/restore/preview', '/api/review/restore', '/api/review/restore/versions'].includes(path ?? '')) {
+      if (req.method !== 'POST') return send(405, { error: '请从本应用页面提交导出或恢复。' });
+      if (req.headers['content-type'] !== 'application/json') return send(415, { error: '备份输入格式不支持。' });
+      const chunks: Buffer[] = []; let size = 0;
+      const limit = path === '/api/review/restore' || path === '/api/review/restore/preview' ? 64 * 1024 * 1024 : 8192;
+      for await (const chunk of req) {
+        size += chunk.length;
+        if (size > limit) return send(413, { error: '备份输入过大，恢复文件上限为 64 MiB。' });
+        chunks.push(chunk);
+      }
+      let input: Record<string, unknown>;
+      try {
+        const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+        input = parsed as Record<string, unknown>;
+      } catch { return send(400, { error: '备份输入 JSON 格式无效。' }); }
+      const keys = path === '/api/review/export' ? ['query'] : path === '/api/review/restore/preview' ? ['backup'] : path === '/api/review/restore' ? ['backup', 'token', 'overwrite'] : [];
+      if (Object.keys(input).sort().join(',') !== keys.sort().join(',')) return send(400, { error: '备份输入字段无效。' });
+      try {
+        if (source === 'binance') await getHistory(await readReviewIdentity(config, AbortSignal.timeout(10_000)));
+        const session = sessions.get(cookie!);
+        if (!session || session.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
+        const ledger = source === 'demo' ? getReviewLedger() : reviewLedger;
+        if (!ledger) return send(404, { error: '尚无该账户的复盘账本。' });
+        if (path === '/api/review/restore/preview') return send(200, { ...ledger.scope(), ...ledger.previewRestore(input.backup) });
+        if (path === '/api/review/restore') {
+          if (typeof input.token !== 'string' || !Array.isArray(input.overwrite) || input.overwrite.some((key) => typeof key !== 'string')) throw new BackupError('恢复确认格式无效。');
+          const result = ledger.restoreBackup(input.backup, input.token, input.overwrite as string[]);
+          return send(200, { ...ledger.scope(), ...result, versions: ledger.restoreVersions(), message: '恢复完成；缺失记录已补入，未选择覆盖的冲突保留当前版本。同步范围需重新读取确认；没有发起模型调用。' });
+        }
+        if (path === '/api/review/restore/versions') return send(200, { ...ledger.scope(), versions: ledger.restoreVersions() });
+        let body: string;
+        if (path === '/api/review/export') {
+          if (typeof input.query !== 'string') throw new BackupError('导出筛选参数无效。');
+          body = reviewCsv(ledger, parseReviewQuery(new URLSearchParams(input.query)).filters);
+        } else body = JSON.stringify(ledger.backup());
+        const csv = path === '/api/review/export';
+        res.setHeader('Content-Disposition', 'attachment; filename="review-' + (csv ? 'trades.csv' : 'backup.json') + '"');
+        res.setHeader('X-Review-Source', source); res.setHeader('X-Review-Account', ledger.scope().accountId);
+        return res.writeHead(200, { 'Content-Type': csv ? 'text/csv; charset=utf-8' : 'application/json; charset=utf-8' }).end(body);
+      } catch (error) {
+        if (error instanceof AccountError) return send(error.status, { error: error.message, code: error.code });
+        if (error instanceof BackupError || error instanceof ReviewFilterError) return send(error instanceof BackupError ? error.status : 400, { error: error.message });
+        return send(503, { error: '导出或恢复失败，现有账本保留，请重新预览后重试。' });
       }
     }
     const notePath = path?.match(/^\/api\/review\/trades\/([A-Za-z0-9-]{1,160})\/note$/);

@@ -293,15 +293,15 @@ test('review handles expired login, failed reads and invalid source without show
   await page.route('**/api/review/trades', (route) =>
     route.fulfill({ status: 503, json: { error: '受控失败' } }),
   );
-  await page.getByRole('button', { name: '重新读取' }).click();
+  await page.getByRole('button', { name: '重新读取', exact: true }).click();
   await expect(page.locator('#review-status')).toContainText('读取失败');
   await page.unroute('**/api/review/trades');
   await page.route('**/api/review/trades', (route) =>
     route.fulfill({ status: 401, json: { error: '过期' } }),
   );
-  await page.getByRole('button', { name: '重新读取' }).click();
+  await page.getByRole('button', { name: '重新读取', exact: true }).click();
   await expect(page.getByRole('link', { name: '重新登录', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '重新读取' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '重新读取', exact: true })).toBeDisabled();
 });
 
 test('leaving review cancels a pending detail and rejects its late response', async ({ page }) => {

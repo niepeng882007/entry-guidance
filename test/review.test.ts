@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { createServer } from '../src/server.ts';
+import { ReviewLedger } from '../src/review-ledger.ts';
 
 async function start(t: TestContext, config: Partial<Parameters<typeof createServer>[0]> = {}) {
   const server = createServer({ password: 'review-test-only', ...config });
@@ -22,8 +23,97 @@ async function start(t: TestContext, config: Partial<Parameters<typeof createSer
   const response = await fetch(`${base}/login`, { method: 'POST', redirect: 'manual', headers: { Origin: base, 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'password=review-test-only' });
   const cookie = response.headers.get('set-cookie')!.split(';')[0]!;
   const get = (path: string) => fetch(`${base}${path}`, { headers: { Cookie: cookie }, redirect: 'manual' });
-  return { server, base, cookie, get };
+  const post = (path: string, data: unknown) => fetch(base + path, { method: 'POST', headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+  return { server, base, cookie, get, post };
 }
+
+test('CSV downloads every matching trade with exact amounts, unknown labels, quoted text and formula protection', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'review-export-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'demo.sqlite');
+  seedReviewFilters(path);
+  const ledger = new ReviewLedger(path, { source: 'demo', accountId: 'demo-account' });
+  const trade = ledger.get('BTCUSDT-demo-fill-1')!;
+  ledger.saveNote(trade.id, { noteId: null, version: 0, basis: trade.noteBasis, entryReason: '=1+1', exitReason: '+SUM(1,2)', executionProblem: '@SUM(1)', improvement: '-危险文字', freeNote: '逗号,引号"与换行\n下一行', tagIds: [] });
+  ledger.close();
+  const app = await start(t, { mode: 'demo', reviewLedgerPath: path });
+  const response = await app.post('/api/review/export', { query: 'symbol=BTCUSDT&page=2' });
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-disposition')!, /attachment.*\.csv/);
+  const csv = await response.text();
+  assert.equal((csv.match(/"BTCUSDT-demo-fill-1(?:-page-\d+)?",/g) ?? []).length, 22);
+  assert.match(csv, /"12\.4735"/);
+  assert.ok(csv.includes('"\'=1+1"'));
+  assert.ok(csv.includes('"\'+SUM(1,2)"'));
+  assert.ok(csv.includes('"\'@SUM(1)"'));
+  assert.ok(csv.includes('"\'-危险文字"'));
+  assert.ok(csv.includes('"逗号,引号""与换行\n下一行"'));
+  assert.ok(!csv.includes('"ETHUSDT"'));
+  const pending = await (await app.post('/api/review/export', { query: 'pnl=pending' })).text();
+  assert.match(pending, /"待确认"/);
+  assert.ok(!pending.includes('"12.4735"'));
+  const empty = await (await app.post('/api/review/export', { query: 'symbol=ADAUSDT' })).text();
+  assert.equal(empty.trim().split('\r\n').length, 1);
+  assert.equal((await app.post('/api/review/export', { query: 'from=invalid' })).status, 400);
+});
+
+test('backup HTTP endpoints protect downloads and restoration, preview rejects unsafe files and restores missing records only on confirmation', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'review-backup-http-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'source.sqlite'); seedReviewFilters(path);
+  const app = await start(t, { mode: 'demo', reviewLedgerPath: path });
+  for (const endpoint of ['/api/review/export', '/api/review/backup', '/api/review/restore/preview', '/api/review/restore', '/api/review/restore/versions']) {
+    assert.equal((await fetch(app.base + endpoint)).status, 401);
+    assert.equal((await app.get(endpoint)).status, 405);
+    assert.equal((await fetch(app.base + endpoint, { method: 'POST', headers: { Cookie: app.cookie, Origin: 'http://foreign.invalid', 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
+  }
+  const download = await app.post('/api/review/backup', {});
+  assert.equal(download.status, 200);
+  assert.match(download.headers.get('content-disposition')!, /attachment.*\.json/);
+  const backup = await download.json();
+  const text = JSON.stringify(backup);
+  assert.ok(!text.includes('review-test-only') && !text.includes('other-account') && !text.includes('12345'));
+  const target = await start(t, { mode: 'demo', reviewLedgerPath: join(directory, 'target.sqlite') });
+  const preview = await (await target.post('/api/review/restore/preview', { backup })).json();
+  assert.equal(preview.rejected.length, 0); assert.ok(preview.added > 0);
+  assert.equal((await (await target.get('/api/review/trades')).json()).total, 1);
+  const restored = await target.post('/api/review/restore', { backup, token: preview.token, overwrite: [] });
+  assert.equal(restored.status, 200);
+  assert.equal((await (await target.get('/api/review/trades')).json()).total, 29);
+  const repeated = await (await target.post('/api/review/restore/preview', { backup })).json();
+  assert.equal(repeated.added, 0); assert.equal(repeated.conflicts.length, 0);
+  for (const corrupt of [{ ...backup, version: 999 }, { ...backup, accountId: 'other' }, { ...backup, source: 'binance' }, { ...backup, records: [...backup.records, { table: 'config', data: { payload: {} } }] }]) {
+    const rejected = await (await target.post('/api/review/restore/preview', { backup: corrupt })).json();
+    assert.ok(rejected.rejected.length > 0);
+    assert.equal((await target.post('/api/review/restore', { backup: corrupt, token: rejected.token, overwrite: [] })).status, 400);
+  }
+  assert.equal((await (await target.get('/api/review/trades')).json()).total, 29);
+});
+
+test('portable backups retain original plans and query-time verifications without credentials or local observation IDs', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'review-plan-backup-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'source.sqlite');
+  const app = await start(t, { mode: 'demo', reviewLedgerPath: path, apiKey: 'backup-simulated-key', apiSecret: 'backup-simulated-secret' });
+  const plan = await (await app.post('/api/plan', { symbol: 'BTCUSDT', side: 'long', budgetMode: 'amount', budget: '10', stopMode: 'percent', stop: '2', slippage: '0.1', funding: '0', leverage: '5', minimumBuffer: '1', fundingCap: '' })).json();
+  const verification = await (await app.get('/api/verification?planId=' + plan.id + '&demo=protected')).json();
+  assert.equal(verification.reviewRetention, 'saved');
+  const source = new ReviewLedger(path, { source: 'demo', accountId: 'demo-account' });
+  t.after(() => source.close());
+  source.saveVerification(plan, verification);
+  const backup = await (await app.post('/api/review/backup', {})).json();
+  assert.equal(backup.records.filter((row: { table: string }) => row.table === 'review_verifications').length, 1);
+  assert.equal(backup.records.filter((row: { table: string }) => row.table === 'review_plans').length, 1);
+  assert.ok(!JSON.stringify(backup).includes('backup-simulated'));
+  assert.ok(!JSON.stringify(backup).includes(plan.recovery));
+  const target = new ReviewLedger(':memory:', source.scope());
+  t.after(() => target.close());
+  const preview = target.previewRestore(backup);
+  assert.deepEqual(preview.rejected, []);
+  target.restoreBackup(backup, preview.token, []);
+  assert.deepEqual(target.backup().records, source.backup().records);
+  assert.equal(target.previewRestore(backup).added, 0);
+});
 
 test('review is protected and a demo archive survives logout and a server restart', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'review-http-'));

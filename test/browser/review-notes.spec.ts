@@ -64,7 +64,11 @@ test('personal notes preserve failed edits, save tags and show user statements s
     await expect(page.locator('#note-status')).toContainText('笔记已保存');
     await expect(page.getByText(/保存时间：/)).toBeVisible();
     await expect(page.getByText('交易所事实', { exact: true })).toBeVisible();
-    await expect(page.getByText('模型推测：暂无。分析时是否发送笔记需另行选择。')).toBeVisible();
+    await expect(
+      page.getByText(
+        '模型风格推测见复盘报告，只有在此保存后才成为个人标签。分析时是否发送笔记需另行选择。',
+      ),
+    ).toBeVisible();
     await expect(page.locator('#review-net-pnl')).toHaveText('12.4735 USDT');
     await page.reload();
     await expect(page.getByLabel('自由笔记')).toHaveValue(

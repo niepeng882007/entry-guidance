@@ -464,3 +464,22 @@ for (const reference of ['whole-segment', 'unanchored-item']) test(`batch final 
   assert.equal(task.status, 'failed'); assert.equal(task.report, null);
   assert.equal(task.requests[0]!.status, 'complete');
 });
+
+
+test('full backup restores completed and unfinished batch tasks without changing evidence or calling the model', async (t) => {
+  let calls = 0;
+  const application = await app(t, simulatedModel(1000000, async (body) => { calls++; return modelResponse(body); }), undefined, '$batch');
+  await application.post(startInput); const complete = await finished(application);
+  const source = new ReviewLedger(':memory:', { source: 'demo', accountId: 'demo-account' });
+  const target = new ReviewLedger(':memory:', source.scope()); t.after(() => { source.close(); target.close(); });
+  source.archive((await import('../src/review-ledger.ts')).demoTrade()); source.saveAnalysis(complete);
+  const pending = structuredClone(complete); pending.id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'; pending.status = 'running'; pending.report = null;
+  pending.requests.at(-1)!.report = null; pending.requests.at(-1)!.status = 'running'; pending.requests.at(-1)!.attempts.at(-1)!.status = 'running';
+  source.saveAnalysis(pending);
+  const backup = source.backup(); const preview = target.previewRestore(backup);
+  assert.deepEqual(preview.rejected, []); target.restoreBackup(backup, preview.token, []);
+  assert.deepEqual(target.analysis(complete.id), complete);
+  assert.equal(target.analysis(pending.id)?.status, 'interrupted'); assert.equal(target.analysis(pending.id)?.report, null);
+  assert.deepEqual(target.analysis(pending.id)?.snapshot, pending.snapshot); assert.equal(calls, 2);
+  assert.equal(target.previewRestore(backup).added, 0);
+});
