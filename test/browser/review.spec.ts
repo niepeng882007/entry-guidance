@@ -73,6 +73,7 @@ test('account archive shows overall, contract and expired discovery progress wit
   await page.goto('/review');
   const section = page.getByRole('region', { name: '全账户历史归档' });
   await expect(section).toContainText('1 / 2');
+  await expect(page.getByText(/当前没有可归并的成交记录/)).toBeVisible();
   await expect(section).toContainText('无法证明全部历史合约无遗漏');
   await expect(section).toContainText('超过可查期限的发现区间');
   await section.getByText('合约进度与缺失区间').click();

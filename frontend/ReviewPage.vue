@@ -269,7 +269,7 @@ async function show(id: string) {
     </div>
     <p v-if="list && !list.trades.length" class="muted">
       {{
-        sync
+        sync || archive
           ? '当前没有可归并的成交记录；查询范围与缺口见同步状态。'
           : '尚未同步，无真实交易归档。请选择合约并开始同步。'
       }}
