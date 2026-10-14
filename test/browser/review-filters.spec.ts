@@ -1,3 +1,4 @@
+import { withStatistics } from './review-statistics-fixtures.ts';
 import { test, expect, type Page } from '@playwright/test';
 import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -192,17 +193,24 @@ test('reading raw evidence cannot make a failed trade list current again', async
       const data = await response.json();
       await route.fulfill({
         response,
-        json: {
-          ...data,
-          source: 'binance',
-          accountId: '12345',
-          syncStatus: 'synced',
-          trades: data.trades.map((trade: Record<string, unknown>) => ({
+        json: withStatistics(
+          {
+            ...data,
+            source: 'binance',
+            accountId: '12345',
+            syncStatus: 'synced',
+            trades: data.trades.map((trade: Record<string, unknown>) => ({
+              ...trade,
+              source: 'binance',
+              accountId: '12345',
+            })),
+          },
+          data.statistics.trades.map((trade: Record<string, unknown>) => ({
             ...trade,
             source: 'binance',
             accountId: '12345',
           })),
-        },
+        ),
       });
     });
     await page.route('**/api/review/journal', (route) =>
@@ -260,6 +268,132 @@ test('saving notes leaves the editor visible and refreshes the list on return', 
       page.getByText('上次读取结果 · 当前范围需重新读取确认，详情暂不可打开。'),
     ).toHaveCount(0);
   } finally {
+    await app.close();
+  }
+});
+
+test('statistics and charts use the full range, overlap tags, and remain readable at three widths', async ({
+  page,
+}) => {
+  const app = await startFiltersPage(page);
+  try {
+    const panel = page.getByRole('region', { name: '筛选范围表现统计', exact: true });
+    await page.getByText('表现统计 · 当前筛选范围', { exact: true }).click();
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText('净盈亏有效 26 笔');
+    await expect(panel).toContainText('285.8375 USDT');
+    await expect(panel).toContainText('时长有效 27 笔');
+    await expect(panel.getByRole('img', { name: '累计交易净盈亏曲线' })).toBeVisible();
+    await expect(panel.locator('.review-statistics__scale')).toContainText('142.39225');
+    const evidence = await panel.locator('.review-statistics__evidence-id').textContent();
+    await page.locator('.ant-pagination-item-2').click();
+    await expect(tableRows(page)).toHaveCount(9);
+    await expect(panel.locator('.review-statistics__evidence-id')).toHaveText(evidence!);
+    await page.goto(app.base + '/review?symbol=ETHUSDT&from=2026-10-10&to=2026-10-10');
+    await page.getByText('表现统计 · 当前筛选范围', { exact: true }).click();
+    await expect(panel).toContainText('净盈亏有效 1 笔');
+    await expect(panel).toContainText('-13.5265 USDT');
+    await panel.locator('#statistics-dimension').selectOption('tags');
+    await expect(panel.locator('.review-statistics__group')).toHaveCount(3);
+    await expect(
+      panel.locator('.review-statistics__group').filter({ hasText: '顺势' }),
+    ).toContainText('-13.5265 USDT');
+    await expect(panel).toContainText('各标签组重叠，不能相加');
+    await page.getByRole('button', { name: '重置', exact: true }).click();
+    await expect(panel).toContainText('净盈亏有效 26 笔');
+    for (const width of [320, 390, 1280]) {
+      await page.setViewportSize({ width, height: 844 });
+      await panel.scrollIntoViewIfNeeded();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
+      await panel
+        .getByRole('heading', { name: '累计净盈亏 · USDT', exact: true })
+        .scrollIntoViewIfNeeded();
+      await panel
+        .locator('.review-statistics__chart')
+        .screenshot({ path: test.info().outputPath(`statistics-curve-${width}.png`) });
+      await panel
+        .locator('.review-statistics__groups')
+        .screenshot({ path: test.info().outputPath(`statistics-groups-${width}.png`) });
+      await panel
+        .getByRole('heading', { name: '筛选范围表现统计', exact: true })
+        .scrollIntoViewIfNeeded();
+      await page.screenshot({ path: test.info().outputPath(`statistics-${width}.png`) });
+    }
+    await page.goto(app.base + '/review?symbol=ADAUSDT');
+    await page.getByText('表现统计 · 当前筛选范围', { exact: true }).click();
+    await expect(panel).toContainText('净盈亏有效 0 笔');
+    await expect(panel).toContainText('没有可判定净盈亏的已结束交易');
+    await expect(panel.getByRole('img', { name: '累计交易净盈亏曲线' })).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+test('statistics with a foreign identity or changed totals cannot become current', async ({
+  page,
+}) => {
+  const app = await startFiltersPage(page);
+  try {
+    await page.getByText('表现统计 · 当前筛选范围', { exact: true }).click();
+    await expect(page.locator('.review-statistics')).toBeVisible();
+    for (const change of ['identity', 'total', 'money', 'fingerprint'] as const) {
+      await page.route('**/api/review/trades', async (route) => {
+        const response = await route.fetch();
+        const data = await response.json();
+        if (change === 'identity') data.statistics.accountId = 'foreign';
+        if (change === 'total') data.statistics.trades.pop();
+        if (change === 'money') data.statistics.pnl.netPnl = '999';
+        if (change === 'fingerprint') data.statistics.evidenceId = '0'.repeat(64);
+        await route.fulfill({ response, json: data });
+      });
+      await page.getByRole('button', { name: '重新读取', exact: true }).click();
+      await expect(page.locator('#review-status')).toContainText('统计证据');
+      await expect(page.locator('.review-statistics')).toHaveCount(0);
+      await page.unrouteAll();
+      await page.getByRole('button', { name: '重新读取', exact: true }).click();
+      await expect(page.locator('.review-statistics')).toContainText('285.8375 USDT');
+    }
+  } finally {
+    await page.unrouteAll({ behavior: 'wait' });
+    await app.close();
+  }
+});
+
+test('cancelling during fingerprint verification rejects its late result', async ({ page }) => {
+  const app = await startFiltersPage(page);
+  try {
+    await expect(page.locator('.review-statistics')).toContainText('净盈亏有效 26 笔');
+    await page.evaluate(() => {
+      const digest = crypto.subtle.digest.bind(crypto.subtle);
+      let paused = false;
+      Object.defineProperty(crypto.subtle, 'digest', {
+        configurable: true,
+        value: async (...args: Parameters<SubtleCrypto['digest']>) => {
+          const result = await digest(...args);
+          if (!paused) {
+            paused = true;
+            document.body.dataset.digestPaused = 'true';
+            await new Promise<void>((resolve) =>
+              window.addEventListener('release-statistics-digest', () => resolve(), { once: true }),
+            );
+          }
+          return result;
+        },
+      });
+    });
+    await page.getByRole('button', { name: '重新读取', exact: true }).click();
+    await expect(page.locator('body')).toHaveAttribute('data-digest-paused', 'true');
+    await page.getByRole('button', { name: '取消读取', exact: true }).click();
+    await expect(page.locator('.review-statistics')).toHaveCount(0);
+    await selectSymbol(page, 'SOLUSDT');
+    await expect(page.locator('.review-statistics')).toContainText('净盈亏有效 1 笔');
+    await page.evaluate(() => window.dispatchEvent(new Event('release-statistics-digest')));
+    await expect(page.locator('.review-statistics')).toContainText('全范围 4 笔');
+    await expect(tableRows(page)).toHaveCount(4);
+  } finally {
+    await page.evaluate(() => window.dispatchEvent(new Event('release-statistics-digest')));
     await app.close();
   }
 });

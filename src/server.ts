@@ -1,3 +1,4 @@
+import { reviewStatistics } from './review-statistics.ts';
 import { parseReviewQuery, reviewPageSize, matchesReview, ReviewFilterError } from './review-filters.ts';
 import { SharedRead, coordinateAccountReads } from './account-refresh.ts';
 import { readAccountOrders, demoAccountOrders, readAccountConditionalOrders, demoAccountConditionalOrders } from './orders.ts';
@@ -362,13 +363,17 @@ export function createServer(config: Config) {
           const all = ledger?.list() ?? [];
           const selected = all.filter((trade) => matchesReview(trade, query.filters));
           const offset = (query.page - 1) * reviewPageSize;
+          const tags = (ledger?.tags() ?? []).map(({ id, name, active }) => ({ id, name, active }));
+          const identity: Pick<ReviewList, 'source' | 'accountId'> = { source, accountId: source === 'demo' ? 'demo-account' : reviewAccountId ?? null };
+          const snapshot = reviewStatistics(identity, query.filters, selected, tags);
+          const statistics = { ...snapshot, evidenceId: createHash('sha256').update(JSON.stringify(snapshot)).digest('hex'), queriedAt: new Date().toISOString() };
           return send(200, {
             source, accountId: source === 'demo' ? 'demo-account' : reviewAccountId ?? null,
             syncStatus: source === 'demo' ? 'demo' : sync?.state() || archive?.state() ? 'synced' : 'not-synced',
-            trades: selected.slice(offset, offset + reviewPageSize),
+            trades: selected.slice(offset, offset + reviewPageSize), statistics,
             filters: query.filters, total: selected.length, page: query.page, pageSize: reviewPageSize,
             nextPage: offset + reviewPageSize < selected.length ? query.page + 1 : null,
-            options: { symbols: [...new Set(all.map((trade) => trade.symbol))].sort(), tags: (ledger?.tags() ?? []).map(({ id, name, active }) => ({ id, name, active })) },
+            options: { symbols: [...new Set(all.map((trade) => trade.symbol))].sort(), tags },
             ...(sync ? { sync: sync.state() } : {}),
             ...(archive?.state() ? { archive: archive.state() } : {}),
             ...(archiveIssue ? { archiveIssue } : {}),

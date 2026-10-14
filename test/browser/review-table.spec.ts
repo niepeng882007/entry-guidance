@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { ReviewList, ReviewTrade } from '../../src/review-ledger.ts';
+import { withStatistics } from './review-statistics-fixtures.ts';
 
 import {
   parseReviewQuery,
@@ -14,16 +15,19 @@ async function mockTrades(page: Page, list: ReviewList, trades: ReviewList['trad
     const selected = trades.filter((trade) => matchesReview(trade, query.filters)).sort(sortReview);
     const offset = (query.page - 1) * reviewPageSize;
     return route.fulfill({
-      json: {
-        ...list,
-        filters: query.filters,
-        page: query.page,
-        pageSize: reviewPageSize,
-        total: selected.length,
-        nextPage: offset + reviewPageSize < selected.length ? query.page + 1 : null,
-        trades: selected.slice(offset, offset + reviewPageSize),
-        options: { symbols: [...new Set(trades.map((trade) => trade.symbol))], tags: [] },
-      },
+      json: withStatistics(
+        {
+          ...list,
+          filters: query.filters,
+          page: query.page,
+          pageSize: reviewPageSize,
+          total: selected.length,
+          nextPage: offset + reviewPageSize < selected.length ? query.page + 1 : null,
+          trades: selected.slice(offset, offset + reviewPageSize),
+          options: { symbols: [...new Set(trades.map((trade) => trade.symbol))], tags: [] },
+        },
+        selected,
+      ),
     });
   });
 }

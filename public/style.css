@@ -538,6 +538,31 @@ p { margin: 0 0 var(--space-12); }
 .review-page__detail { scroll-margin-top: var(--space-24); overflow-wrap: anywhere; }
 .review-order, .review-fill, .review-funding { border-top: 1px solid var(--color-border-soft); padding: var(--space-12) 0; }
 .trade-chart { border-top: 1px solid var(--color-border); padding: var(--space-24) 0; }
+/* Review statistics */
+.review-statistics__heading { margin-top: var(--space-24); }
+.review-statistics__control { max-width: 280px; margin: var(--space-16) 0; }
+.review-statistics__chart { display: grid; grid-template-columns: minmax(60px, auto) minmax(0, 1fr); gap: var(--space-8); margin: var(--space-16) 0; }
+.review-statistics__scale { display: flex; flex-direction: column; justify-content: space-between; max-width: 160px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.review-statistics__plot { display: block; width: 100%; height: 220px; }
+.review-statistics__zero { stroke: var(--color-border); stroke-width: 1; }
+.review-statistics__line { fill: none; stroke: var(--color-text); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.review-statistics__point { fill: var(--color-text); }
+.review-statistics__dates { grid-column: 2; display: flex; justify-content: space-between; gap: var(--space-8); color: var(--color-muted); font-size: 13px; }
+.review-statistics__dates > span { max-width: 50%; }
+.review-statistics__group-axis { display: flex; justify-content: space-between; gap: var(--space-8); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.review-statistics__group-axis > span { max-width: 45%; }
+.review-statistics__groups { list-style: none; padding: 0; }
+.review-statistics__group { border-top: 1px solid var(--color-border); padding: var(--space-16) 0; }
+.review-statistics__group .section-heading { flex-wrap: wrap; }
+.review-statistics__bar { display: block; width: 100%; height: 28px; margin-bottom: var(--space-8); }
+.review-statistics__bar-value { fill: var(--color-success); }
+.review-statistics__bar-value[data-loss="true"] { fill: var(--color-error); }
+.review-statistics__raw, .review-statistics__evidence { margin-top: var(--space-16); }
+@media (max-width: 560px) {
+  .review-statistics__scale { max-width: 95px; font-size: 13px; }
+  .review-statistics__plot { height: 190px; }
+}
+
 .trade-chart__controls { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-12); }
 .trade-chart__events { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); margin: var(--space-12) 0; }
 .trade-chart__plot { display: block; width: 100%; height: auto; min-height: 240px; }

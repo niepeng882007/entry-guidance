@@ -1,3 +1,4 @@
+import { reviewStatistics } from '../src/review-statistics.ts';
 import type { ReviewJournal } from '../src/review-notes.ts';
 import {
   defaultReviewFilters,
@@ -92,6 +93,25 @@ function validateTrade(value: unknown, source: Source, accountId: string): Revie
       throw new Error('浮动盈亏查询时点无效。');
   }
   return data as ReviewSummary;
+}
+function validateSummary(value: unknown, source: Source, accountId: string): ReviewSummary {
+  const record = validateTrade(value, source, accountId);
+  if (
+    typeof record.entryType !== 'string' ||
+    !['mixed', 'unknown', ...Object.keys(orderTypes)].includes(record.entryType) ||
+    !Array.isArray(record.tagIds) ||
+    !record.tagIds.every((id) => typeof id === 'string' && /^[a-f0-9-]{36}$/.test(id)) ||
+    new Set(record.tagIds).size !== record.tagIds.length ||
+    (record.durationMs !== null &&
+      (!Number.isSafeInteger(record.durationMs) ||
+        record.durationMs < 0 ||
+        record.status === 'open' ||
+        !record.openedAt ||
+        !record.closedAt ||
+        record.durationMs !== Date.parse(record.closedAt) - Date.parse(record.openedAt)))
+  )
+    throw new Error('交易分类或时长证据无效。');
+  return record;
 }
 function validateDetail(value: unknown, source: Source, accountId: string): ReviewTrade {
   validateTrade(value, source, accountId);
@@ -607,16 +627,8 @@ export function useReviewPage(source: Source, location: () => ReviewLocation) {
         }
         const records: ReviewSummary[] = [];
         for (const item of next.trades) {
-          const record = validateTrade(item, source, String(next.accountId));
-          if (
-            typeof record.entryType !== 'string' ||
-            !['mixed', 'unknown', ...Object.keys(orderTypes)].includes(record.entryType) ||
-            !Array.isArray(record.tagIds) ||
-            !record.tagIds.every((id) => typeof id === 'string' && /^[a-f0-9-]{36}$/.test(id)) ||
-            new Set(record.tagIds).size !== record.tagIds.length ||
-            !matchesReview(record, requestedFilters)
-          )
-            throw new Error('交易与筛选范围不一致。');
+          const record = validateSummary(item, source, String(next.accountId));
+          if (!matchesReview(record, requestedFilters)) throw new Error('交易与筛选范围不一致。');
           if (
             records.some((previous) => previous.id === record.id) ||
             (records.length && sortReview(records.at(-1)!, record) > 0)
@@ -624,6 +636,62 @@ export function useReviewPage(source: Source, location: () => ReviewLocation) {
             throw new Error('交易排序或身份重复。');
           records.push(record);
         }
+        const statistics = object(next.statistics);
+        if (
+          statistics.source !== source ||
+          statistics.accountId !== next.accountId ||
+          statistics.version !== 1 ||
+          !Array.isArray(statistics.trades) ||
+          statistics.trades.length !== next.total ||
+          typeof statistics.evidenceId !== 'string' ||
+          !/^[a-f0-9]{64}$/.test(statistics.evidenceId) ||
+          typeof statistics.queriedAt !== 'string' ||
+          !Number.isFinite(Date.parse(statistics.queriedAt))
+        )
+          throw new Error('统计证据来源、范围或时点无效。');
+        const samples = statistics.trades.map((item) =>
+          validateSummary(item, source, String(next.accountId)),
+        );
+        if (
+          new Set(samples.map((item) => item.id)).size !== samples.length ||
+          samples.some((item) => !matchesReview(item, requestedFilters))
+        )
+          throw new Error('统计交易与筛选范围不一致。');
+        const expected = reviewStatistics(
+          { source, accountId: next.accountId as string | null },
+          requestedFilters,
+          samples,
+          options.tags as ReviewList['options']['tags'],
+        );
+        const snapshot = { ...statistics };
+        delete snapshot.evidenceId;
+        delete snapshot.queriedAt;
+        if (
+          JSON.stringify(snapshot) !== JSON.stringify(expected) ||
+          records.some((record) => {
+            const match = samples.find((item) => item.id === record.id);
+            return (
+              JSON.stringify(match) !==
+              JSON.stringify({
+                ...record,
+                missing: [...record.missing].sort(),
+                tagIds: [...record.tagIds].sort(),
+              })
+            );
+          })
+        )
+          throw new Error('统计证据与当前交易范围不一致。');
+        if (!globalThis.crypto?.subtle)
+          throw new Error('统计证据校验需要安全连接，请使用 HTTPS 或本机地址。');
+        const digest = await crypto.subtle.digest(
+          'SHA-256',
+          new TextEncoder().encode(JSON.stringify(expected)),
+        );
+        if (current !== sequence || controller.signal.aborted) return;
+        const fingerprint = [...new Uint8Array(digest)]
+          .map((byte) => byte.toString(16).padStart(2, '0'))
+          .join('');
+        if (fingerprint !== statistics.evidenceId) throw new Error('统计证据指纹与内容不一致。');
         filterOptions.value = options as ReviewList['options'];
         if (list.value?.accountId !== next.accountId) evidence.value = null;
         sync.value = next.sync === undefined || next.sync === null ? null : validateSync(next.sync);

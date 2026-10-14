@@ -79,7 +79,11 @@ test('real review explicitly remains unsynced and never opens a demo ledger or c
   const html = await page.text();
   assert.match(html, /data-mode="binance"/);
   assert.match(html, /真实模式/);
-  assert.deepEqual(await (await app.get('/api/review/trades')).json(), {
+  const { statistics, ...emptyList } = await (await app.get('/api/review/trades')).json();
+  assert.equal(statistics.pnl.samples, 0);
+  assert.equal(statistics.pnl.netPnl, null);
+  assert.equal(statistics.accountId, null);
+  assert.deepEqual(emptyList, {
     source: 'binance', accountId: null, syncStatus: 'not-synced', trades: [],
     filters: defaultReviewFilters(), total: 0, page: 1, pageSize: 20, nextPage: null, options: { symbols: [], tags: [] },
   });
@@ -316,4 +320,40 @@ test('invalid filter parameters fail before querying an archive', async (t) => {
     assert.equal(response.status, 400, query);
     assert.match((await response.json()).error, /筛选参数无效/);
   }
+});
+
+test('statistics use the entire filtered archive and retain the same evidence across pages', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'statistics-http-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'demo.sqlite');
+  const seeded = seedReviewFilters(path);
+  const app = await start(t, { mode: 'demo', reviewLedgerPath: path });
+  const read = async (query = '') => (await (await app.get(`/api/review/trades${query}`)).json()) as ReviewList;
+  const first = await read();
+  assert.equal(first.trades.length, 20);
+  assert.equal(first.statistics.total, 29);
+  assert.equal(first.statistics.pnl.samples, 26);
+  assert.equal(first.statistics.pnl.wins, 24);
+  assert.equal(first.statistics.pnl.losses, 1);
+  assert.equal(first.statistics.pnl.flats, 1);
+  assert.equal(first.statistics.pnl.netPnl, '285.8375');
+  assert.equal(first.statistics.duration.samples, 27);
+  assert.equal(first.statistics.pnl.excluded.length, 3);
+  assert.equal(first.statistics.trades.length, 29);
+  assert.match(first.statistics.evidenceId, /^[a-f0-9]{64}$/);
+  assert.ok(Number.isFinite(Date.parse(first.statistics.queriedAt)));
+  const second = await read('?page=2');
+  assert.equal(second.trades.length, 9);
+  assert.equal(second.statistics.evidenceId, first.statistics.evidenceId);
+  assert.deepEqual(second.statistics.pnl, first.statistics.pnl);
+  const tagged = await read(`?tag=${seeded.tags[0]}&tag=${seeded.tags[1]}`);
+  assert.equal(tagged.statistics.pnl.samples, 1);
+  assert.equal(tagged.statistics.pnl.netPnl, '-13.5265');
+  assert.equal(tagged.statistics.groups.tags.filter((group) => group.pnl.samples === 1).length, 2);
+  assert.notEqual(tagged.statistics.evidenceId, first.statistics.evidenceId);
+  const empty = await read('?symbol=ADAUSDT');
+  assert.equal(empty.statistics.pnl.winRate, null);
+  assert.equal(empty.statistics.pnl.netPnl, null);
+  const { queriedAt: _time, evidenceId, ...snapshot } = first.statistics;
+  assert.equal(evidenceId, (await import('node:crypto')).createHash('sha256').update(JSON.stringify(snapshot)).digest('hex'));
 });

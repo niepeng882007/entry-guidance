@@ -8,6 +8,7 @@ import type { ReviewSummary } from '../src/review-ledger.ts';
 import ReviewArchive from './components/ReviewArchive.vue';
 import ReviewTradeDetail from './components/ReviewTradeDetail.vue';
 import ReviewNotes from './components/ReviewNotes.vue';
+import ReviewStatistics from './components/ReviewStatistics.vue';
 import { useReviewPage } from './useReviewPage';
 import { useReviewLocation } from './useReviewLocation';
 import { dateRangeError, reviewTime } from './review-records';
@@ -283,6 +284,11 @@ watch([lastPage, busy], () => {
         <p class="footnote">
           净盈亏 = 已实现盈亏 − 手续费 + 资金费净收支；缺失或归属未确认时显示待确认。
         </p>
+        <details class="disclosure review-page__statistics">
+          <summary class="disclosure__summary">表现统计 · 当前筛选范围</summary>
+          <ReviewStatistics v-if="list && !stale" :statistics="list.statistics" />
+          <p v-else class="muted">当前统计需重新读取确认。</p>
+        </details>
         <ReviewArchive v-if="expectedSource === 'binance'" :review="review" />
       </section>
 

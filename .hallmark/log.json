@@ -5,21 +5,23 @@
     "macrostructure": "Filterable ledger + separate trade detail",
     "theme": "monochrome (existing system)",
     "enrichment": "none",
-    "brief": "日期与交易对筛选、Ant Design Vue分页表格、独立详情和折叠证据；沿用服务端范围验证",
+    "brief": "日期与交易对筛选、Ant Design Vue分页表格、独立详情和折叠证据；沿用服务端范围验证；表现统计折叠",
     "project_overrides": [
       "reuse existing stylesheet and system fonts",
       "Ant Design Vue theme mirrors existing tokens",
       "preserve existing app shell"
     ],
     "validation": {
-      "reviewBrowserTests": 70,
+      "reviewBrowserTests": 76,
       "viewports": [
         320,
         390,
         1280
       ],
       "physicalPhone": false,
-      "realAccount": false
+      "realAccount": false,
+      "nodeTests": 306,
+      "browserTests": 192
     }
   },
   {
