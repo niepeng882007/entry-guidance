@@ -93,7 +93,7 @@ test('opening a trade during background archiving keeps a note draft visible', a
   await expect(page.getByLabel('入场理由', { exact: true })).toHaveValue('后台归档期间仍在编辑');
 });
 
-test('account archive shows overall, contract and expired discovery progress with immediate sync', async ({
+test('account archive refreshes progress manually without polling while idle or running', async ({
   page,
 }) => {
   await page.goto('/');
@@ -147,8 +147,10 @@ test('account archive shows overall, contract and expired discovery progress wit
     contracts: [contract],
   };
   let running = false;
-  await page.route('**/api/review/trades', (route) =>
-    route.fulfill({
+  let reads = 0;
+  await page.route('**/api/review/trades', (route) => {
+    reads++;
+    return route.fulfill({
       json: {
         ...emptyRange('12345'),
         source: 'binance',
@@ -157,13 +159,14 @@ test('account archive shows overall, contract and expired discovery progress wit
         trades: [],
         archive: running ? { ...archive, status: 'running' } : archive,
       },
-    }),
-  );
+    });
+  });
   await page.route('**/api/review/archive', (route) => {
     expect(route.request().postDataJSON()).toEqual({});
     running = true;
     return route.fulfill({ status: 202, json: { ...archive, status: 'running' } });
   });
+  await page.clock.install();
   await page.goto('/review');
   await page.getByText('归档管理 · 同步进度与原始证据', { exact: true }).click();
   const section = page.getByRole('region', { name: '全账户历史归档' });
@@ -174,6 +177,11 @@ test('account archive shows overall, contract and expired discovery progress wit
   await section.getByText('合约进度与缺失区间').click();
   await expect(section).toContainText('OLDUSDT');
   await expect(section).toContainText('已下架合约无法读取');
+  await expect(page.getByRole('button', { name: '重新读取', exact: true })).toBeEnabled();
+  const initialReads = reads;
+  expect(initialReads).toBeGreaterThan(0);
+  await page.clock.runFor(6000);
+  expect(reads).toBe(initialReads);
   for (const width of [320, 390, 1280]) {
     await page.setViewportSize({ width, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
@@ -187,6 +195,19 @@ test('account archive shows overall, contract and expired discovery progress wit
   await section.getByRole('button', { name: '立即同步全账户' }).click();
   await expect(section.getByRole('button', { name: '立即同步全账户' })).toBeDisabled();
   await expect(page.locator('#review-status')).toContainText('全账户归档正在运行');
+  await expect(page.getByRole('button', { name: '重新读取', exact: true })).toBeEnabled();
+  await page.clock.runFor(3000);
+  expect(reads).toBe(initialReads);
+  await page.getByRole('button', { name: '重新读取', exact: true }).click();
+  await expect(page.getByRole('button', { name: '重新读取', exact: true })).toBeEnabled();
+  expect(reads).toBe(initialReads + 1);
+  await page.clock.runFor(6000);
+  expect(reads).toBe(initialReads + 1);
+  running = false;
+  await page.getByRole('button', { name: '重新读取', exact: true }).click();
+  await expect(page.locator('#review-status')).toContainText('全账户归档失败');
+  await expect(section.getByRole('button', { name: '立即同步全账户' })).toBeEnabled();
+  expect(reads).toBe(initialReads + 2);
 });
 
 test('a user opens one archived trade and expands linked orders, fills and PnL', async ({
@@ -379,9 +400,7 @@ test('the real-mode page clearly displays an unsynced empty ledger', async ({ pa
   await expect(page.locator('#review-status')).toContainText('尚未同步 · 无真实交易归档');
 });
 
-test('real history sync shows progress, gaps and retry without claiming old results are current', async ({
-  page,
-}) => {
+test('real history sync reads progress and gaps manually without polling', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
@@ -418,8 +437,10 @@ test('real history sync shows progress, gaps and retry without claiming old resu
   };
   let started = false;
   let failed = true;
-  await page.route('**/api/review/trades', (route) =>
-    route.fulfill({
+  let reads = 0;
+  await page.route('**/api/review/trades', (route) => {
+    reads++;
+    return route.fulfill({
       json: started
         ? {
             ...emptyRange('12345'),
@@ -442,27 +463,40 @@ test('real history sync shows progress, gaps and retry without claiming old resu
             syncStatus: 'not-synced',
             trades: [],
           },
-    }),
-  );
+    });
+  });
   await page.route('**/api/review/sync', async (route) => {
     expect(route.request().method()).toBe('POST');
     expect(route.request().postDataJSON()).toEqual({ symbol: 'BTCUSDT' });
     started = true;
     await route.fulfill({ status: 202, json: sync });
   });
+  await page.clock.install();
   await page.goto('/review');
   await page.getByText('归档管理 · 同步进度与原始证据', { exact: true }).click();
   await expect(page.getByLabel('USDT 永续合约')).toBeVisible();
+  await expect(page.getByRole('button', { name: '开始同步' })).toBeEnabled();
+  const initialReads = reads;
   await page.getByRole('button', { name: '开始同步' }).click();
   await expect(page.locator('#review-status')).toContainText('正在同步真实历史');
   await expect(page.getByRole('button', { name: '开始同步' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '重新读取', exact: true })).toBeEnabled();
+  await page.clock.runFor(3000);
+  expect(reads).toBe(initialReads);
+  await expect(page.locator('#review-status')).toContainText('正在同步真实历史');
+  await page.getByRole('button', { name: '重新读取', exact: true }).click();
   await expect(page.locator('#review-status')).toContainText('同步失败');
+  expect(reads).toBe(initialReads + 1);
   await expect(page.getByText('同步缺口：Binance 限流，请稍后再试。')).toBeVisible();
   await page.getByText('待补查区间', { exact: true }).click();
   await expect(page.getByText(/history ·/)).toBeVisible();
   failed = false;
   await page.getByRole('button', { name: '开始同步' }).click();
+  await expect(page.locator('#review-status')).toContainText('正在同步真实历史');
+  await expect(page.getByRole('button', { name: '重新读取', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '重新读取', exact: true }).click();
   await expect(page.locator('#review-status')).toContainText('历史读取结束');
+  expect(reads).toBe(initialReads + 2);
   await expect(page.getByText('同步缺口：Binance 限流，请稍后再试。')).toHaveCount(0);
   for (const width of [320, 390, 1280]) {
     await page.setViewportSize({ width, height: 844 });
