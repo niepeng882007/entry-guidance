@@ -9,6 +9,7 @@ import ReviewArchive from './components/ReviewArchive.vue';
 import ReviewTradeDetail from './components/ReviewTradeDetail.vue';
 import ReviewNotes from './components/ReviewNotes.vue';
 import ReviewStatistics from './components/ReviewStatistics.vue';
+import ReviewBackup from './components/ReviewBackup.vue';
 import { useReviewPage } from './useReviewPage';
 import { useReviewLocation } from './useReviewLocation';
 import { dateRangeError, reviewTime } from './review-records';
@@ -296,6 +297,13 @@ watch([lastPage, busy], () => {
           <p v-else class="muted">当前统计需重新读取确认。</p>
         </details>
         <ReviewArchive v-if="expectedSource === 'binance'" :review="review" />
+        <ReviewBackup
+          :source="expectedSource"
+          :account-id="list?.accountId ?? null"
+          :query="analysisQuery"
+          :disabled="busy || relogin || stale || !!rangeError"
+          @restored="refresh"
+        />
       </section>
 
       <template v-else>
