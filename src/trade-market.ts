@@ -41,7 +41,7 @@ function tradeEvents(trade: ReviewTrade): MarketEvent[] {
   });
 }
 
-function tradeStops(trade: ReviewTrade): MarketStop[] {
+function tradeStops(trade: ReviewTrade, queriedAt: number): MarketStop[] {
   const stops: MarketStop[] = [];
   const comparison = trade.planComparison;
   const plan = comparison?.status === 'linked' ? comparison.plan : null;
@@ -65,7 +65,8 @@ function tradeStops(trade: ReviewTrade): MarketStop[] {
     if (!trade.evidence.orders.some((order) => order.id === orderId)) continue;
     const price = record.kind === 'algoHistory' ? row.triggerPrice : row.stopPrice;
     if (typeof price !== 'string' || !/^\d+(\.\d{1,8})?$/.test(price) || parseDecimal(price, '止损价') <= 0n) continue;
-    stops.push({ id: `history-${record.kind}-${record.id}`, price, time: record.time, basis: typeof row.workingType === 'string' ? row.workingType : 'UNKNOWN', kind: 'historical', label: `实际订单 ${orderId} 关联的历史止损设置 ${record.id} · 记录时间，非触发证明` });
+    const updated = typeof row.updateTime === 'number' && Number.isSafeInteger(row.updateTime) && row.updateTime >= record.time && row.updateTime <= queriedAt ? row.updateTime : null;
+    stops.push({ id: `history-${record.kind}-${record.id}`, price, time: updated ?? queriedAt, basis: typeof row.workingType === 'string' ? row.workingType : 'UNKNOWN', kind: 'historical', label: `实际订单 ${orderId} 关联的历史止损设置 ${record.id} · ${updated === null ? '来源更新时间未知，按本次读取时点列出' : '来源更新时间'}，非触发证明` });
   }
   return stops;
 }
@@ -112,7 +113,7 @@ export async function readTradeMarket(config: AccountConfig, ledger: ReviewLedge
   const archive: MarketArchive = cached ?? {
     snapshotId: '', cacheKey, source: trade.source, accountId: trade.accountId, tradeId: trade.id, symbol: trade.symbol, interval,
     queriedAt: new Date(now).toISOString(), startTime, endTime, desiredEndTime, openedAt: trade.openedAt, closedAt: trade.closedAt,
-    events: tradeEvents(trade), stops: tradeStops(trade), missing: [...trade.missing], evidence: structuredClone(trade),
+    events: tradeEvents(trade), stops: tradeStops(trade, now), missing: [...trade.missing], evidence: structuredClone(trade),
     limitations: ['整根 K 线仅在 closeTime 后完整可知，跨开平仓边界的 OHLC 不属于边界时点已知信息；final=false 表示读取时仍未闭合。', '出场后行情仅用于事后观察；K 线不能证明止损触发或精确逐笔价格路径。', '原计划与实际止损设置分别表达，设置证据只证明所记录时点；缺少记录的保护状态未知。', '原始行情按价格来源分别保留完整性、缺口与每根读取时点，屏幕抽稀不改变归档证据。'],
     series: { contract: { endpoint: '/fapi/v1/klines', candles: [], nextTime: startTime, complete: false, gaps: [], error: null }, mark: { endpoint: '/fapi/v1/markPriceKlines', candles: [], nextTime: startTime, complete: false, gaps: [], error: null } },
   };
@@ -122,7 +123,7 @@ export async function readTradeMarket(config: AccountConfig, ledger: ReviewLedge
   archive.desiredEndTime = desiredEndTime;
   archive.queriedAt = new Date(now).toISOString();
   archive.events = tradeEvents(trade);
-  archive.stops = tradeStops(trade);
+  archive.stops = tradeStops(trade, now);
   archive.missing = [...trade.missing];
   archive.evidence = structuredClone(trade);
   archive.openedAt = trade.openedAt;

@@ -158,7 +158,7 @@ test('missing or malformed candles and a failed mark source never produce comple
 });
 
 test('an ordinary historical stop is shown only through its actual linked order and retains contract-price basis', async (t) => {
-  const history = [{ ...orders[0] }, { ...orders[1], type: 'STOP_MARKET', stopPrice: '99', workingType: 'CONTRACT_PRICE' }];
+  const history = [{ ...orders[0] }, { ...orders[1], time: opened + 1000, updateTime: closed, type: 'STOP_MARKET', stopPrice: '99', workingType: 'CONTRACT_PRICE' }];
   const base = fixture({ '/fapi/v1/allOrders': history });
   const app = await start(t, async (url, headers, signal) => url.pathname.includes('Klines') || url.pathname.endsWith('/klines') ? { status: 200, body: marketRows(url) } : base(url, headers, signal));
   await app.sync();
@@ -168,6 +168,7 @@ test('an ordinary historical stop is shown only through its actual linked order 
   assert.equal(chart.stops[0].kind, 'historical');
   assert.equal(chart.stops[0].price, '99');
   assert.equal(chart.stops[0].basis, 'CONTRACT_PRICE');
+  assert.equal(chart.stops[0].time, closed);
   assert.equal(chart.openedAt, new Date(opened).toISOString());
 });
 
@@ -191,6 +192,18 @@ test('a permanent early market gap cannot block later available candles', async 
   assert.equal(third.series.contract.gaps.length, 1);
   assert.equal(third.series.contract.complete, false);
   assert.equal(third.series.contract.candles.at(-1).openTime, anchor + 3 * 86_400_000 + 10 * 60_000);
+});
+
+test('a historical stop without an update timestamp is not backdated to its creation', async (t) => {
+  const base = fixture({ '/fapi/v1/allOrders': [{ ...orders[0] }, { ...orders[1], type: 'STOP_MARKET', updateTime: 0, stopPrice: '99', workingType: 'CONTRACT_PRICE' }] });
+  const app = await start(t, base);
+  await app.sync();
+  const list = await finished(app);
+  const chart = await (await app.get(`/api/review/trades/${list.trades[0].id}/market?interval=15m`)).json();
+  assert.equal(chart.stops[0].price, '99');
+  assert.match(chart.stops[0].label, /来源更新时间未知/);
+  assert.ok(chart.stops[0].time > closed + 86_400_000);
+  assert.ok(chart.stops[0].time <= Date.parse(chart.queriedAt));
 });
 
 test('open-trade market pagination survives a changing time boundary and same-millisecond retries', async (t) => {
