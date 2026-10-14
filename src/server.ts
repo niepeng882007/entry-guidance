@@ -42,7 +42,7 @@ export function createServer(config: Config) {
   if (config.password.length < 12) throw new Error('APP_PASSWORD 至少需要 12 个字符。');
   const observation = coordinateAccountReads(config);
   config = { ...config, ...observation.strictConfig };
-  // Leave a small margin before the next three-second foreground tick.
+  // Active reads and workbench summaries must not reuse data past their next three-second tick.
   const reuseMs = 2_900;
   const accountData = new SharedRead(async (signal) => config.mode === 'demo' ? { snapshot: demoAccount(), asset: demoAccountAssets() } : readAccountData(observation.config, signal), reuseMs, true);
   const accountAssets = new SharedRead(async (signal) => {
@@ -542,10 +542,11 @@ export function createServer(config: Config) {
       try {
         observation.check();
         const signal = controller.signal;
-        const result = path === '/api/account/conditional-orders' ? await accountConditionalOrders.read(signal)
-          : path === '/api/account/orders' ? await accountOrders.read(signal)
-          : path === '/api/account/positions' ? await accountPositions.read(signal)
-          : path === '/api/account/assets' ? await accountAssets.read(signal) : await accountData.read(signal);
+        const lifetime = req.headers['x-account-refresh'] === 'automatic' ? 30_000 : reuseMs;
+        const result = path === '/api/account/conditional-orders' ? await accountConditionalOrders.read(signal, lifetime)
+          : path === '/api/account/orders' ? await accountOrders.read(signal, lifetime)
+          : path === '/api/account/positions' ? await accountPositions.read(signal, lifetime)
+          : path === '/api/account/assets' ? await accountAssets.read(signal, lifetime) : await accountData.read(signal);
         if (controller.signal.aborted) return;
         const session = sessions.get(cookie!);
         if (!session || session.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });

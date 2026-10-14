@@ -5,7 +5,7 @@
 | 任务 | 权威来源 |
 | --- | --- |
 | 确认产品范围、输入与风险规则 | [产品决策](product-spec.md)；[实现规格与验收要求](issue-spec.md) |
-| 实施独立账户快照页、持仓与活跃委托详情 | [账户快照页规格](account-snapshot-spec.md)（整体方案已确认；[本地任务 01–05](../.scratch/account-snapshot/issues/)，待实现） |
+| 修改独立账户快照页、资产与刷新行为 | [账户快照页规格](account-snapshot-spec.md)（页面仅展示资产，资金明细默认展开；[本地任务 01–05](../.scratch/account-snapshot/issues/)保留历史任务记录） |
 | 实施交易记录、历史归并与复盘分析 | [交易复盘规格](trade-review-spec.md)（设计与拆分已确认；[本地任务 01–12](../.scratch/trade-review/issues/)，待实现） |
 | 修改领域用语或界面文案 | [领域词汇表](../CONTEXT.md) |
 | 修改仓位算法 | [ADR 0002：按最终止损确定仓位](adr/0002-size-to-final-stop.md) |

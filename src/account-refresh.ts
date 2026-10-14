@@ -7,7 +7,7 @@ export class SharedRead<T> {
   private failures = 0;
   private generation = 0;
   private retry: boolean;
-  private cached?: { value: T; expiresAt: number; attemptedAt: string };
+  private cached?: { value: T; readAt: number; attemptedAt: string };
   private load: (signal: AbortSignal) => Promise<T>;
   private lifetime: number;
   constructor(load: (signal: AbortSignal) => Promise<T>, lifetime = 0, retry = false) { this.load = load; this.lifetime = lifetime; this.retry = retry; }
@@ -17,10 +17,10 @@ export class SharedRead<T> {
   clear() { this.cached = undefined; this.generation++; }
   stop() { this.clear(); this.pending?.controller.abort(); }
 
-  async read(signal: AbortSignal): Promise<{ value: T; attemptedAt: string; reused: boolean }> {
+  async read(signal: AbortSignal, reuseMs = this.lifetime): Promise<{ value: T; attemptedAt: string; reused: boolean }> {
     signal.throwIfAborted();
     if (this.failure?.retryAt && Date.parse(this.failure.retryAt) > Date.now()) throw this.failure;
-    if (this.cached && Date.now() < this.cached.expiresAt)
+    if (this.cached && Date.now() < this.cached.readAt + reuseMs)
       return { ...this.cached, reused: true };
     let attemptedAt = new Date().toISOString();
     if (!this.pending) {
@@ -44,7 +44,7 @@ export class SharedRead<T> {
         .then((value) => {
           if (!controller.signal.aborted && generation === this.generation) {
             const successfulAt = value && typeof value === 'object' && 'queriedAt' in value && typeof value.queriedAt === 'string' ? Date.parse(value.queriedAt) : Date.parse(attemptedAt);
-            this.cached = { value, expiresAt: Math.min(Date.parse(attemptedAt), successfulAt) + this.lifetime, attemptedAt };
+            this.cached = { value, readAt: Math.min(Date.parse(attemptedAt), successfulAt), attemptedAt };
             this.failure = undefined; this.failures = 0;
           }
           return value;

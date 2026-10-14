@@ -217,25 +217,13 @@ p { margin: 0 0 var(--space-12); }
 }
 
 /* Independent account page: shared balances, disclosures and controls. */
+.account-page__actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-12); }
+.account-page__refresh { display: flex; align-items: center; justify-content: flex-end; min-width: 84px; min-height: 24px; font-size: var(--text-sm); }
+.account-page__countdown { width: 24px; height: 24px; fill: none; stroke-width: 2; transform: rotate(-90deg); }
+.account-page__countdown-track { stroke: var(--color-border); }
+.account-page__countdown-progress { stroke: var(--color-text); }
 .account-page__details { margin-top: var(--space-24); }
-.account-page__views { display: flex; flex-wrap: wrap; gap: var(--space-12); margin-top: var(--space-24); }
-.account-page__views .button[aria-pressed="true"] { border-color: var(--color-text); font-weight: 700; }
-
-/* Current positions: preserve keyed records during polling. */
-.positions { margin-top: var(--space-28); border-top: 1px solid var(--color-border); padding-top: var(--space-24); }
-.positions__status[data-stale="true"] { color: var(--color-error); }
-.positions__filter { display: block; margin: var(--space-20) 0; }
-.position { border-top: 1px solid var(--color-border); padding: var(--space-20) 0; }
-.position__heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-12); }
-.position__pnl-label { color: var(--color-muted); margin-bottom: 0; }
-.position__pnl { margin-top: var(--space-8); }
-.position__pnl[data-pnl="profit"] { color: var(--color-success); }
-.position__pnl[data-pnl="loss"] { color: var(--color-error); }
-.position__details { margin-bottom: 0; }
-@media (max-width: 560px) {
-  .position .details__row { flex-wrap: wrap; }
-  .position .details__value { margin-left: auto; }
-}
+.account-page__error-detail { overflow-wrap: anywhere; }
 
 /* Amount：上下文差异由显式变体表达。 */
 .amount { margin: var(--space-16) 0 var(--space-10); font-family: var(--font-data); font-size: 22px; font-weight: 550; letter-spacing: -.04em; line-height: 1.3; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
@@ -496,23 +484,31 @@ p { margin: 0 0 var(--space-12); }
 }
 
 /* Review page: archived evidence uses shared amounts and native disclosures. */
-.review-orders { margin-top: var(--space-24); }
-.review-orders .section-title { margin-bottom: var(--space-16); }
+.review-orders { min-width: 0; }
 .review-orders__details { max-width: min(640px, calc(100vw - 80px)); }
 .review-page__filters { margin: var(--space-24) 0; }
 .review-page__filter-form { display: grid; gap: var(--space-16); margin-top: var(--space-16); }
 .review-page__filter-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-16); }
 .review-page__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
+.review-page__views { display: flex; gap: var(--space-8); border-bottom: 1px solid var(--color-border); margin-bottom: var(--space-24); }
+.review-page__view { height: 48px; border-radius: 0; border-bottom: 2px solid transparent; white-space: nowrap; }
+.review-page__view[aria-pressed="true"] { border-bottom-color: var(--color-text); font-weight: 600; }
+.review-page__source { margin-top: 0; }
 .review-page__list { list-style: none; padding: 0; }
-/* Hallmark · macrostructure: filterable ledger + trade detail · theme: existing monochrome */
+/* Hallmark · macrostructure: query form + table toolbar + ledger · theme: existing monochrome */
 .review-page__back { margin-bottom: var(--space-16); }
 .review-page__status { color: var(--color-muted); font-size: var(--text-sm); margin-bottom: var(--space-24); overflow-wrap: anywhere; }
-.review-filters { display: grid; grid-template-columns: minmax(280px, 2fr) minmax(160px, 1fr) auto; gap: var(--space-16); align-items: end; padding: var(--space-20); margin-bottom: var(--space-28); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-control); }
-.review-filters__dates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-12); }
-.review-filters__control { width: 100%; }
+.review-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: var(--space-16); align-items: end; padding: var(--space-20); margin-bottom: var(--space-20); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-control); }
+.review-filters__control { width: 100%; min-width: 0; }
+.review-filters__actions { display: flex; gap: var(--space-8); }
 .review-filters__hint { grid-column: 1 / -1; margin: 0; }
+.review-table-panel { min-width: 0; padding: var(--space-20); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-control); }
+.review-table-panel__toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-16); margin-bottom: var(--space-16); }
+.review-table-panel__heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-12); min-width: 0; }
+.review-table-panel__status { margin-bottom: var(--space-12); padding: var(--space-8) var(--space-12); background: var(--color-page); color: var(--color-muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.review-table-panel__message { margin: 0; }
 .review-table { min-width: 0; font-variant-numeric: tabular-nums; }
-.review-table__hint { display: none; }
+.review-table__hint { color: var(--color-muted); font-size: var(--text-xs); }
 .review-table__row { cursor: pointer; }
 .review-table__amount { font-family: var(--font-data); }
 .review-table__amount[data-state="loss"] { color: var(--color-error); }
@@ -525,12 +521,20 @@ p { margin: 0 0 var(--space-12); }
 .review-backup__actions { display: flex; flex-wrap: wrap; gap: var(--space-12); margin-bottom: var(--space-20); }
 .review-backup__json { max-width: 100%; max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: var(--space-12); border: 1px solid var(--color-border-soft); font-size: var(--text-sm); }
 .review-page__notes { margin-top: var(--space-24); }
+@media (max-width: 768px) {
+  .review-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .review-filters__actions { justify-content: flex-end; }
+}
 @media (max-width: 560px) {
-  .review-filters { grid-template-columns: minmax(0, 1fr) auto; padding: var(--space-16); }
-  .review-filters__dates { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr); }
+  .review-filters { grid-template-columns: minmax(0, 1fr); gap: var(--space-12); padding: var(--space-16); }
+  .review-filters .field { display: grid; grid-template-columns: 98px minmax(0, 1fr); align-items: center; gap: var(--space-8); }
+  .review-filters .field-label { margin: 0; }
+  .review-filters__actions { justify-content: flex-start; }
+  .review-table-panel { padding: var(--space-12); }
+  .review-table-panel__toolbar { align-items: flex-start; flex-direction: column; gap: var(--space-12); }
+  .review-table-panel__heading { gap: var(--space-8); }
   .review-page .page-header { flex-direction: row; align-items: center; }
   .review-page .page-title { font-size: 28px; }
-  .review-table__hint { display: block; color: var(--color-muted); font-size: var(--text-xs); }
 }
 .review-page__detail { border-top: 1px solid var(--color-border); padding: var(--space-24) 0; }
 .review-notes__form { display: grid; gap: var(--space-16); margin-top: var(--space-16); }
@@ -599,10 +603,3 @@ p { margin: 0 0 var(--space-12); }
   .review-page__detail .details__row--risk { flex-direction: column; align-items: flex-start; }
   .review-page__detail .details__value { max-width: 100%; }
 }
-
-/* Ordinary orders share the account page's native controls and exact-value rows. */
-.orders { margin-top: var(--space-28); border-top: 1px solid var(--color-border); padding-top: var(--space-24); }
-.orders__status[data-stale="true"] { color: var(--color-error); }
-.orders__filter { display: block; margin: var(--space-20) 0; }
-.order { border-top: 1px solid var(--color-border); padding: var(--space-20) 0; }
-.order__details { margin-bottom: 0; }

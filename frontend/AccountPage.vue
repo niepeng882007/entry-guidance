@@ -1,7 +1,4 @@
 <script setup lang="ts">
-import { ref } from 'vue';
-import ActiveOrders from './components/ActiveOrders.vue';
-import CurrentPositions from './components/CurrentPositions.vue';
 import { useAccountPage } from './useAccountPage.ts';
 
 const { source, expectedSource } = defineProps<{
@@ -11,25 +8,15 @@ const { source, expectedSource } = defineProps<{
 const {
   snapshot,
   attemptedAt,
-  attempts,
   busy,
   stale,
   relogin,
   status,
+  errorDetail,
+  refreshProgress,
+  refreshPause,
   refresh,
-  positions,
-  positionsStale,
-  positionsStatus,
-  conditionalOrders,
-  conditionalOrdersStale,
-  conditionalOrdersStatus,
-  orders,
-  ordersStale,
-  ordersStatus,
-  last,
-  funding,
 } = useAccountPage(expectedSource);
-const view = ref<'positions' | 'orders'>('positions');
 const detailFields = [
   ['walletBalance', '钱包余额'],
   ['positionInitialMargin', '持仓初始保证金'],
@@ -52,25 +39,48 @@ function time(value: string | undefined) {
   <div class="account-page">
     <header class="page-header">
       <h1 class="page-title">账户快照</h1>
-      <span class="tag">USDT · 只读</span>
+      <div class="account-page__actions">
+        <div class="account-page__refresh">
+          <span v-if="busy" class="muted" aria-live="polite">刷新中…</span>
+          <span v-else-if="refreshPause" class="muted">{{ refreshPause }}</span>
+          <svg
+            v-else
+            class="account-page__countdown"
+            viewBox="0 0 24 24"
+            role="img"
+            :aria-label="`自动刷新倒计时：${Math.ceil(30 * refreshProgress)} 秒后刷新`"
+          >
+            <circle class="account-page__countdown-track" cx="12" cy="12" r="9" />
+            <circle
+              class="account-page__countdown-progress"
+              cx="12"
+              cy="12"
+              r="9"
+              pathLength="100"
+              stroke-dasharray="100"
+              :stroke-dashoffset="100 * (1 - refreshProgress)"
+            />
+          </svg>
+        </div>
+        <button
+          class="button button--secondary"
+          type="button"
+          :disabled="busy || relogin"
+          :aria-busy="busy"
+          @click="refresh()"
+        >
+          手动刷新
+        </button>
+      </div>
     </header>
-    <p class="source">{{ source }}</p>
-    <div class="status" :data-state="stale ? 'error' : 'success'" role="status">
+    <p v-if="expectedSource === 'demo'" class="source">{{ source }}</p>
+    <div v-if="stale && status" class="status" data-state="error" role="status">
       <p class="status__message">{{ status }}</p>
-      <p class="muted" :hidden="!busy">正在查询…</p>
       <a class="button button--text button--link" href="/login" :hidden="!relogin">重新登录</a>
-    </div>
-    <div class="section-heading">
-      <p class="muted section-heading__note">正常前台每 3 秒刷新</p>
-      <button
-        class="button button--secondary"
-        type="button"
-        :disabled="busy || relogin"
-        :aria-busy="busy"
-        @click="refresh"
-      >
-        手动刷新
-      </button>
+      <details v-if="errorDetail" :key="errorDetail" class="disclosure">
+        <summary class="disclosure__summary">错误详情</summary>
+        <p class="status__message account-page__error-detail">{{ errorDetail }}</p>
+      </details>
     </div>
     <div class="balances balances--assets" :data-current="!stale">
       <section class="balance">
@@ -89,7 +99,7 @@ function time(value: string | undefined) {
         <p class="muted balance__caption">查询值，未扣手续费与资金费</p>
       </section>
     </div>
-    <details class="disclosure account-page__details">
+    <details class="disclosure account-page__details" open>
       <summary class="disclosure__summary">资金占用与查询信息</summary>
       <dl class="details details--account">
         <div v-for="[field, label] in detailFields" :key="field" class="details__row">
@@ -106,48 +116,6 @@ function time(value: string | undefined) {
         </div>
       </dl>
     </details>
-    <nav class="account-page__views" aria-label="账户记录">
-      <button
-        class="button button--secondary"
-        type="button"
-        :aria-pressed="view === 'positions'"
-        aria-controls="account-positions"
-        @click="view = 'positions'"
-      >
-        持仓
-      </button>
-      <button
-        class="button button--secondary"
-        type="button"
-        :aria-pressed="view === 'orders'"
-        aria-controls="account-orders"
-        @click="view = 'orders'"
-      >
-        活跃委托
-      </button>
-    </nav>
-    <CurrentPositions
-      id="account-positions"
-      v-show="view === 'positions'"
-      :positions="positions"
-      :stale="positionsStale"
-      :status="positionsStatus"
-      :attempted-at="attempts.positions"
-      :last="last"
-      :funding="funding"
-    />
-    <ActiveOrders
-      id="account-orders"
-      v-show="view === 'orders'"
-      :orders="orders"
-      :conditional-orders="conditionalOrders"
-      :conditional-stale="conditionalOrdersStale"
-      :conditional-status="conditionalOrdersStatus"
-      :stale="ordersStale"
-      :status="ordersStatus"
-      :attempted-at="attempts.orders"
-      :conditional-attempted-at="attempts.conditionalOrders"
-    />
     <p class="footnote">账户快照不代表后续状态，也不表示止损核验通过。交易由你在 Binance 执行。</p>
   </div>
 </template>

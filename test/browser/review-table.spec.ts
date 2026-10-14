@@ -62,8 +62,16 @@ test('date and searchable symbol filters paginate a real table without CSP viola
   await mockTrades(page, list, trades);
   await page.goto('/review?view=cycles&from=2026-10-10&to=2026-10-10');
   await expect(page.locator('.review-table tbody tr[data-row-key]')).toHaveCount(20);
+  const reads: string[] = [];
+  page.on('request', (request) => {
+    if (request.url().includes('/api/review/trades?')) reads.push(request.url());
+  });
   await page.getByLabel('交易对', { exact: true }).fill('BTC');
   await page.locator('.ant-select-item-option').filter({ hasText: 'BTCUSDT' }).click();
+  await expect(page.getByText('当前匹配 44 笔', { exact: true })).toBeVisible();
+  await expect(page).not.toHaveURL(/symbol=/);
+  expect(reads).toEqual([]);
+  await page.getByRole('button', { name: '查询', exact: true }).click();
   await expect(page.getByText('当前匹配 23 笔', { exact: true })).toBeVisible();
   await page.locator('.ant-pagination-item-2').click();
   await expect(page).toHaveURL(/page=2/);
@@ -72,11 +80,13 @@ test('date and searchable symbol filters paginate a real table without CSP viola
   await expect(page.locator('.ant-picker-dropdown:visible')).toBeVisible();
   await page.locator('.ant-picker-dropdown:visible [title="2026-10-11"]').click();
   await expect(page.getByRole('alert')).toContainText('开始日期不能晚于结束日期');
-  await expect(page.locator('.review-table tbody tr[data-row-key]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '查询', exact: true })).toBeDisabled();
+  await expect(page.locator('.review-table tbody tr[data-row-key]')).toHaveCount(3);
+  await expect(page).toHaveURL(/from=2026-10-10.*page=2/);
   await page.getByRole('button', { name: '重置', exact: true }).click();
   await expect(page).toHaveURL('/review?view=cycles');
   await expect(page.getByText('当前匹配 44 笔', { exact: true })).toBeVisible();
-  for (const width of [320, 390, 1280]) {
+  for (const width of [320, 375, 390, 414, 768, 1280]) {
     await page.setViewportSize({ width, height: 844 });
     await expect
       .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))

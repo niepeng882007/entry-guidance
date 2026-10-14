@@ -40,6 +40,7 @@ const tableRows = (page: Page) => page.locator('.review-table tbody tr[data-row-
 async function selectSymbol(page: Page, symbol: string) {
   await page.getByLabel('交易对', { exact: true }).fill(symbol);
   await page.locator('.ant-select-item-option').filter({ hasText: symbol }).click();
+  await page.getByRole('button', { name: '查询', exact: true }).click();
 }
 
 test('server pagination preserves total range and resets to page one after a symbol filter', async ({

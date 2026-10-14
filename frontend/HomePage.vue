@@ -4,7 +4,7 @@ defineProps<{ source: string }>();
 const descriptions = {
   entry: '确定本单预算与绝对止损，生成开仓方案；执行后返回核验。',
   review: '查看归档交易、盈亏和逐笔成交，展开订单与资金费证据。',
-  account: '查看账户权益、可用余额、当前持仓和活跃委托。',
+  account: '查看账户权益、可用余额、未实现盈亏与资金占用。',
 };
 const features = navigation.filter((page) => page.id !== 'home');
 </script>

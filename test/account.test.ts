@@ -695,6 +695,52 @@ test('visitors share summary and asset reads for three seconds without inventing
   assert.ok(Date.parse(fresh.queriedAt) > Date.parse(assets.queriedAt));
 });
 
+test('automatic account polls share thirty-second data while active and workbench reads stay fresh', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const calls = new Map<string, number>();
+  const base = await start(t, {
+    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      calls.set(url.pathname, (calls.get(url.pathname) ?? 0) + 1);
+      if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+      if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
+      if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
+      if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: [] } };
+      return { status: 200, body: [] };
+    },
+  });
+  const cookies = await Promise.all([login(base), login(base)]).then((responses) => responses.map((r) => r.headers.get('set-cookie')!.split(';')[0]!));
+  const paths = ['/api/account/assets', '/api/account/positions', '/api/account/orders', '/api/account/conditional-orders'];
+  const read = (path: string, automatic = false, cookie = cookies[0]!) => fetch(`${base}${path}`, {
+    headers: { Cookie: cookie, ...(automatic ? { 'X-Account-Refresh': 'automatic' } : {}) },
+  }).then(async (response) => { assert.equal(response.status, 200); return response.json(); });
+  const before = Date.now();
+  const initial = await Promise.all(paths.map((path) => read(path)));
+  const beforeReuse = new Map(calls);
+  t.mock.timers.setTime(before + 3000);
+  const reused = await Promise.all(paths.map((path) => read(path, true, cookies[1]!)));
+  assert.deepEqual(calls, beforeReuse);
+  reused.forEach((value, index) => {
+    assert.equal(value.reused, true);
+    assert.equal(value.queriedAt, initial[index].queriedAt);
+    assert.equal(value.attemptedAt, initial[index].attemptedAt);
+  });
+  // Even an automatic header cannot slow down the workbench's three-second summary.
+  const summary = await read('/api/account', true);
+  assert.ok(Date.parse(summary.queriedAt) > Date.parse(initial[0].queriedAt));
+  const active = await Promise.all(paths.map((path) => read(path)));
+  active.forEach((value, index) => assert.ok(Date.parse(value.queriedAt) > Date.parse(initial[index].queriedAt)));
+  const afterActive = new Map(calls);
+  t.mock.timers.setTime(before + 30_000);
+  await Promise.all(paths.map((path) => read(path, true, cookies[1]!)));
+  assert.deepEqual(calls, afterActive);
+  t.mock.timers.setTime(before + 33_000);
+  const expired = await Promise.all(paths.map((path) => read(path, true)));
+  expired.forEach((value, index) => assert.ok(Date.parse(value.queriedAt) > Date.parse(active[index].queriedAt)));
+  assert.equal(calls.get('/fapi/v1/openOrders'), 3);
+  assert.equal(calls.get('/fapi/v1/openAlgoOrders'), 3);
+});
+
 test('rate limits stop manual and multi-visitor reads until the upstream retry time', async (t) => {
   let limited = true, calls = 0;
   const base = await start(t, {
@@ -836,7 +882,9 @@ test('whole-account visitors share every section and preserve strict market scop
   });
   const cookies = await Promise.all([login(base), login(base)]).then((responses) => responses.map((r) => r.headers.get('set-cookie')!.split(';')[0]!));
   const paths = ['/api/account', '/api/account/assets', '/api/account/positions', '/api/account/orders', '/api/account/conditional-orders'];
-  const read = (path: string, cookie: string) => fetch(`${base}${path}`, { headers: { Cookie: cookie } });
+  const read = (path: string, cookie: string, automatic = false) => fetch(`${base}${path}`, {
+    headers: { Cookie: cookie, ...(automatic ? { 'X-Account-Refresh': 'automatic' } : {}) },
+  });
   const responses = await Promise.all(cookies.flatMap((cookie) => paths.map((path) => read(path, cookie))));
   for (const response of responses) assert.equal(response.status, 200);
   for (const path of ['/sapi/v1/account/apiRestrictions', '/sapi/v1/portfolio/account', '/fapi/v2/account', '/fapi/v1/exchangeInfo', '/fapi/v2/positionRisk', '/fapi/v1/openOrders', '/fapi/v1/openAlgoOrders']) assert.equal(calls.get(path), 1, path);
@@ -846,7 +894,7 @@ test('whole-account visitors share every section and preserve strict market scop
   assert.equal(strict.status, 502);
   assert.equal((await strict.json()).code, 'unsupported_account');
   assert.equal(calls.get('/fapi/v2/account'), 2);
-  const revoked = await read('/api/account/assets', cookies[1]!);
+  const revoked = await read('/api/account/assets', cookies[1]!, true);
   assert.equal(revoked.status, 502);
   assert.equal((await revoked.json()).scopeConfirmed, false);
   t.mock.timers.setTime(Date.now() + 3000);
