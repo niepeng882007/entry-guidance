@@ -497,6 +497,12 @@ p { margin: 0 0 var(--space-12); }
 .review-page__list { list-style: none; padding: 0; }
 .review-page__record, .review-page__detail { border-top: 1px solid var(--color-border); padding: var(--space-24) 0; }
 .review-page__amount { font-size: clamp(24px, 5vw, 36px); }
+.review-notes__form { display: grid; gap: var(--space-16); margin-top: var(--space-16); }
+.review-notes__text { resize: vertical; }
+.review-notes__tags { min-width: 0; margin: 0; padding: var(--space-12); border: 1px solid var(--color-border); border-radius: var(--radius-control); }
+.review-notes__tag { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-12); min-height: var(--control-min-height); }
+.review-notes__actions { display: flex; flex-wrap: wrap; gap: var(--space-12); }
+.review-notes__content { white-space: pre-wrap; overflow-wrap: anywhere; }
 .review-page__sync { display: grid; justify-items: start; gap: var(--space-16); }
 .review-page__sync > .field { width: 100%; }
 .review-page__detail { scroll-margin-top: var(--space-24); overflow-wrap: anywhere; }

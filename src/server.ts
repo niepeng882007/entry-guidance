@@ -9,6 +9,7 @@ import { AccountError, readAccountData, accountAssetDetails, readReviewIdentity,
 import { demoAccount, demoAccountAssets, readMarket, readSymbols } from './market.ts';
 import { createPlan, verifyPosition, type Plan } from './verification.ts';
 import { ReviewLedger, demoTrade, type ReviewList } from './review-ledger.ts';
+import { ReviewWriteError } from './review-notes.ts';
 import { HistorySync } from './history-sync.ts';
 import type { EntryInput } from '../public/draft.js';
 import type { ViteDevServer } from 'vite';
@@ -189,6 +190,33 @@ export function createServer(config: Config) {
       } catch (error) {
         if (!(error instanceof AccountError)) throw error;
         return send(error.status, { error: error.message, code: error.code, attemptedAt: error.attemptedAt ?? new Date().toISOString(), retryAt: error.retryAt, scopeConfirmed: error.scopeConfirmed });
+      }
+    }
+    const notePath = path?.match(/^\/api\/review\/trades\/([A-Za-z0-9-]{1,160})\/note$/);
+    if (path === '/api/review/journal' && req.method === 'GET' || (path === '/api/review/tags' || notePath) && req.method === 'POST') {
+      let input: unknown;
+      if (req.method === 'POST') {
+        if (req.headers['content-type'] !== 'application/json') return send(415, { error: '个人记录输入格式不支持。' });
+        const chunks: Buffer[] = [];
+        let size = 0;
+        for await (const chunk of req) {
+          size += chunk.length;
+          if (size > 100_000) return send(413, { error: '个人记录输入过大。' });
+          chunks.push(chunk);
+        }
+        try { input = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+        catch { return send(400, { error: '个人记录输入格式无效。' }); }
+      }
+      try {
+        if (source === 'binance') await getHistory();
+        const session = sessions.get(cookie!);
+        if (!session || session.expiresAt <= Date.now()) return send(401, { error: '登录已过期，请重新登录。' });
+        const ledger = source === 'demo' ? getReviewLedger() : reviewLedger;
+        if (!ledger) return send(404, { error: '尚无该账户的复盘账本。' });
+        return send(200, req.method === 'GET' ? ledger.journal() : notePath ? ledger.saveNote(notePath[1]!, input) : ledger.saveTag(input));
+      } catch (error) {
+        if (error instanceof ReviewWriteError) return send(error.status, { error: error.message });
+        return send(503, { error: '个人记录保存或读取失败，已有账本保留；当前输入保留，请重试。' });
       }
     }
     if (req.method !== 'GET' && !(path === '/api/review/sync' && req.method === 'POST')) return send(405, { error: '仅支持读取。' });
