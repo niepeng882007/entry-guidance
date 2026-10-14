@@ -98,3 +98,70 @@ test('review addition preserves existing demo recovery.v1 signatures with config
   const recovery = `${payload}.${createHmac('sha256', key).update(payload).digest('base64url')}`;
   assert.equal((await post('/api/plan/recover', { recovery })).status, 200);
 });
+
+
+test('personal notes and confirmed tags survive relogin and restart without changing exchange facts', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'review-notes-http-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const config = { mode: 'demo' as const, reviewLedgerPath: join(directory, 'demo.sqlite') };
+  let app = await start(t, config);
+  const post = (path: string, input: unknown) => fetch(`${app.base}${path}`, {
+    method: 'POST', headers: { Cookie: app.cookie, Origin: app.base, 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+  });
+  const list = await (await app.get('/api/review/trades')).json();
+  const id = list.trades[0].id;
+  const detail = await (await app.get(`/api/review/trades/${id}`)).json();
+  const created = await post('/api/review/tags', { name: '顺势', id: null, version: 0, active: true });
+  assert.equal(created.status, 200);
+  const tag = (await created.json()).tags[0];
+  const input = { noteId: null, version: 0, basis: detail.noteBasis, entryReason: '趋势突破', exitReason: '按计划退出', executionProblem: '', improvement: '', freeNote: '<script>alert(1)</script>', tagIds: [tag.id] };
+  const saved = await post(`/api/review/trades/${id}/note`, input);
+  assert.equal(saved.status, 200);
+  const note = (await saved.json()).notes[0];
+  assert.equal(note.entryReason, '趋势突破');
+  assert.equal(note.binding, 'current');
+  assert.equal(note.version, 1);
+  assert.ok(Number.isFinite(Date.parse(note.updatedAt)));
+  assert.equal(note.trade.evidence.fills.length, 4);
+  const updated = await post(`/api/review/trades/${id}/note`, { ...input, noteId: note.id, version: 1, freeNote: '复盘更新' });
+  assert.equal(updated.status, 200);
+  assert.equal((await post(`/api/review/trades/${id}/note`, { ...input, noteId: note.id, version: 1 })).status, 409);
+  assert.equal((await post('/api/review/tags', { id: tag.id, version: 1, name: '顺势交易', active: false })).status, 200);
+  assert.equal((await post('/api/review/tags', { id: tag.id, version: 1, name: '旧设备覆盖', active: true })).status, 409);
+  await new Promise<void>((resolve) => { app.server.closeAllConnections(); app.server.close(() => resolve()); });
+  app = await start(t, config);
+  const journal = await (await app.get('/api/review/journal')).json();
+  assert.equal(journal.notes[0].freeNote, '复盘更新');
+  assert.equal(journal.notes[0].version, 2);
+  assert.deepEqual(journal.notes[0].tagIds, [tag.id]);
+  assert.equal(journal.tags[0].name, '顺势交易');
+  assert.equal(journal.tags[0].active, false);
+  const facts = await (await app.get(`/api/review/trades/${id}`)).json();
+  assert.equal(facts.netPnl, '12.4735');
+  assert.equal(facts.exitReason, undefined);
+});
+
+test('personal writes reject unauthenticated, foreign-origin, malformed and oversized input', async (t) => {
+  const app = await start(t, { mode: 'demo' });
+  const list = await (await app.get('/api/review/trades')).json();
+  const detail = await (await app.get(`/api/review/trades/${list.trades[0].id}`)).json();
+  const path = `/api/review/trades/${detail.id}/note`;
+  const input = { noteId: null, version: 0, basis: detail.noteBasis, entryReason: '', exitReason: '', executionProblem: '', improvement: '', freeNote: '', tagIds: [] };
+  const post = (value: unknown, headers: Record<string, string> = {}) => fetch(`${app.base}${path}`, { method: 'POST', headers: { Cookie: app.cookie, Origin: app.base, 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(value) });
+  assert.equal((await post(input, { Cookie: '' })).status, 401);
+  assert.equal((await post(input, { Origin: 'http://other.invalid' })).status, 403);
+  assert.equal((await post(input, { 'Content-Type': 'text/plain' })).status, 415);
+  for (const invalid of [null, [], { ...input, freeNote: 12 }, { ...input, freeNote: '\u0000' }, { ...input, entryReason: 'x'.repeat(2001) }, { ...input, freeNote: 'x'.repeat(10001) }, { ...input, version: 0.5 }, { ...input, tagIds: ['missing'] }, { ...input, source: 'binance' }]) assert.equal((await post(invalid)).status, 400);
+  assert.equal((await post({ ...input, freeNote: 'x'.repeat(100001) })).status, 413);
+  assert.equal((await post({ ...input, basis: '0'.repeat(64) })).status, 409);
+  assert.equal((await post(input)).status, 200);
+  const journal = await (await app.get('/api/review/journal')).json();
+  assert.equal(journal.notes.length, 1);
+  assert.equal(journal.notes[0].freeNote, '');
+  const directory = mkdtempSync(join(tmpdir(), 'review-write-failure-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const broken = await start(t, { mode: 'demo', reviewLedgerPath: directory });
+  const failed = await fetch(`${broken.base}/api/review/tags`, { method: 'POST', headers: { Cookie: broken.cookie, Origin: broken.base, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: null, version: 0, name: '顺势', active: true }) });
+  assert.equal(failed.status, 503);
+  assert.doesNotMatch(JSON.stringify(await failed.json()), /review-write-failure|sqlite|browser-test/);
+});

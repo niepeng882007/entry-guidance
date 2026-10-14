@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ReviewTrade } from '../src/review-ledger.ts';
+import ReviewNotes from './components/ReviewNotes.vue';
 import { nextTick } from 'vue';
 import { useReviewPage } from './useReviewPage.ts';
 const { source, expectedSource } = defineProps<{
@@ -78,10 +79,10 @@ async function show(id: string) {
     </nav>
     <header class="page-header">
       <h1 class="page-title">交易复盘</h1>
-      <span class="tag">长期归档 · 只读</span>
+      <span class="tag">长期归档 · 交易只读</span>
     </header>
     <p class="source">{{ source }}</p>
-    <div class="status" role="status" aria-live="polite">
+    <div id="review-status" class="status" role="status" aria-live="polite">
       <p class="status__message">{{ status }}</p>
       <a v-if="relogin" class="button button--text button--link" href="/login">重新登录</a>
     </div>
@@ -236,6 +237,7 @@ async function show(id: string) {
       tabindex="-1"
       aria-labelledby="trade-detail-title"
     >
+      <p class="muted">交易所事实</p>
       <h2 id="trade-detail-title" class="section-title">{{ trade.symbol }} · 单笔交易详情</h2>
       <p class="muted">
         {{ trade.source === 'demo' ? '演示' : 'Binance' }} · {{ trade.accountId }}
@@ -358,6 +360,7 @@ async function show(id: string) {
         </article>
       </details>
     </section>
+    <ReviewNotes :source="expectedSource" :account-id="list?.accountId ?? null" :trade="trade" />
     <p class="footnote">
       一笔交易可包含多张订单和多条成交。归档独立于当前本单；退出登录、清除本单和服务重启保留历史。
     </p>
