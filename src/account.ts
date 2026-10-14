@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto';
 import { get } from 'node:https';
 import { parseDecimal, formatDecimal } from '../public/draft.js';
 
-export type Transport = (url: URL, headers: Record<string, string>, signal: AbortSignal) => Promise<{ status: number; body: unknown }>;
+export type Transport = (url: URL, headers: Record<string, string>, signal: AbortSignal) => Promise<{ status: number; body: unknown; usedWeight?: number; retryAfterMs?: number }>;
 export type AccountConfig = { apiKey?: string; apiSecret?: string; transport?: Transport };
 
 export class AccountError extends Error {
@@ -40,7 +40,12 @@ const transport: Transport = (url, headers, signal) => new Promise((resolve, rej
         data = integerIdPaths.includes(url.pathname) && response.statusCode === 200 ? text : JSON.parse(text);
       }
       catch { reject(new AccountError('upstream_error', 'Binance 返回异常响应，请稍后重试。')); return; }
-      resolve({ status: response.statusCode ?? 502, body: data });
+      const usedWeight = Number(response.headers['x-mbx-used-weight-1m']);
+      const retryAfter = Number(response.headers['retry-after']);
+      resolve({ status: response.statusCode ?? 502, body: data,
+        ...(Number.isFinite(usedWeight) && usedWeight >= 0 ? { usedWeight } : {}),
+        ...(Number.isFinite(retryAfter) && retryAfter > 0 ? { retryAfterMs: retryAfter * 1000 } : {}),
+      });
     });
   });
   request.on('error', reject);
@@ -69,7 +74,47 @@ const endpoints = {
   forceOrders: 'https://fapi.binance.com/fapi/v1/forceOrders',
 } as const;
 
-export async function readBinance(config: AccountConfig, operation: keyof typeof endpoints, signal: AbortSignal, symbol?: string, period?: { startTime: number; endTime: number; page?: number; autoCloseType?: 'LIQUIDATION' | 'ADL' }): Promise<unknown> {
+type ReadPriority = 'foreground' | 'archive';
+type QueuedRead = { run: () => void };
+const readQueues = new WeakMap<AccountConfig, { active: boolean; nextArchiveAt: number; blockedUntil: number; archiveWeightLimit: number; foreground: QueuedRead[]; archive: QueuedRead[]; timer?: ReturnType<typeof setTimeout> }>();
+
+function coordinatedRead<T>(config: AccountConfig, signal: AbortSignal, priority: ReadPriority, request: () => Promise<T>): Promise<T> {
+  let queue = readQueues.get(config);
+  if (!queue) { queue = { active: false, nextArchiveAt: 0, blockedUntil: 0, archiveWeightLimit: 1800, foreground: [], archive: [] }; readQueues.set(config, queue); }
+  const current = queue;
+  const pump = () => {
+    if (current.active) return;
+    clearTimeout(current.timer);
+    if (!current.foreground.length && !current.archive.length) return;
+    if (current.blockedUntil > Date.now()) { current.timer = setTimeout(pump, current.blockedUntil - Date.now()); return; }
+    const next = current.foreground.shift();
+    if (next) { current.active = true; next.run(); return; }
+    if (!current.archive.length) return;
+    const delay = current.nextArchiveAt - Date.now();
+    if (delay > 0) { current.timer = setTimeout(pump, delay); return; }
+    current.active = true; current.archive.shift()!.run();
+  };
+  return new Promise<T>((resolve, reject) => {
+    const cancel = () => {
+      const index = current[priority].indexOf(job);
+      if (index >= 0) { current[priority].splice(index, 1); reject(new AccountError('timeout', '查询已取消或超时。', 504)); pump(); }
+    };
+    const job: QueuedRead = { run: () => {
+      signal.removeEventListener('abort', cancel);
+      if (signal.aborted) { current.active = false; reject(new AccountError('timeout', '查询已取消或超时。', 504)); pump(); return; }
+      void Promise.resolve().then(request).then(resolve, reject).finally(() => {
+        // Real archive GETs are paced; injected transports supply their own controlled timing.
+        if (priority === 'archive' && !config.transport) current.nextArchiveAt = Math.max(current.nextArchiveAt, Date.now() + 1000);
+        current.active = false; pump();
+      });
+    } };
+    current[priority].push(job);
+    signal.addEventListener('abort', cancel, { once: true });
+    if (signal.aborted) cancel(); else pump();
+  });
+}
+
+export async function readBinance(config: AccountConfig, operation: keyof typeof endpoints, signal: AbortSignal, symbol?: string, period?: { startTime: number; endTime: number; page?: number; autoCloseType?: 'LIQUIDATION' | 'ADL' }, priority: ReadPriority = 'foreground'): Promise<unknown> {
   const url = new URL(endpoints[operation]);
   const isPublic = operation === 'exchange' || operation === 'book' || operation === 'mark' || operation === 'last' || operation === 'time';
   if (symbol !== undefined) {
@@ -77,7 +122,7 @@ export async function readBinance(config: AccountConfig, operation: keyof typeof
     url.searchParams.set('symbol', symbol);
   }
   if (period) {
-    if (!symbol || !['trades', 'history', 'algoHistory', 'income', 'forceOrders'].includes(operation) || !Number.isSafeInteger(period.startTime) || !Number.isSafeInteger(period.endTime) || period.startTime <= 0 || period.endTime < period.startTime || period.endTime - period.startTime >= 7 * 86_400_000) throw new AccountError('invalid_period', '成交查询区间无效或超过支持范围。', 400);
+    if ((!symbol && operation !== 'income') || !['trades', 'history', 'algoHistory', 'income', 'forceOrders'].includes(operation) || !Number.isSafeInteger(period.startTime) || !Number.isSafeInteger(period.endTime) || period.startTime <= 0 || period.endTime < period.startTime || period.endTime - period.startTime >= 7 * 86_400_000) throw new AccountError('invalid_period', '成交查询区间无效或超过支持范围。', 400);
     url.searchParams.set('startTime', String(period.startTime));
     url.searchParams.set('endTime', String(period.endTime));
     url.searchParams.set('limit', operation === 'forceOrders' ? '100' : '1000');
@@ -94,12 +139,27 @@ export async function readBinance(config: AccountConfig, operation: keyof typeof
   if (!isPublic) {
     if (!config.apiKey || !config.apiSecret) throw new AccountError('missing_credentials', '未连接：请在后端配置 BINANCE_API_KEY 和 BINANCE_API_SECRET。', 503);
     headers['X-MBX-APIKEY'] = config.apiKey;
-    url.searchParams.set('timestamp', Date.now().toString());
-    url.searchParams.set('recvWindow', '5000');
-    url.searchParams.set('signature', createHmac('sha256', config.apiSecret).update(url.searchParams.toString()).digest('hex'));
   }
   try {
-    const response = await (config.transport ?? transport)(url, headers, signal);
+    const response = await coordinatedRead(config, signal, priority, () => {
+      // Sign when dispatched, so waiting behind another GET cannot expire the signature.
+      if (!isPublic) {
+        url.searchParams.set('timestamp', Date.now().toString()); url.searchParams.set('recvWindow', '5000');
+        url.searchParams.set('signature', createHmac('sha256', config.apiSecret!).update(url.searchParams.toString()).digest('hex'));
+      }
+      return (config.transport ?? transport)(url, headers, signal);
+    });
+    const queue = readQueues.get(config)!;
+    if (operation === 'exchange' && response.status === 200 && Array.isArray(object(response.body).rateLimits)) {
+      const limits = (object(response.body).rateLimits as unknown[]).map(object);
+      const minute = limits.find((limit) => limit.rateLimitType === 'REQUEST_WEIGHT' && limit.interval === 'MINUTE' && limit.intervalNum === 1);
+      if (minute && Number.isSafeInteger(minute.limit) && Number(minute.limit) > 0) queue.archiveWeightLimit = Math.floor(Number(minute.limit) * 0.75);
+    }
+    if (url.hostname === 'fapi.binance.com' && Number.isFinite(response.usedWeight) && response.usedWeight! >= queue.archiveWeightLimit) queue.nextArchiveAt = Math.max(queue.nextArchiveAt, (Math.floor(Date.now() / 60_000) + 1) * 60_000);
+    if ((response.status === 429 || response.status === 418) && (!config.transport || response.retryAfterMs !== undefined)) {
+      const retry = response.retryAfterMs && Number.isFinite(response.retryAfterMs) && response.retryAfterMs > 0 ? response.retryAfterMs : response.status === 418 ? 300_000 : 60_000;
+      queue.blockedUntil = Math.max(queue.blockedUntil, Date.now() + retry);
+    }
     if (operation === 'portfolio' && response.status === 400 && object(response.body).code === -21001) return response.body;
     if (response.status !== 200) {
       const data = object(response.body);
@@ -159,16 +219,16 @@ export async function readAccountScope(config: AccountConfig, signal: AbortSigna
   }
 }
 
-async function verifyReadPermissions(config: AccountConfig, signal: AbortSignal) {
-  const permissions = object(await readBinance(config, 'permissions', signal));
+async function verifyReadPermissions(config: AccountConfig, signal: AbortSignal, priority: ReadPriority = 'foreground') {
+  const permissions = object(await readBinance(config, 'permissions', signal, undefined, undefined, priority));
   if (permissions.enableReading !== true) throw new AccountError('reading_disabled', '凭据没有可验证的读取权限。');
   if (writePermissions.some((field) => permissions[field] === true)) throw new AccountError('unsafe_permissions', '凭据包含交易、提现或划转权限，请更换专用只读凭据。');
   if (writePermissions.some((field) => permissions[field] !== false)) throw new AccountError('unverified_permissions', '无法完整确认凭据的只读权限，已停止读取。');
 }
 
-export async function readReviewIdentity(config: AccountConfig, signal: AbortSignal) {
-  await verifyReadPermissions(config, signal);
-  const { uid } = object(await readBinance(config, 'identity', signal));
+export async function readReviewIdentity(config: AccountConfig, signal: AbortSignal, priority: ReadPriority = 'foreground') {
+  await verifyReadPermissions(config, signal, priority);
+  const { uid } = object(await readBinance(config, 'identity', signal, undefined, undefined, priority));
   if (!(typeof uid === 'number' && Number.isSafeInteger(uid) && uid > 0) && !(typeof uid === 'string' && /^[1-9]\d{0,23}$/.test(uid))) throw new AccountError('unverified_identity', '账户身份无法确认，已暂停新增归档；已有账本保留。');
   return String(uid);
 }

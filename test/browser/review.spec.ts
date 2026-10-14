@@ -1,5 +1,98 @@
 import { test, expect } from '@playwright/test';
 
+test('account archive shows overall, contract and expired discovery progress with immediate sync', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.getByLabel('个人访问密码').fill('browser-test-only');
+  await page.getByRole('button', { name: '进入账户' }).click();
+  await page.route('**/review', async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      body: (await response.text()).replace('data-mode="demo"', 'data-mode="binance"'),
+    });
+  });
+  const range = {
+    source: 'income',
+    startTime: Date.parse('2026-07-14'),
+    endTime: Date.parse('2026-07-15'),
+    page: 2,
+  };
+  const contract = {
+    symbol: 'OLDUSDT',
+    status: 'failed',
+    startTime: range.startTime,
+    endTime: Date.parse('2026-10-14'),
+    pages: 4,
+    records: 2,
+    pending: [range],
+    completed: [],
+    unavailable: [range],
+    missing: ['已下架合约无法读取'],
+    lastSuccessAt: null,
+  };
+  const archive = {
+    source: 'binance',
+    accountId: '12345',
+    status: 'failed',
+    startTime: range.startTime,
+    endTime: contract.endTime,
+    discovery: {
+      ...contract,
+      symbol: '*',
+      status: 'complete',
+      pending: [],
+      missing: ['超过可查期限的发现区间'],
+    },
+    symbols: ['BTCUSDT', 'OLDUSDT'],
+    pendingSymbols: ['OLDUSDT'],
+    completedSymbols: ['BTCUSDT'],
+    missing: ['OLDUSDT：已下架合约无法读取'],
+    scopeMissing: ['无法证明全部历史合约无遗漏'],
+    lastSuccessAt: '2026-10-13T00:00:00Z',
+    contracts: [contract],
+  };
+  let running = false;
+  await page.route('**/api/review/trades', (route) =>
+    route.fulfill({
+      json: {
+        source: 'binance',
+        accountId: '12345',
+        syncStatus: 'synced',
+        trades: [],
+        archive: running ? { ...archive, status: 'running' } : archive,
+      },
+    }),
+  );
+  await page.route('**/api/review/archive', (route) => {
+    expect(route.request().postDataJSON()).toEqual({});
+    running = true;
+    return route.fulfill({ status: 202, json: { ...archive, status: 'running' } });
+  });
+  await page.goto('/review');
+  const section = page.getByRole('region', { name: '全账户历史归档' });
+  await expect(section).toContainText('1 / 2');
+  await expect(section).toContainText('无法证明全部历史合约无遗漏');
+  await expect(section).toContainText('超过可查期限的发现区间');
+  await section.getByText('合约进度与缺失区间').click();
+  await expect(section).toContainText('OLDUSDT');
+  await expect(section).toContainText('已下架合约无法读取');
+  for (const width of [320, 390, 1280]) {
+    await page.setViewportSize({ width, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await page.screenshot({
+      path: test.info().outputPath(`account-archive-${width}.png`),
+      fullPage: true,
+    });
+  }
+  await section.getByRole('button', { name: '立即同步全账户' }).click();
+  await expect(section.getByRole('button', { name: '立即同步全账户' })).toBeDisabled();
+  await expect(page.getByRole('status')).toContainText('全账户归档正在运行');
+});
+
 test('a user opens one archived trade and expands linked orders, fills and PnL', async ({
   page,
 }) => {
