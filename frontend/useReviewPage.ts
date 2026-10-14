@@ -30,8 +30,9 @@ function validateTrade(value: unknown, source: Source, accountId: string): Revie
     typeof data.baseAsset !== 'string' ||
     data.symbol !== `${data.baseAsset}USDT` ||
     (data.side !== null && !['long', 'short'].includes(String(data.side))) ||
-    !['closed', 'incomplete'].includes(String(data.status)) ||
-    data.groupingVersion !== 1 ||
+    !['closed', 'open', 'incomplete'].includes(String(data.status)) ||
+    ![1, 2].includes(Number(data.groupingVersion)) ||
+    typeof data.groupingVersion !== 'number' ||
     (data.openedAt !== null &&
       (typeof data.openedAt !== 'string' || !Number.isFinite(Date.parse(data.openedAt)))) ||
     (data.closedAt !== null &&
@@ -53,9 +54,30 @@ function validateTrade(value: unknown, source: Source, accountId: string): Revie
         ['realizedPnl', 'commission', 'fundingNet', 'netPnl'].some(
           (field) => data[field] === null,
         ))) ||
-    (data.status === 'incomplete' && data.netPnl !== null)
+    (data.status !== 'closed' && data.netPnl !== null) ||
+    (data.status === 'open' && (!data.openedAt || data.closedAt !== null || data.side === null))
   )
     throw new Error('复盘完整性与净盈亏状态不一致。');
+  if (data.groupingVersion === 2) {
+    if (
+      typeof data.observedAt !== 'string' ||
+      !Number.isFinite(Date.parse(data.observedAt)) ||
+      (typeof data.openedAt === 'string' &&
+        Date.parse(data.observedAt) < Date.parse(data.openedAt)) ||
+      (typeof data.closedAt === 'string' && Date.parse(data.observedAt) < Date.parse(data.closedAt))
+    )
+      throw new Error('归并查询时点无效。');
+    amount(data.unrealizedPnl);
+    if (
+      (data.unrealizedPnl === null && data.unrealizedAt !== null) ||
+      (data.unrealizedPnl !== null &&
+        (data.closedAt !== null ||
+          typeof data.unrealizedAt !== 'string' ||
+          !Number.isFinite(Date.parse(data.unrealizedAt)) ||
+          Date.parse(data.unrealizedAt) < Date.parse(data.observedAt)))
+    )
+      throw new Error('浮动盈亏查询时点无效。');
+  }
   return data as ReviewSummary;
 }
 function validateDetail(value: unknown, source: Source, accountId: string): ReviewTrade {
@@ -81,9 +103,19 @@ function validateDetail(value: unknown, source: Source, accountId: string): Revi
         amount(record.quantity);
         if (record.quantity === null) throw new Error('证据数量缺失。');
       }
+      if (kind === 'orders' && record.algoId !== undefined && typeof record.algoId !== 'string')
+        throw new Error('条件订单关联无效。');
       if (kind === 'orders' && record.type !== null && typeof record.type !== 'string')
         throw new Error('订单类型无效。');
       if (kind === 'fills') {
+        if (
+          !['BOTH', 'LONG', 'SHORT'].includes(String(record.positionSide)) ||
+          (record.allocation !== undefined &&
+            !['open', 'close'].includes(String(record.allocation))) ||
+          (record.event !== undefined &&
+            !['entry', 'add', 'reduce', 'exit'].includes(String(record.event)))
+        )
+          throw new Error('成交归并信息无效。');
         if (typeof record.orderId !== 'string') throw new Error('成交关联无效。');
         amount(record.price);
         if (record.price === null) throw new Error('成交价格缺失。');
@@ -93,6 +125,11 @@ function validateDetail(value: unknown, source: Source, accountId: string): Revi
           throw new Error('手续费资产无效。');
       }
       if (kind === 'funding') {
+        if (
+          record.attribution !== undefined &&
+          !['confirmed', 'ambiguous'].includes(String(record.attribution))
+        )
+          throw new Error('资金费归属状态无效。');
         amount(record.amount);
         if (record.asset !== null && typeof record.asset !== 'string')
           throw new Error('资金费资产无效。');

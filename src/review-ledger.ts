@@ -6,14 +6,16 @@ import { formatDecimal, parseDecimal } from '../public/draft.js';
 export type ReviewIdentity = { source: 'demo' | 'binance'; accountId: string };
 export type ReviewOrder = {
   id: string; symbol: string; side: 'BUY' | 'SELL'; type: string | null;
-  quantity: string; time: string;
+  quantity: string; time: string; algoId?: string;
 };
 export type ReviewFill = {
   id: string; orderId: string; symbol: string; side: 'BUY' | 'SELL';
   positionSide: 'BOTH' | 'LONG' | 'SHORT'; quantity: string; price: string; time: string;
   realizedPnl: string | null; commission: string | null; commissionAsset: string | null;
+  allocation?: 'close' | 'open';
+  event?: 'entry' | 'add' | 'reduce' | 'exit';
 };
-export type ReviewFunding = { id: string; symbol: string; time: string; amount: string | null; asset: string | null };
+export type ReviewFunding = { id: string; symbol: string; time: string; amount: string | null; asset: string | null; attribution?: 'confirmed' | 'ambiguous' };
 export type TradeEvidence = {
   symbol: string; baseAsset: string; startPosition: string | null; endPosition: string | null;
   fillsComplete: boolean; fundingComplete: boolean;
@@ -22,9 +24,10 @@ export type TradeEvidence = {
 };
 export type ReviewTrade = ReviewIdentity & {
   id: string; groupingVersion: number; symbol: string; baseAsset: string;
-  side: 'long' | 'short' | null; status: 'closed' | 'incomplete'; openedAt: string | null; closedAt: string | null;
+  side: 'long' | 'short' | null; status: 'closed' | 'open' | 'incomplete'; openedAt: string | null; closedAt: string | null;
   realizedPnl: string | null; commission: string | null; fundingNet: string | null;
   netPnl: string | null; missing: string[]; evidence: TradeEvidence;
+  observedAt?: string; unrealizedPnl?: string | null; unrealizedAt?: string | null;
   exitReason?: 'LIQUIDATION' | 'ADL' | 'unknown';
 };
 export type ReviewSummary = Omit<ReviewTrade, 'evidence'>;
