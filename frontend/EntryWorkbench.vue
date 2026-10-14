@@ -37,7 +37,9 @@ function scrollKeyReleasesNavigation(event: KeyboardEvent) {
 }
 
 function syncModuleCurrent(modules: HTMLElement[], links: Element[]) {
-  const offset = window.innerWidth <= 960 && window.innerHeight > 480 ? 140 : 40;
+  const navigation = document.querySelector('.module-nav');
+  const sticky = navigation && getComputedStyle(navigation).position === 'sticky';
+  const offset = (sticky ? navigation.getBoundingClientRect().bottom : 0) + 24;
   const root = document.documentElement;
   const atBottom =
     root.scrollHeight > window.innerHeight + 1 &&
@@ -160,33 +162,21 @@ onUnmounted(() => cleanup());
 </script>
 
 <template>
-  <a class="skip-link" href="#draft-form">跳到本次计划</a>
-  <div class="workspace">
-    <nav class="module-nav" aria-label="工作台模块">
-      <a class="module-nav__brand" href="#account-module"
-        >开仓前<span class="module-nav__caption">ENTRY GUIDANCE</span></a
-      >
+  <div class="entry-workbench">
+    <nav class="module-nav" aria-label="开仓卡章节">
       <div class="module-nav__links">
         <a class="module-nav__link" href="#plan-module">本次计划</a>
         <a class="module-nav__link" href="#execution-module">开仓卡</a>
         <a class="module-nav__link" href="#review-module">成交核验</a>
-        <a class="module-nav__link" href="#account-module">账户快照</a>
+        <a class="module-nav__link" href="#account-module">账户摘要</a>
         <a class="module-nav__link" href="#templates-module">止损模板</a>
         <a class="module-nav__link" href="#preview-module">试算结果</a>
       </div>
-      <p class="module-nav__note">只读接入<br />交易由你在 Binance 执行</p>
     </nav>
-    <main class="workspace__main">
-      <header class="workspace__header">
-        <p class="workspace__context">个人工作台 / USDT 永续</p>
-        <a class="button button--text button--link" href="/review">交易复盘</a>
-        <form action="/logout" method="post">
-          <button class="button button--text">退出登录</button>
-        </form>
-      </header>
+    <div class="entry-workbench__content">
       <div class="heading workspace__heading">
         <div>
-          <h1 class="page-title">开仓与止损</h1>
+          <h1 class="page-title">开仓卡</h1>
           <p class="workspace__intro">明确本单风险，再执行交易。</p>
         </div>
         <span class="tag">只读 · 手动执行</span>
@@ -507,6 +497,6 @@ onUnmounted(() => cleanup());
         </p>
       </footer>
       <noscript>请启用 JavaScript 以读取账户状态。</noscript>
-    </main>
+    </div>
   </div>
 </template>

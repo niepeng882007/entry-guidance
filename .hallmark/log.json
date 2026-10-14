@@ -1,5 +1,38 @@
 [
   {
+    "date": "2026-10-14",
+    "scope": "app",
+    "macrostructure": "Workbench",
+    "theme": "monochrome (existing system)",
+    "nav": "N3 Side-rail + native mobile drawer",
+    "footer": "Ft2 Inline-rule",
+    "enrichment": "none",
+    "brief": "功能入口首页与三个独立功能页共用侧栏；开仓章节导航移至内容顶部",
+    "theme_axes": "light / system-sans / neutral",
+    "project_overrides": [
+      "single stylesheet; no tokens.css",
+      "preserve local system font stack",
+      "preserve feature interiors and requested sidebar structure"
+    ],
+    "validation": {
+      "nodeTests": 270,
+      "browserTests": 150,
+      "viewports": [
+        320,
+        375,
+        390,
+        414,
+        768,
+        960,
+        961,
+        1280
+      ],
+      "shortViewport": "320x330",
+      "physicalPhone": false,
+      "realAccount": false
+    }
+  },
+  {
     "date": "2026-09-22",
     "macrostructure": "Workbench",
     "theme": "monochrome (user selected)",

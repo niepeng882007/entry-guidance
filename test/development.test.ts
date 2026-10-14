@@ -21,7 +21,7 @@ test('development serves Vue through the authenticated origin and denies backend
   assert.match(await page.text(), /\/@vite\/client/);
   const module = await fetch(`${origin}/main.ts`, { headers: { Cookie } });
   assert.equal(module.status, 200);
-  assert.match(await module.text(), /EntryWorkbench.vue/);
+  assert.match(await module.text(), /AppShell.vue/);
   const source = await fetch(`${origin}/@fs${new URL('../src/server.ts', import.meta.url).pathname}`, { headers: { Cookie } });
   assert.equal(source.status, 403);
   const crossOrigin = await fetch(`${origin}/api/plan`, { method: 'POST', headers: { Cookie, Origin: 'http://localhost:9999', 'Content-Type': 'application/json' }, body: '{}' });

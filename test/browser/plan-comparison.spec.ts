@@ -7,6 +7,7 @@ async function comparisonFixture(page: Page, two = false) {
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await page.goto('/entry');
   const response = await page.request.post('/api/plan', {
     data: {
       symbol: 'BTCUSDT',
@@ -24,7 +25,7 @@ async function comparisonFixture(page: Page, two = false) {
         ? { stopLevels: 'two', nearStopMode: 'percent', nearStop: '1', nearPercent: '50' }
         : {}),
     },
-    headers: { Origin: 'http://127.0.0.1:4179' },
+    headers: { Origin: new URL(page.url()).origin },
   });
   expect(response.ok()).toBe(true);
   const plan: SavedPlan = await response.json();

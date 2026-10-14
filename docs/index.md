@@ -30,7 +30,8 @@
 | [src/market.ts](../src/market.ts) | 汇集账户、行情、费率、合约规则及模拟快照 |
 | [public/draft.js](../public/draft.js) | 前后端共用的十进制计算、模板应用、草稿、正式方案和分层数量计算 |
 | [src/verification.ts](../src/verification.ts) | 建立空仓起点、冻结方案，核对实际成交、成本与止损覆盖；复用共享计算模块 |
-| [frontend/EntryWorkbench.vue](../frontend/EntryWorkbench.vue) | 工作台布局与模块导航；表单、开仓卡、核验面板位于 `frontend/components/` |
+| [frontend/AppShell.vue](../frontend/AppShell.vue)；[frontend/HomePage.vue](../frontend/HomePage.vue) | 首页与共享页面框架、桌面侧栏及手机菜单抽屉；功能页面使用独立受保护 URL |
+| [frontend/EntryWorkbench.vue](../frontend/EntryWorkbench.vue) | 开仓页布局与页内导航；表单、开仓卡、核验面板位于 `frontend/components/` |
 | [frontend/useWorkbench.ts](../frontend/useWorkbench.ts) | 响应式表单与展示状态、请求取消、复制、浏览器存储、返回后刷新；调用共享计算及 HTTP 入口 |
 | [public/select.js](../public/select.js) | 保留原生字段的下拉增强；Vue 包装组件负责同步与清理监听 |
 | [vite.config.ts](../vite.config.ts) | 前端开发编译与生产构建；Node 服务发布构建资源 |

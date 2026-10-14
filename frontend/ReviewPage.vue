@@ -73,16 +73,9 @@ async function show(id: string) {
 </script>
 
 <template>
-  <main class="page review-page">
-    <nav class="review-page__nav" aria-label="复盘页面">
-      <a class="button button--text button--link" href="/">返回工作台</a>
-      <a class="button button--text button--link" href="/account">账户快照</a>
-      <form action="/logout" method="post">
-        <button class="button button--text" type="submit">退出登录</button>
-      </form>
-    </nav>
+  <div class="review-page">
     <header class="page-header">
-      <h1 class="page-title">交易复盘</h1>
+      <h1 class="page-title">交易记录分析</h1>
       <span class="tag">长期归档 · 交易只读</span>
     </header>
     <p class="source">{{ source }}</p>
@@ -459,5 +452,5 @@ async function show(id: string) {
     <p class="footnote">
       一笔交易可包含多张订单和多条成交。归档独立于当前本单；退出登录、清除本单和服务重启保留历史。
     </p>
-  </main>
+  </div>
 </template>

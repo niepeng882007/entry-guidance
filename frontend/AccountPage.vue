@@ -49,14 +49,7 @@ function time(value: string | undefined) {
 </script>
 
 <template>
-  <main class="page account-page">
-    <nav class="account-page__nav" aria-label="账户页面">
-      <a class="button button--text button--link" href="/">返回工作台</a>
-      <a class="button button--text button--link" href="/review">交易复盘</a>
-      <form action="/logout" method="post">
-        <button class="button button--text" type="submit">退出登录</button>
-      </form>
-    </nav>
+  <div class="account-page">
     <header class="page-header">
       <h1 class="page-title">账户快照</h1>
       <span class="tag">USDT · 只读</span>
@@ -156,5 +149,5 @@ function time(value: string | undefined) {
       :conditional-attempted-at="attempts.conditionalOrders"
     />
     <p class="footnote">账户快照不代表后续状态，也不表示止损核验通过。交易由你在 Binance 执行。</p>
-  </main>
+  </div>
 </template>
