@@ -89,7 +89,6 @@ test('review fits phone screens, exposes evidence and keeps keyboard focus under
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true,
     );
-    await page.screenshot({ path: test.info().outputPath(`review-${width}.png`), fullPage: true });
   }
   const refresh = page.getByRole('button', { name: '重新读取' });
   await refresh.focus();
@@ -102,12 +101,19 @@ test('review fits phone screens, exposes evidence and keeps keyboard focus under
   await expect(page.locator('pre')).toContainText('cycle-22-entry');
   await page.setViewportSize({ width: 320, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(errors).toEqual([]);
+  expect(await page.evaluate(() => ({ ...localStorage, ...sessionStorage }))).toEqual({});
+  // WebKit screenshots inject Playwright's own style; verify application CSP before capture.
   await page.screenshot({
     path: test.info().outputPath('review-detail-phone.png'),
     fullPage: true,
   });
-  expect(errors).toEqual([]);
-  expect(await page.evaluate(() => ({ ...localStorage, ...sessionStorage }))).toEqual({});
+  await page.getByRole('link', { name: '返回完整交易', exact: true }).click();
+  await expect(page.locator('tbody tr')).toHaveCount(20);
+  for (const width of [320, 390, 1280]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.screenshot({ path: test.info().outputPath(`review-${width}.png`), fullPage: true });
+  }
 });
 
 test('late responses and a silent cookie identity switch cannot reveal the previous ledger', async ({
