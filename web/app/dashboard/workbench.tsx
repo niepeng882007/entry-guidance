@@ -37,7 +37,7 @@ export default function Workbench({ connections = false }: { connections?: boole
       const response = await businessRequest('profile', controller.signal);
       const next: Profile = await response.json();
       if (generation.current !== version || signedOut.current) return;
-      const connectionResponse = await businessRequest('binding', controller.signal);
+      const connectionResponse = await businessRequest('binding', controller.signal, next.id);
       const connection: { binding: BindingMetadata | null } = await connectionResponse.json();
       if (generation.current === version && !signedOut.current) {
         setProfile(next);
@@ -89,7 +89,7 @@ export default function Workbench({ connections = false }: { connections?: boole
     setBusy(true);
     setError('');
     try {
-      await businessRequest('binding', controller.signal, value);
+      await businessRequest('binding', controller.signal, profile.id, value);
       if (generation.current === version && !signedOut.current) await load();
     } catch (cause) {
       if (generation.current === version && !controller.signal.aborted) {

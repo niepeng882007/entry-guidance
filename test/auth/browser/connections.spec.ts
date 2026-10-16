@@ -82,3 +82,40 @@ test('cross-tab logout hides connection details and an already-received late res
     release();
   }
 });
+
+test('a cookie identity change without a broadcast cannot submit the previous user credentials', async ({
+  page,
+  context,
+}) => {
+  await login(page);
+  await page.goto('/dashboard/connections');
+  await expect(page.getByRole('button', { name: '验证并保存' })).toBeEnabled();
+  await page.getByLabel('API Key', { exact: true }).fill('synthetic-key-alice');
+  await page.getByLabel('API Secret', { exact: true }).fill('synthetic-secret-alice');
+  let switched = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const response = await context.request.post('/api/auth/sign-in/email', {
+      headers: { Origin: 'http://127.0.0.1:4180' },
+      data: { email: users[1]!.email, password: users[1]!.password },
+    });
+    if (response.status() !== 429) {
+      expect(response.status()).toBe(200);
+      switched = true;
+      break;
+    }
+    const seconds = Number(response.headers()['retry-after']);
+    expect(seconds).toBeGreaterThan(0);
+    expect(seconds).toBeLessThanOrEqual(10);
+    await new Promise((resolve) => setTimeout(resolve, (seconds + 0.1) * 1000));
+  }
+  expect(switched).toBe(true);
+  const submitted: string[] = [];
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && request.url().endsWith('/binding'))
+      submitted.push(request.url());
+  });
+  await page.getByRole('button', { name: '验证并保存' }).click();
+  await expect(page).toHaveURL('/login');
+  expect(submitted).toEqual([]);
+  await expect(page.getByText(users[0]!.email, { exact: true })).toHaveCount(0);
+});

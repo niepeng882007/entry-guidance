@@ -5,15 +5,24 @@ export class BusinessRequestError extends Error {
     this.status = status;
   }
 }
+interface CredentialSubmission {
+  apiKey: string;
+  apiSecret: string;
+  requestId: string;
+}
+export function businessRequest(resource: 'profile', signal: AbortSignal): Promise<Response>;
+export function businessRequest(
+  resource: 'binding',
+  signal: AbortSignal,
+  expectedUserId: string,
+  submission?: CredentialSubmission,
+): Promise<Response>;
 export async function businessRequest(
   resource: 'profile' | 'binding',
   signal: AbortSignal,
-  submission?: {
-    apiKey: string;
-    apiSecret: string;
-    requestId: string;
-  },
-) {
+  expectedUserId?: string,
+  submission?: CredentialSubmission,
+): Promise<Response> {
   const grant = await fetch('/api/delegation', {
     method: 'POST',
     signal,
@@ -29,6 +38,8 @@ export async function businessRequest(
         : '认证服务暂时不可用，请稍后重试。',
     );
   const delegation: { token: string; userId: string; businessOrigin: string } = await grant.json();
+  if (resource === 'binding' && delegation.userId !== expectedUserId)
+    throw new BusinessRequestError(401, '登录身份已变化，请重新登录。');
   const response = await fetch(
     `${delegation.businessOrigin}/v1/users/${encodeURIComponent(delegation.userId)}/${resource}`,
     {
