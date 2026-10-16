@@ -2,6 +2,8 @@
 
 本文是开仓与止损的现行产品约束。核心流程已有实现；具体计算、读取和支持限制见[实现说明](entry-implementation.md)，实际验证状态见[项目现状](status.md)。早期用户故事与实施提案保留在[归档规格](archive/entry-issue-spec.md)。
 
+2026-10-16 已确认[多用户产品重构目标](adr/0006-multi-user-product-migration.md)：公开官网、注册及各自绑定 Binance 账户，取代本文中个人使用、不做注册及部署平台未定的目标限制；凭据输入与托管改按 [ADR 0007](adr/0007-account-binding-and-credentials.md)，通过受保护表单提交而非仅由部署者配置。当前代码仍是本地单用户实现。活跃绑定的开仓风险、只读执行边界及其余行为继续沿用本文；解绑只读与注销规则见[目标架构](architecture-nextjs-vercel-neon.md#105-解绑换账户与注销)，具体执行见待最终确认的[重构计划](refactor-implementation-plan.md)。
+
 ## 使命与核心原则
 
 - 帮助使用者养成开仓必带止损的习惯，减少从亏损预算、止损设置到仓位参数的计算和操作负担。

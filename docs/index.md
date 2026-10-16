@@ -4,6 +4,12 @@
 
 | 任务 | 权威来源 |
 | --- | --- |
+| 阅读多用户重构的用户故事与行为验收规格 | [已发布规格](../.scratch/multi-user-refactor/spec.md)，状态 `ready-for-agent`；测试边界已确认，正文仅在本地 tracker 维护 |
+| 领取多用户重构实施任务 | [30 票任务总览](../.scratch/multi-user-refactor/README.md)；按各票直接依赖及执行授权领取，一票一个文件 |
+| 使用 to-spec、to-tickets、triage 等工程技能 | [本地 issue tracker](agents/issue-tracker.md)、[默认 triage 状态](agents/triage-labels.md)、[领域文档读取规则](agents/domain.md) |
+| 实施多用户与云端重构 | [重构实施计划](refactor-implementation-plan.md)（待最终确认）；[已确认目标架构](architecture-nextjs-vercel-neon.md#1-需求假设与边界)；[ADR 0006：多用户产品与等价迁移](adr/0006-multi-user-product-migration.md)。设计确认不等于已实现或已验收 |
+| 设计产品用户、Binance 绑定或凭据管理 | [ADR 0007：单活跃账户与加密托管](adr/0007-account-binding-and-credentials.md)；生命周期与灾备见[目标架构](architecture-nextjs-vercel-neon.md#104-托管凭据边界) |
+| 修改云端业务运行、数据传输或切换边界 | [ADR 0008：常驻业务服务](adr/0008-persistent-business-service.md)；[实施计划](refactor-implementation-plan.md#2-运行分工) |
 | 确认开仓产品范围、输入、风险及验收要求 | [产品决策](product-spec.md) |
 | 修改开仓计算、读取边界、本单恢复 | [开仓计算与核验实现](entry-implementation.md) |
 | 修改独立账户快照页、资产与刷新行为 | [账户快照页规格](account-snapshot-spec.md)（页面仅展示资产，资金明细默认展开；[本地任务 01–05](archive/account-snapshot/issues/)保留历史任务记录） |
