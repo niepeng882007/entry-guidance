@@ -250,8 +250,8 @@ pnpm exec playwright test -c playwright.auth.config.ts test/auth/browser/model-k
 
 1. 使用 `.nvmrc` 指定的 Node 24.22.0，启动 Docker，在仓库运行 `pnpm build`，再运行 `pnpm demo:auth`。若已有演示，先在原终端 Ctrl-C 关闭。打开 <http://127.0.0.1:3100/login>，用 `alice@example.test` / `synthetic-login-only-01` 登录。
 2. 不绑定 Binance，进入“模型设置”。确认固定模型、费用说明与“尚未设置模型 Key”。提交合成值 `synthetic-model-alice`，应显示已保存和北京时间验证时点，输入框立即清空；刷新后状态保留，Key 不回显。
-3. 提交 `synthetic-model-invalid`，应提示验证失败、原有设置保留；再提交 `synthetic-model-alice-rotated`，应成功更新。选择“撤销模型 Key”，应显示已撤销，刷新仍保持；再次保存可重新启用。整个演示只使用合成 transport，勿输入真实 Key。
-4. 浏览器 Network 中模型业务请求只能返回设置元数据，不含 Key 或密文；Application 中 localStorage/sessionStorage 不含 Key。输入一个尚未提交的 Key，切换标签再返回或离开页面后返回，输入框应为空。
+3. 提交 `synthetic-model-invalid`，应提示验证失败、原有设置保留；再提交 `synthetic-model-alice-rotated`，应成功更新。选择“撤销模型 Key”，应显示已撤销，刷新仍保持；再次保存可重新启用。成功替换、撤销及重新保存时，Network 响应的 `credential.version` 应递增。整个演示只使用合成 transport，勿输入真实 Key。
+4. 浏览器 Network 中模型业务响应只返回设置元数据，不含 Key 或密文；Application 中 localStorage/sessionStorage 不含 Key。输入一个尚未提交的 Key，切换标签再返回或离开页面后返回，输入框应为空。
 5. 在独立无痕窗口用 `bob@example.test` / `synthetic-login-only-01` 登录，设置 `synthetic-model-bob`。甲乙设置各自独立；同浏览器两个标签中任意一个退出，另一个须清除私有状态，返回不能恢复旧资料。
 6. 撤销后返回工作台、进入安全设置或已绑定账户的资产页，仍可正常使用。登录超过 15 分钟后修改 Key 应要求重新登录。旧报告的多用户入口及任务续跑仍待后续票据，不能以本页面代替其验收。
 7. 用 320px、390px、1280px 视口检查溢出，用 Tab/Enter 提交，确认按钮忙碌状态。Ctrl-C 停止演示会清理本次临时 PostgreSQL；下次启动恢复为未配置状态。

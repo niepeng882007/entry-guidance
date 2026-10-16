@@ -25,27 +25,25 @@ export default function ModelSettings({
   const [error, setError] = useState('');
   const form = useRef<HTMLFormElement>(null);
   const pending = useRef<AbortController | null>(null);
-  const generation = useRef(0);
   const request = useCallback(
     async (submission?: ModelKeySubmission) => {
       pending.current?.abort();
       const controller = new AbortController();
       pending.current = controller;
-      const version = ++generation.current;
       setBusy(true);
       setError('');
       try {
         const response = await businessRequest('model', controller.signal, userId, submission);
         const result: { credential: ModelMetadata | null } = await response.json();
-        if (version !== generation.current || controller.signal.aborted) return;
+        if (controller.signal.aborted) return;
         setCredential(result.credential);
         setReady(true);
       } catch (cause) {
-        if (version !== generation.current || controller.signal.aborted) return;
+        if (controller.signal.aborted) return;
         if (cause instanceof BusinessRequestError && cause.status === 401) onIdentityInvalid();
         else setError(cause instanceof Error ? cause.message : '模型设置暂时不可用，请重试。');
       } finally {
-        if (version === generation.current) setBusy(false);
+        if (!controller.signal.aborted) setBusy(false);
       }
     },
     [userId, onIdentityInvalid],
@@ -53,7 +51,6 @@ export default function ModelSettings({
   useEffect(() => {
     void request();
     return () => {
-      generation.current++;
       pending.current?.abort();
     };
   }, [request]);
