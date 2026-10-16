@@ -200,7 +200,7 @@ export function enhanceSelects(root = document, signal) {
       }
       trigger.setAttribute('aria-required', String(select.required));
       if (menu.hidden) return;
-      if (!searchable || select.disabled) close();
+      if (select.disabled) close();
       else {
         paint('preserve');
         position();

@@ -10,6 +10,8 @@
 
 修改后在 macOS、Node 24.22.0、pnpm 11.7.0、临时 PostgreSQL 17 及合成账户环境完整运行 `pnpm check`，退出 0：类型检查、零警告 lint、全仓格式检查、双构建、Node 369 项（含工具链集成 5 项）、身份 Node 9 项、旧浏览器 180 项、新身份浏览器 6 项全部通过，共 378 项 Node 和 186 项浏览器。日志保留于本机 `/tmp/entry-standards-check.log`。本记录补齐后仅需复验文档格式与 `git diff --check`，不扩大为真实账户或实体手机验收。
 
+首次 [Linux CI](https://github.com/niepeng882007/entry-guidance/actions/runs/38852536597) 的类型、lint、格式、构建及 369 项 Node 测试通过，旧浏览器 172/180 通过。失败暴露了 4 项依赖 macOS `/private/tmp` 的截图写入，以及 WebKit 初始化、滚动条和键盘交互差异。后续将截图迁入 Playwright 输出目录，明确测试夹具的初始页面与经典滚动条条件，并补充失败证据上传。下拉控件的同步更新会关闭展开菜单，已用现有浏览器夹具稳定复现并先观察回归失败；最小修复保留未禁用控件的当前键盘选项，禁用仍关闭。修复后类型、零警告 lint、构建及 14 项 Chromium/WebKit 定向回归通过，未放宽原断言；因另一个 worktree 使用 4179，定向回归使用临时配置和独立端口 43179。
+
 公开仓库为 [entry-guidance](https://github.com/niepeng882007/entry-guidance)。新增的 [Code quality 工作流](https://github.com/niepeng882007/entry-guidance/actions/workflows/check.yml) 对 PR 与 `main` 推送运行同一入口；每次远端运行结果以 GitHub Actions 为准，本地通过不代替远端结果。规则与命令说明见[开发与验证](development.md#代码规范与提交)。
 
 ## 多用户兼容入口：票据 01

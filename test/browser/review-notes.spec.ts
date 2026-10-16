@@ -22,7 +22,9 @@ async function startNotesPage(page: Page) {
   await page.goto(`${base}/`);
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto(`${base}/review?view=cycles`);
+  await expect(page.getByRole('button', { name: '查看 BTCUSDT 交易详情' })).toBeVisible();
   return {
     base,
     path: join(directory, 'demo.sqlite'),

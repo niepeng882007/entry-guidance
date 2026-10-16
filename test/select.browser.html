@@ -91,6 +91,13 @@
         trigger.click();
         assert(!menu.hidden && menu.children.length === 4, '展开时排除隐藏选项');
         key('ArrowDown');
+        sync();
+        assert(
+          !menu.hidden &&
+            document.getElementById(trigger.getAttribute('aria-activedescendant')).textContent ===
+              'BTCUSDT',
+          '同步组件更新保留展开状态与键盘选项',
+        );
         key('ArrowDown');
         assert(
           document.getElementById(trigger.getAttribute('aria-activedescendant')).textContent ===

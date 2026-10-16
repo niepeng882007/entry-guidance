@@ -24,7 +24,9 @@ async function startFiltersPage(page: Page) {
   await page.goto(`${base}/`);
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto(`${base}/review?view=cycles`);
+  await expect(page.locator('.review-table tbody tr[data-row-key]')).toHaveCount(20);
   return {
     base,
     seeded,
