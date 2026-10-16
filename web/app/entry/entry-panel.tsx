@@ -46,10 +46,12 @@ export default function EntryPanel(props: EntryProps) {
     verification,
     lastQuery,
     storageError,
+    recoveryError,
     restoring,
     checking,
     verify,
     clearLocal,
+    retryRecovery,
     inputMatches,
   } = useEntryPlan(props);
   return (
@@ -69,6 +71,16 @@ export default function EntryPanel(props: EntryProps) {
       </section>
       <section className="plan-module" aria-label="开仓计划">
         {storageError && <p role="alert">{storageError}</p>}
+        {recoveryError && <p role="alert">{recoveryError}</p>}
+        {(storageError || recoveryError) && !saved && (
+          <button
+            className="button button--secondary"
+            disabled={restoring || busy || checking}
+            onClick={retryRecovery}
+          >
+            重试恢复本单
+          </button>
+        )}
         {restoring && <p role="status">正在确认本浏览器的原方案…</p>}
         <form
           className="draft-form"

@@ -254,6 +254,7 @@ test('filled plans recover only after a fresh check and revoke approval on edits
       true,
     );
   }
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: test.info().outputPath('entry-verification.png'), fullPage: true });
   const records = await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }));
   expect(records).not.toMatch(
@@ -320,4 +321,86 @@ test('logout clears all visible trade state and another user cannot restore this
   await page.goto('/entry');
   await expect(page.getByText('固定预算：20 USDT')).toBeVisible();
   await expect(page.getByRole('region', { name: '成交与止损核验' })).toContainText('尚未成交');
+});
+
+test('failed recovery preserves the plan ID through edits and reconnect retries interrupted recovery', async ({
+  page,
+}) => {
+  await login(page);
+  await connect(page);
+  await page.goto('/entry');
+  await fillPlan(page);
+  await page.getByRole('button', { name: '刷新并生成开仓卡' }).click();
+  await expect(page.getByText('固定预算：20 USDT')).toBeVisible();
+  const before = await page.evaluate(() => {
+    const key = Object.keys(localStorage).find((key) => key.startsWith('entry-current:'))!;
+    return { key, record: JSON.parse(localStorage.getItem(key)!) as { planId: string } };
+  });
+  await page.route('**/entry/plans/*', (route) =>
+    route.fulfill({
+      status: 503,
+      json: { error: '合成恢复失败' },
+      headers: { 'Access-Control-Allow-Origin': 'http://127.0.0.1:4180' },
+    }),
+  );
+  await page.reload();
+  await expect(page.getByText('本单恢复失败：合成恢复失败')).toBeVisible();
+  await page.getByLabel('亏损预算', { exact: true }).fill('21');
+  expect(
+    await page.evaluate((key) => JSON.parse(localStorage.getItem(key)!).planId, before.key),
+  ).toBe(before.record.planId);
+  let finishGeneration!: () => void;
+  const generationGate = new Promise<void>((resolve) => {
+    finishGeneration = resolve;
+  });
+  await page.route('**/entry/plans', async (route) => {
+    await generationGate;
+    await route.fulfill({
+      status: 503,
+      json: { error: '合成生成失败' },
+      headers: { 'Access-Control-Allow-Origin': 'http://127.0.0.1:4180' },
+    });
+  });
+  try {
+    await page.getByRole('button', { name: '刷新并生成开仓卡' }).click();
+    await expect(page.getByRole('button', { name: '重试恢复本单' })).toBeDisabled();
+    finishGeneration();
+    await expect(page.getByRole('button', { name: '重试恢复本单' })).toBeEnabled();
+  } finally {
+    finishGeneration();
+  }
+  await page.unroute('**/entry/plans');
+  await page.unroute('**/entry/plans/*');
+  await page.getByRole('button', { name: '重试恢复本单' }).click();
+  await expect(page.getByText('固定预算：20 USDT')).toBeVisible();
+  await expect(page.getByLabel('亏损预算', { exact: true })).toHaveValue('21');
+  let entered!: () => void, release!: () => void;
+  const seen = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let held = false;
+  await page.route('**/entry/plans/*', async (route) => {
+    if (held) return route.continue();
+    held = true;
+    const response = await route.fetch();
+    entered();
+    await gate;
+    await route.fulfill({ response }).catch(() => {});
+  });
+  try {
+    await page.reload();
+    await seen;
+    await page.evaluate(() => window.dispatchEvent(new Event('offline')));
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    release();
+    await expect(page.getByText('固定预算：20 USDT')).toBeVisible();
+    await expect(page.getByLabel('亏损预算', { exact: true })).toHaveValue('21');
+    await page.getByRole('button', { name: '恢复原方案输入并核验' }).click();
+    await expect(page.getByRole('region', { name: '成交与止损核验' })).toContainText('尚未成交');
+  } finally {
+    release();
+  }
 });

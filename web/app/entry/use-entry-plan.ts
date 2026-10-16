@@ -58,9 +58,13 @@ export function useEntryPlan({
   const [verification, setVerification] = useState<Verification | null>(null);
   const [lastQuery, setLastQuery] = useState('');
   const [storageError, setStorageError] = useState('');
+  const [recoveryError, setRecoveryError] = useState('');
   const [restoring, setRestoring] = useState(true);
   const [checking, setChecking] = useState(false);
   const [automatic, setAutomatic] = useState(0);
+  const [recoveryRetry, setRecoveryRetry] = useState(0);
+  const pendingPlanId = useRef<string | null>(null);
+  const recovering = useRef<AbortController | null>(null);
   const checkedTime = verification?.entryCheck?.queriedAt ?? verification?.queriedAt;
   const currentAt = checkedTime
     ? Date.parse(checkedTime)
@@ -96,10 +100,11 @@ export function useEntryPlan({
   };
   function remember(nextInput: EntryInput, plan: SavedEntryPlan | null, queriedAt = lastQuery) {
     if (storageBlocked.current) return;
+    if (plan) pendingPlanId.current = plan.plan.id;
     try {
       localStorage.setItem(
         storageKey,
-        JSON.stringify({ input: nextInput, planId: plan?.plan.id ?? null, queriedAt }),
+        JSON.stringify({ input: nextInput, planId: pendingPlanId.current, queriedAt }),
       );
       setStorageError('');
     } catch {
@@ -124,10 +129,20 @@ export function useEntryPlan({
   };
   useEffect(() => {
     const controller = new AbortController();
+    recovering.current = controller;
     const version = ++sequence.current;
     async function restore() {
+      setRestoring(true);
+      setStorageError('');
+      setRecoveryError('');
       try {
-        const raw = localStorage.getItem(storageKey);
+        let raw: string | null;
+        try {
+          raw = localStorage.getItem(storageKey);
+        } catch {
+          storageBlocked.current = true;
+          throw new Error('本浏览器记录无法读取，未覆盖原记录。');
+        }
         if (!raw) return;
         let local: { input: EntryInput; planId: string | null; queriedAt: string };
         try {
@@ -154,6 +169,8 @@ export function useEntryPlan({
           setStorageError('本浏览器记录损坏，未覆盖原记录。可明确清除本单记录后重新开始。');
           return;
         }
+        storageBlocked.current = false;
+        pendingPlanId.current = local.planId;
         setInput(local.input);
         setLastQuery(local.queriedAt);
         if (!local.planId) return;
@@ -182,7 +199,7 @@ export function useEntryPlan({
         if (controller.signal.aborted) return;
         if (cause instanceof BusinessRequestError && cause.status === 401) onIdentityInvalid();
         else
-          setStorageError(
+          setRecoveryError(
             cause instanceof Error ? `本单恢复失败：${cause.message}` : '本单恢复失败。',
           );
       } finally {
@@ -191,7 +208,7 @@ export function useEntryPlan({
     }
     void restore();
     return () => controller.abort();
-  }, [storageKey, userId, binding, simulation, onIdentityInvalid]);
+  }, [storageKey, userId, binding, simulation, onIdentityInvalid, recoveryRetry]);
   useEffect(() => {
     const controller = new AbortController();
     void businessRequest(
@@ -296,8 +313,10 @@ export function useEntryPlan({
     const offline = () => {
       sequence.current++;
       generating.current?.abort();
+      recovering.current?.abort();
       generating.current = null;
       setBusy(false);
+      setRestoring(false);
       setChecking(false);
       setMarket(null);
       setCurrent(false);
@@ -306,7 +325,8 @@ export function useEntryPlan({
     };
     const online = () => {
       setReload((value) => value + 1);
-      setAutomatic((value) => value + 1);
+      if (saved) setAutomatic((value) => value + 1);
+      else setRecoveryRetry((value) => value + 1);
     };
     const timer = setInterval(expire, 1000);
     window.addEventListener('offline', offline);
@@ -316,7 +336,7 @@ export function useEntryPlan({
       window.removeEventListener('offline', offline);
       window.removeEventListener('online', online);
     };
-  }, [currentAt, market]);
+  }, [currentAt, market, saved]);
   useEffect(
     () => () => {
       sequence.current++;
@@ -381,6 +401,7 @@ export function useEntryPlan({
       if (data.plan.source !== (simulation ? 'demo' : 'binance'))
         throw new Error('方案来源不一致。');
       setSaved(data);
+      setRecoveryError('');
       setLastQuery('');
       remember(input, data, '');
       setCurrent(true);
@@ -466,7 +487,9 @@ export function useEntryPlan({
     generating.current?.abort();
     generating.current = null;
     storageBlocked.current = false;
+    pendingPlanId.current = null;
     setStorageError('');
+    setRecoveryError('');
     setSaved(null);
     setInput(initial);
     setLastQuery('');
@@ -516,10 +539,14 @@ export function useEntryPlan({
     verification,
     lastQuery,
     storageError,
+    recoveryError,
     restoring,
     checking,
     verify,
     clearLocal,
+    retryRecovery: () => {
+      if (!generating.current) setRecoveryRetry((value) => value + 1);
+    },
     inputMatches: saved ? matches(input, saved.input) : false,
   };
 }
