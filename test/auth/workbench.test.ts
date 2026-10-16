@@ -187,7 +187,7 @@ void test('origin protection, private caching and dependency failure preserve th
   }
   assert.equal(
     (
-      await fetch(`${runtime.webOrigin}/api/auth/sign-up/email`, {
+      await fetch(`${runtime.webOrigin}/api/auth/request-password-reset`, {
         method: 'POST',
         headers: { Origin: runtime.webOrigin, 'Content-Type': 'application/json' },
         body: '{}',

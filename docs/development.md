@@ -58,7 +58,7 @@ ESLint 以正确性为主：沿用 JS/TypeScript 推荐规则与 Vue essential�
 
 运行目标统一为 `.nvmrc` 的 Node 24.22.0；继续使用 pnpm 11.7.0、单一 package 和锁文件。`pnpm build` 先生成 Prisma 客户端，再构建旧 Vite 和新 Next；构建不提供数据库连接、认证 Secret、委托私钥或用户 Key 解密主密钥。`pnpm typecheck` 同时检查旧入口和 Next，并先生成 Next 路由类型，支持干净检出。
 
-新模块：`web/` 是 Next 页面与认证入口，`src/identity/` 管理 Better Auth、数据库和委托，`src/business-main.ts` 启动独立业务服务。业务服务只提供当前产品用户资料读取，所有旧账户、账本及静态路径均不转发。旧共享密码 Cookie 与新 `workbench` Cookie 相互不认可；旧 SQLite、本单及无归属浏览器存储保持在原入口。Next 认证页和私有页采用完整动态渲染及每请求 nonce CSP，不启用与 nonce 静态壳不兼容的部分预渲染；公开页缓存策略在票据 02 实施。Next 与 Better Auth 遥测显式关闭。
+新模块：`web/` 是 Next 页面与认证入口，`src/identity/` 管理 Better Auth、数据库和委托，`src/business-main.ts` 启动独立业务服务。业务服务只提供当前产品用户资料读取，所有旧账户、账本及静态路径均不转发。旧共享密码 Cookie 与新 `workbench` Cookie 相互不认可；旧 SQLite、本单及无归属浏览器存储保持在原入口。Next 认证页和私有页采用完整动态渲染及每请求 nonce CSP，不启用与 nonce 静态壳不兼容的部分预渲染；票据 02 的公开首页采用静态输出与构建脚本 hash CSP，见下文。Next 与 Better Auth 遥测显式关闭。
 
 Prisma CLI、客户端及 pg adapter 锁定同一 7.10.1 patch；Next 16.4.2、React/React DOM 19.3.1、Better Auth 1.7.10。新增依赖承担已确认的框架、认证及 PostgreSQL 职责，现有 Vue/Vite 及计算模块保留。pnpm 仅放行 Prisma 与其 engines 的必要构建脚本，core-js 继续禁止。Better Auth 的跨运行时声明引用未安装的 `bun:sqlite`，因此 TypeScript 使用 `skipLibCheck` 跳过依赖声明检查；项目源码及 Vue/React 模板继续严格检查。
 
@@ -69,7 +69,7 @@ Prisma CLI、客户端及 pg adapter 锁定同一 7.10.1 patch；Next 16.4.2、R
 3. 运行 `pnpm demo:auth`，进入 <http://127.0.0.1:3100/login>。两个用户为 `alice@example.test`、`bob@example.test`，合成测试口令均为 `synthetic-login-only-01`。这些值只用于临时演示，不能部署到外部环境。
 4. 按 Ctrl-C 停止演示。脚本关闭两个服务并删除本次 PostgreSQL 容器；不挂载宿主机数据目录，不修改原 `.env`、SQLite 或真实数据库。
 
-演示使用生产 Next 构建、3100 网页端口及 3101 业务端口；每次创建随机名称的 `postgres:17` 容器、随机本机数据库端口、新数据库、认证 Secret 及 Ed25519 密钥对。只有 Next 子进程接收委托私钥，业务子进程只接收公钥；两个子进程都不接收原进程的 Binance/模型凭据或解密配置。数据库仅预置合成用户且邮箱已验证，使用 Better Auth 的密码哈希格式，不提供公共注册或运维接口。
+演示使用生产 Next 构建、3100 网页端口及 3101 业务端口；每次创建随机名称的 `postgres:17` 容器、随机本机数据库端口、新数据库、认证 Secret 及 Ed25519 密钥对。只有 Next 子进程接收委托私钥，业务子进程只接收公钥；两个子进程都不接收原进程的 Binance/模型凭据或解密配置。数据库仅预置合成用户且邮箱已验证，使用 Better Auth 的密码哈希格式，注册与邮件验证见下方票据 02；不提供运维接口。
 
 ### 检查与安全边界
 
@@ -92,3 +92,23 @@ Prisma CLI、客户端及 pg adapter 锁定同一 7.10.1 patch；Next 16.4.2、R
 会话采用 7 天滚动有效期、24 小时续期检查；RSC 只读不续期，客户端必经的受保护 Route Handler 转发续期 Set-Cookie。委托有效期 60 秒，绑定原会话、产品用户、授权代次、签发方、接收服务及 `profile:read`。每次业务读取仍从数据库复核会话有效期、用户停用/邮箱验证、当前代次和资源归属。浏览器委托仅驻请求内存并经 Authorization 头发送，跨源只允许精确网页 origin，不开放跨主机 Cookie。登出、跨标签身份变化、页面隐藏/离开均清除可见资料并递增请求代次，迟到响应不能恢复旧内容。依赖不可用返回 503，不伪装成未登录或清除有效 Cookie。
 
 票据 01 的本地验收不代表公开注册、Binance 绑定、云端数据库、真实外部链路、实体手机或部署已完成。
+
+## 公开官网与注册（票据 02）
+
+`/` 在构建期生成真实产品正文、标题、描述、canonical 与 Open Graph；独立客户端导航读取最小登录状态，失败不影响正文。`/login`、`/register`、`/verify-email` 与私有入口保持 noindex/no-store。robots 不阻止认证页抓取，使搜索引擎能读取 noindex；sitemap 仅列公开首页。`APP_ENV=production` 才允许公开页面索引，local/test/staging 均加 X-Robots-Tag；此开关与 NODE_ENV 分离。
+
+| 配置                    | 使用时点        | 要求                                                                                                                                 |
+| ----------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `APP_ENV`               | 构建、Next 运行 | local（缺省）、test、staging、production；真实生产与预览分别显式配置                                                                 |
+| `SITE_ORIGIN`           | 构建            | canonical/sitemap 的固定 origin，经过同等 origin 校验，不读取 Host；local/test 缺省 `http://127.0.0.1:3100`，staging/production 必填 |
+| `AUTH_MAIL_FAKE_ORIGIN` | Next 运行       | 仅 local/test 允许的 loopback fake 收件服务；演示和测试自动提供，不支持真实收件人投递                                                |
+
+`pnpm build:web` 先准备生成目录，再构建 Next，最后从静态首页 HTML 计算精确脚本/样式 SHA-256 hash，写入忽略的 `web/generated/public-security.json`。Proxy 为首页使用这些 hash，不开放任意内联脚本；认证和私有页继续每请求 nonce。生成文件包含在 Next 输出追踪中，缺失或空 hash 时官网故障关闭；须使用完整脚本构建。生产托管打包仍需在票据 28 验收，当前仅验证本地 `next start`。
+
+注册使用 Better Auth 创建邮箱密码身份，但禁止自动发信和自动登录；账号事务提交后，再在当前请求内等待发信，超时 3 秒。不创建邮件补偿队列，失败保留待验证账号，日志仅记 `auth-mail:unavailable`。注册和重发返回相同的通用确认，不返回已有用户资料、不保证投递；用户主动重发恢复。验证链接 1 小时有效，只验证邮箱，之后须手动登录。客户端密码不写入浏览器存储，提交成功清除密码字段。密码恢复与设备会话仍由票据 03 负责。
+
+注册每 IP 每小时 10 次；注册发信和重发共享每邮箱每 15 分钟 3 次。所有认证配额使用同一 PostgreSQL 原子 upsert，429 附标准 Retry-After；数据库失败返回 503。配额键用认证 Secret 做 HMAC，不明文保存邮箱或 IP。Vercel 下按[官方请求头说明](https://vercel.com/docs/headers/request-headers#x-vercel-forwarded-for)只信任平台覆盖的 `x-vercel-forwarded-for`，独立本地进程忽略自报的代理 IP、使用保守共享桶；其他托管入口的可信 IP 转发需上线前验证。限流过期按请求时判断，不依赖清理任务；过期记录的批次维护与其他认证状态清理一并在上线阶段落实。
+
+`pnpm demo:auth` 另启本地 3102 fake 邮件夹具，在 `/messages` 查看仅本次合成环境的验证邮件。夹具只监听 loopback，不属于生产应用路由，不连接真实邮件服务。Ctrl-C 同时关闭收件箱、两个服务及临时 PostgreSQL。
+
+`node --test test/auth/registration.test.ts` 覆盖两个新注册用户、验证前拒绝、字段保护、失败/超时重发、重复注册、过期/篡改链接、来源、数据库故障关闭、两个 Next 进程共享并发限流及公开原始 HTML。`pnpm exec playwright test -c playwright.auth.config.ts test/auth/browser/registration.spec.ts` 使用生产 CSP，验证完整注册与重发、错误/冷却、键盘及 320/375/390/414/768/1280px。运行前先 `pnpm build`；均仅使用 fake 邮件与隔离 PostgreSQL。

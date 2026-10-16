@@ -28,3 +28,8 @@ export function requestAllowed(request: Request) {
     (request.method === 'GET' || request.headers.get('origin') === expected.origin)
   );
 }
+
+export function authIpAddressOptions() {
+  // Only trust the header overwritten by the hosting edge; local clients share one bucket.
+  return { ipAddressHeaders: process.env.VERCEL === '1' ? ['x-vercel-forwarded-for'] : [] };
+}

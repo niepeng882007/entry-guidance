@@ -1,6 +1,6 @@
 {
-  "date": "2026-10-14",
-  "framework": "Vue 3 + TypeScript + Vite",
+  "date": "2026-10-16",
+  "framework": "Next 16 + React 19; legacy Vue/Vite retained",
   "font": "existing system CJK stack; local monospace for balances",
   "palette": "shared monochrome login/workbench; semantic colour for errors, warnings and verification",
   "motion": "CSS only; no dependency",
@@ -9,50 +9,9 @@
     "single public/style.css entry",
     "preserve all calculation/state contracts; native select data with custom combobox presentation"
   ],
-  "validation": {
-    "command": "pnpm run check --config /tmp/entry-home-sidebar-playwright.config.ts",
-    "reason": "isolated demo port 4181 while concurrent validation uses 4179; repository config unchanged",
-    "typecheck": "pass",
-    "lint": "pass",
-    "format": "pass",
-    "build": "pass",
-    "nodeTests": 270,
-    "browserTests": 150,
-    "viewports": [
-      320,
-      375,
-      390,
-      414,
-      768,
-      960,
-      961,
-      1280
-    ],
-    "shortViewport": "320x330",
-    "browser": "Chromium and WebKit; local demo only",
-    "checks": [
-      "home does not query business APIs, including after feature-page return",
-      "drawer forward/reverse Tab cycle, Esc/backdrop/button close and focus restoration",
-      "desktop/mobile breakpoint and current page",
-      "entry section focus, scroll selection, short viewport and reduced motion",
-      "existing form, card invalidation, recovery, account refresh, review notes and plan comparison"
-    ],
-    "not_tested": [
-      "physical iOS keyboard and app switching",
-      "real Binance account"
-    ],
-    "design_review": {
-      "philosophy": 5,
-      "hierarchy": 4,
-      "execution": 4,
-      "specificity": 5,
-      "restraint": 5,
-      "variety": 4,
-      "exceptions": [
-        "existing system fonts and single stylesheet retained",
-        "feature internals retained; marketing gates not applicable"
-      ]
-    }
-  },
-  "scope": "shared app shell, home, desktop sidebar, mobile drawer, entry section navigation"
+  "scope": "ticket 02 public site and authentication",
+  "sources": [
+    "public/style.css:10 (tokens and system fonts)",
+    "package.json (existing Next/React, no motion dependency)"
+  ]
 }

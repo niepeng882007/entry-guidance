@@ -35,11 +35,11 @@ APP_MODE=real pnpm start
 
 复盘账本默认按模式保存于 `.local/review/real.sqlite` 或 `demo.sqlite`；可用 `REVIEW_DATA_DIR` 指定目录。复盘外部取数与模型分析均需手动发起。手机 HTTPS、数据保存、备份和具体操作见[使用说明](docs/usage.md)。
 
-## 多用户兼容入口（票据 01）
+## 多用户兼容入口（票据 01–02）
 
-本地已增加独立的 Next / Better Auth / PostgreSQL 工作台，仅提供两个预置合成用户的登录、资料读取和退出；旧业务仍由上面的 Vue / Node 入口运行。公开注册、账户绑定和交易模块迁移按后续票据实施。
+本地已增加独立的 Next / Better Auth / PostgreSQL 工作台，提供公开官网、邮箱注册/验证/重发，以及合成用户的登录、资料读取和退出；旧业务仍由上面的 Vue / Node 入口运行。账户绑定和交易模块迁移按后续票据实施。
 
-在 Node 24 和已启动的 Docker 下，运行 `pnpm build`，然后 `pnpm demo:auth`，打开 <http://127.0.0.1:3100/login>。合成用户及隔离数据库的使用方式见[开发与验证](docs/development.md#多用户兼容入口票据-01)。此命令不读取 `.env`，退出时删除本次临时数据库。
+在 Node 24 和已启动的 Docker 下，运行 `pnpm build`，然后 `pnpm demo:auth`，打开 <http://127.0.0.1:3100>；在 <http://127.0.0.1:3102/messages> 查看本次演示的 fake 验证邮件，不会向真实邮箱发信。合成用户及隔离数据库的使用方式见[开发与验证](docs/development.md#多用户兼容入口票据-01)。此命令不读取 `.env`，退出时删除本次临时数据库。
 
 ## 开发与验证
 

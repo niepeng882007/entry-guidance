@@ -1,9 +1,11 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
 import { promisify } from 'node:util';
 import { setTimeout } from 'node:timers/promises';
 import { hashPassword } from 'better-auth/crypto';
+import { createEmailVerificationToken } from 'better-auth/api';
 import { createIdentityDatabase } from '../../src/identity/database.ts';
 
 const exec = promisify(execFile);
@@ -40,13 +42,52 @@ async function stop(child: ChildProcess | undefined) {
   await exited;
   clearTimeout(timer);
 }
-export async function startAuthRuntime(ports: { web?: number; business?: number } = {}) {
+export async function startAuthRuntime(
+  ports: { web?: number; business?: number; mail?: number } = {},
+) {
+  const mail = {
+    messages: [] as { email: string; url: string }[],
+    mode: 'accept' as 'accept' | 'fail' | 'timeout',
+  };
+  const mailServer = createHttpServer((request, response) => {
+    void (async () => {
+      if (request.method === 'GET' && request.url === '/messages') {
+        response.setHeader('Content-Type', 'application/json');
+        response.end(JSON.stringify(mail.messages));
+        return;
+      }
+      let text = '';
+      for await (const chunk of request) text += String(chunk);
+      if (request.method === 'POST' && request.url === '/mode') {
+        const body = JSON.parse(text) as { mode: typeof mail.mode };
+        mail.mode = body.mode;
+        response.end('{}');
+        return;
+      }
+      if (request.method !== 'POST' || request.url !== '/send') {
+        response.writeHead(404).end();
+        return;
+      }
+      if (mail.mode === 'timeout') return;
+      if (mail.mode === 'fail') {
+        response.writeHead(503).end();
+        return;
+      }
+      mail.messages.push(JSON.parse(text) as { email: string; url: string });
+      response.end('{}');
+    })().catch(() => response.writeHead(400).end());
+  });
+  await new Promise<void>((resolve) => mailServer.listen(ports.mail ?? 0, '127.0.0.1', resolve));
+  const mailAddress = mailServer.address();
+  if (!mailAddress || typeof mailAddress === 'string') throw new Error('邮件夹具启动失败。');
+  const mailOrigin = `http://127.0.0.1:${mailAddress.port}`;
   const container = `entry-auth-${randomUUID()}`;
   const webOrigin = `http://127.0.0.1:${ports.web ?? (await freePort())}`;
   const businessOrigin = `http://127.0.0.1:${ports.business ?? (await freePort())}`;
   const keys = generateKeyPairSync('ed25519');
   let web: ChildProcess | undefined;
   let business: ChildProcess | undefined;
+  const replicas: ChildProcess[] = [];
   let database: ReturnType<typeof createIdentityDatabase> | undefined;
   let created = false;
   let serving = false;
@@ -65,6 +106,9 @@ export async function startAuthRuntime(ports: { web?: number; business?: number 
     return (closing ??= (async () => {
       try {
         await stop(web);
+        for (const replica of replicas) await stop(replica);
+        mailServer.closeAllConnections();
+        await new Promise<void>((resolve) => mailServer.close(() => resolve()));
         await stop(business);
         await database?.$disconnect();
         // Also try the known name if Docker was interrupted just after creating it.
@@ -118,6 +162,8 @@ export async function startAuthRuntime(ports: { web?: number; business?: number 
       HOME: process.env.HOME,
       TMPDIR: process.env.TMPDIR,
       NODE_ENV: 'production',
+      APP_ENV: 'test',
+      AUTH_MAIL_FAKE_ORIGIN: mailOrigin,
       NEXT_TELEMETRY_DISABLED: '1',
       CHECKPOINT_DISABLE: '1',
       DATABASE_URL: databaseUrl,
@@ -157,6 +203,13 @@ export async function startAuthRuntime(ports: { web?: number; business?: number 
       },
       stdio: 'ignore',
     });
+    const webEnvironment = {
+      ...common,
+      AUTH_SECRET: randomUUID() + randomUUID(),
+      DELEGATION_PRIVATE_KEY: keys.privateKey
+        .export({ type: 'pkcs8', format: 'der' })
+        .toString('base64'),
+    };
     web = spawn(
       process.execPath,
       [
@@ -169,13 +222,7 @@ export async function startAuthRuntime(ports: { web?: number; business?: number 
         new URL(webOrigin).port,
       ],
       {
-        env: {
-          ...common,
-          AUTH_SECRET: randomUUID() + randomUUID(),
-          DELEGATION_PRIVATE_KEY: keys.privateKey
-            .export({ type: 'pkcs8', format: 'der' })
-            .toString('base64'),
-        },
+        env: webEnvironment,
         stdio: 'ignore',
       },
     );
@@ -199,7 +246,52 @@ export async function startAuthRuntime(ports: { web?: number; business?: number 
     if (!ready) throw new Error('合成服务启动超时。');
     checkStartup();
     serving = true;
-    return { webOrigin, businessOrigin, database, keys, close, container };
+    return {
+      webOrigin,
+      businessOrigin,
+      database,
+      keys,
+      close,
+      container,
+      mail,
+      mailOrigin,
+      async expiredVerificationURL(email: string) {
+        const token = await createEmailVerificationToken(
+          webEnvironment.AUTH_SECRET,
+          email,
+          undefined,
+          -1,
+        );
+        return `${webOrigin}/api/auth/verify-email?token=${token}`;
+      },
+      async startReplica(environment: Record<string, string> = {}) {
+        const port = await freePort();
+        const origin = `http://127.0.0.1:${port}`;
+        const replica = spawn(
+          process.execPath,
+          [
+            'node_modules/next/dist/bin/next',
+            'start',
+            'web',
+            '--hostname',
+            '127.0.0.1',
+            '--port',
+            String(port),
+          ],
+          { env: { ...webEnvironment, AUTH_ORIGIN: origin, ...environment }, stdio: 'ignore' },
+        );
+        replicas.push(replica);
+        for (let attempt = 0; attempt < 120; attempt++) {
+          try {
+            if ((await fetch(origin + '/login')).ok) return origin;
+          } catch {
+            /* Starting. */
+          }
+          await setTimeout(250);
+        }
+        throw new Error('第二个网页实例启动失败。');
+      },
+    };
   } catch (error) {
     await close();
     if (interrupted) process.exit(0);

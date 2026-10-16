@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { Suspense } from 'react';
 import { connection } from 'next/server';
 import Login from './login.tsx';
@@ -14,6 +15,12 @@ export default function Page() {
       <Suspense fallback={<p role="status">正在加载登录表单…</p>}>
         <Form />
       </Suspense>
+      <p>
+        <a href="/register">注册邮箱账号</a> · <a href="/verify-email">重发验证邮件</a> ·{' '}
+        <Link href="/" prefetch={false}>
+          返回官网
+        </Link>
+      </p>
     </main>
   );
 }

@@ -1,5 +1,6 @@
 web/next-env.d.ts
 web/.next/
+web/generated/
 src/generated/
 dist/
 node_modules/
