@@ -277,7 +277,7 @@ test('a user opens one archived trade and expands linked orders, fills and PnL',
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
   await page.goto('/entry');
-  await navigate(page, '交易记录分析');
+  await navigate(page, '交易记录');
   await page.getByRole('button', { name: '完整交易复盘', exact: true }).click();
   await expect(page).toHaveURL('/review?view=cycles');
   await expect(page.getByRole('heading', { name: '交易记录分析', exact: true })).toBeVisible();
@@ -309,8 +309,8 @@ test('a user opens one archived trade and expands linked orders, fills and PnL',
     );
     await page.screenshot({ path: test.info().outputPath(`review-${width}.png`), fullPage: true });
   }
-  await navigate(page, '账户快照');
-  await navigate(page, '交易记录分析');
+  await navigate(page, '我的账户');
+  await navigate(page, '交易记录');
   await page.getByRole('button', { name: '完整交易复盘', exact: true }).click();
   await expect(page.getByText('1 笔归档交易', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '退出登录' }).click();
@@ -343,7 +343,7 @@ test('clearing the current plan leaves archived trades available after relogin',
   }
   await page.locator('#generate').click();
   await expect(page.locator('#entry-card')).toHaveAttribute('data-current', 'true');
-  await navigate(page, '交易记录分析');
+  await navigate(page, '交易记录');
   await page.getByRole('button', { name: '完整交易复盘', exact: true }).click();
   await expect(page.getByText('1 笔归档交易', { exact: true })).toBeVisible();
   await navigate(page, '开仓卡');
@@ -354,7 +354,7 @@ test('clearing the current plan leaves archived trades available after relogin',
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
   await page.goto('/entry');
-  await navigate(page, '交易记录分析');
+  await navigate(page, '交易记录');
   await page.getByRole('button', { name: '完整交易复盘', exact: true }).click();
   await expect(page.getByText('1 笔归档交易', { exact: true })).toBeVisible();
 });
@@ -737,7 +737,7 @@ test.describe('review loading with classic scrollbars', () => {
       });
       await page
         .getByRole('navigation', { name: '功能入口' })
-        .getByRole('link', { name: '交易记录分析', exact: true })
+        .getByRole('link', { name: '交易记录', exact: true })
         .click();
       await expect.poll(() => typeof release).toBe('function');
       const content = page.locator('#main-content');

@@ -22,17 +22,17 @@ test('home is the login destination and does not query business data, including 
   await page.clock.install();
   await page.clock.runFor(10000);
   expect(requests).toEqual([]);
-  for (const [name, path] of [
-    ['开仓卡', '/entry'],
-    ['交易记录分析', '/review'],
-    ['账户快照', '/account'],
+  for (const [name, path, heading] of [
+    ['开仓卡', '/entry', '开仓卡'],
+    ['交易记录', '/review', '交易记录分析'],
+    ['我的账户', '/account', '账户快照'],
   ] as const) {
     await page
       .getByRole('navigation', { name: '功能入口' })
       .getByRole('link', { name, exact: true })
       .click();
     await expect(page).toHaveURL(path);
-    await expect(page.getByRole('heading', { name, exact: true, level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: heading, exact: true, level: 1 })).toBeVisible();
     await expect(page.locator('body')).not.toContainText('交易由你在 Binance 执行');
     await expect(page.locator('body')).not.toContainText('手动执行');
     await expect(page.locator('body')).not.toContainText('工具不会下单');
