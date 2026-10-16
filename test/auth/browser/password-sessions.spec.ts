@@ -112,6 +112,7 @@ test('security page clears on cross-tab identity changes, back navigation and la
   await expect(page).toHaveURL('/login');
   await page.goBack();
   await expect(page.getByText(users[0]!.email, { exact: true })).toHaveCount(0);
+  await expect(page).toHaveURL('/login');
   await login(page, users[1]!);
   let arrived!: () => void;
   const received = new Promise<void>((resolve) => {
