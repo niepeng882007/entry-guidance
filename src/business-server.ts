@@ -6,6 +6,7 @@ import { verifyDelegation } from './identity/delegation.ts';
 import { AccountError, binanceTransport, signBinanceRequest, type Transport } from './account.ts';
 import { createBinanceEgress } from './binance-egress.ts';
 import { credentialMasterKey } from './bindings/credential.ts';
+import { changeModelKey, modelKeySubmission, modelCredentialMetadata } from './model-key.ts';
 import { createBoundAccountReader, type AccountResource } from './bindings/account.ts';
 import {
   BindingError,
@@ -22,6 +23,7 @@ export function createBusinessServer(options: {
   publicKey: string;
   credentialMaster?: { key: Buffer; version: number };
   transport?: Transport;
+  modelTransport?: typeof fetch;
   simulation?: boolean;
 }) {
   const egress = createBinanceEgress(options.database, options.transport);
@@ -66,10 +68,11 @@ export function createBusinessServer(options: {
         url.pathname,
       );
     const match =
-      /^\/v1\/users\/([^/]+)\/(profile|binding|account\/(summary|assets|positions|orders|conditional-orders))$/.exec(
+      /^\/v1\/users\/([^/]+)\/(profile|binding|model|account\/(summary|assets|positions|orders|conditional-orders))$/.exec(
         url.pathname,
       );
-    const writing = request.method === 'POST' && match?.[2] === 'binding';
+    const writing =
+      request.method === 'POST' && (match?.[2] === 'binding' || match?.[2] === 'model');
     if ((!match && !review) || (request.method !== 'GET' && !writing) || (!review && url.search))
       return reply(404, { error: '此入口不可用。' });
     if (writing && request.headers.origin !== options.authOrigin)
@@ -129,6 +132,13 @@ export function createBusinessServer(options: {
           ...(options.simulation ? { simulation: true } : {}),
         });
       if (!writing) {
+        if (match?.[2] === 'model') {
+          const credential = await options.database.modelCredential.findUnique({
+            where: { userId: session.userId },
+            select: modelCredentialMetadata,
+          });
+          return reply(200, { credential });
+        }
         const binding = await options.database.binanceBinding.findFirst({
           where: { userId: session.userId, state: 'active', source: 'binance-live' },
           select: bindingMetadata,
@@ -150,6 +160,17 @@ export function createBusinessServer(options: {
         body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       } catch {
         return reply(422, { error: '请求格式无效。' });
+      }
+      if (match?.[2] === 'model') {
+        const result = await changeModelKey({
+          database: options.database,
+          claims,
+          submission: modelKeySubmission(body),
+          master: () => options.credentialMaster ?? credentialMasterKey(),
+          transport: options.modelTransport,
+          signal: AbortSignal.timeout(10000),
+        });
+        return reply(200, result);
       }
       const submission = bindingSubmission(body);
       const result = await saveBinding({

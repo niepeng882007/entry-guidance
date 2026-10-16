@@ -51,6 +51,7 @@ export async function startAuthRuntime(
     business?: number;
     mail?: number;
     transport?: Transport;
+    modelTransport?: typeof fetch;
     simulation?: boolean;
     reviewFixtures?: boolean;
   } = {},
@@ -220,7 +221,7 @@ export async function startAuthRuntime(
       });
     }
     checkStartup();
-    if (ports.transport) {
+    if (ports.transport || ports.modelTransport) {
       businessServer = createBusinessServer({
         database,
         authOrigin: webOrigin,
@@ -228,6 +229,7 @@ export async function startAuthRuntime(
         publicKey: keys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
         credentialMaster,
         transport: ports.transport,
+        modelTransport: ports.modelTransport,
         simulation: ports.simulation,
       });
       await new Promise<void>((resolve) =>

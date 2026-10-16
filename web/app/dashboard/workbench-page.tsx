@@ -10,11 +10,13 @@ async function ProtectedWorkbench({
   security,
   account,
   review,
+  ai,
 }: {
   connections: boolean;
   security: boolean;
   account: boolean;
   review: boolean;
+  ai: boolean;
 }) {
   let identity;
   try {
@@ -29,18 +31,20 @@ async function ProtectedWorkbench({
   }
   if (!identity) redirect('/login');
   if (review) return <ReviewBrowser />;
-  return <Workbench connections={connections} security={security} account={account} />;
+  return <Workbench connections={connections} security={security} account={account} ai={ai} />;
 }
 export default function WorkbenchPage({
   connections = false,
   security = false,
   account = false,
   review = false,
+  ai = false,
 }: {
   connections?: boolean;
   security?: boolean;
   account?: boolean;
   review?: boolean;
+  ai?: boolean;
 }) {
   return (
     <Suspense fallback={<p role="status">正在确认登录状态…</p>}>
@@ -49,6 +53,7 @@ export default function WorkbenchPage({
         security={security}
         account={account}
         review={review}
+        ai={ai}
       />
     </Suspense>
   );

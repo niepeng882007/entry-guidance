@@ -37,11 +37,13 @@ export async function POST(request: Request) {
       scope !== 'binding:read' &&
       scope !== 'binding:write' &&
       scope !== 'account:read' &&
-      scope !== 'review:read'
+      scope !== 'review:read' &&
+      scope !== 'model:read' &&
+      scope !== 'model:write'
     )
       return Response.json({ error: '操作不受支持。' }, { status: 422 });
     if (
-      scope === 'binding:write' &&
+      (scope === 'binding:write' || scope === 'model:write') &&
       Date.now() - identity.session.createdAt.getTime() >= 15 * 60000
     )
       return Response.json({ error: '请重新登录以确认密码后再修改凭据。' }, { status: 403 });

@@ -22,6 +22,8 @@ model User {
   accounts Account[]
   binanceBindings BinanceBinding[]
   bindingMutations BindingMutation[]
+  modelCredential ModelCredential?
+  modelKeyMutations ModelKeyMutation[]
   @@map("auth_user")
 }
 model Session {
@@ -100,6 +102,41 @@ model BindingMutation {
   createdAt DateTime @default(now())
   @@id([userId, requestId])
   @@map("binding_mutation")
+}
+
+model ModelCredential {
+  userId String @id
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  id String @unique
+  version Int
+  state String
+  sealedCredential String?
+  keyVersion Int?
+  verifiedAt DateTime?
+  updatedAt DateTime @updatedAt
+  invalidations ModelKeyInvalidation[]
+  @@unique([userId, id])
+  @@map("model_credential")
+}
+
+model ModelKeyInvalidation {
+  userId String
+  credentialId String
+  credential ModelCredential @relation(fields: [userId, credentialId], references: [userId, id], onDelete: Restrict)
+  version Int
+  reason String
+  createdAt DateTime @default(now())
+  @@id([credentialId, version])
+  @@map("model_key_invalidation")
+}
+model ModelKeyMutation {
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  requestId String
+  digest String
+  createdAt DateTime @default(now())
+  @@id([userId, requestId])
+  @@map("model_key_mutation")
 }
 
 model BinanceEgress {

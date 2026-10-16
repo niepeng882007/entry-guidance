@@ -1,4 +1,5 @@
 import type { Delegation } from '../../../src/identity/delegation.ts';
+import type { ModelKeySubmission } from '../../../src/model-key.ts';
 
 export class BusinessRequestError extends Error {
   status: number;
@@ -52,6 +53,12 @@ export function businessRequest(
 ): Promise<Response>;
 export function businessRequest(resource: 'profile', signal: AbortSignal): Promise<Response>;
 export function businessRequest(
+  resource: 'model',
+  signal: AbortSignal,
+  expectedUserId: string,
+  submission?: ModelKeySubmission,
+): Promise<Response>;
+export function businessRequest(
   resource: 'binding',
   signal: AbortSignal,
   expectedUserId: string,
@@ -59,18 +66,22 @@ export function businessRequest(
 ): Promise<Response>;
 export async function businessRequest(
   resource:
-    'profile' | 'binding' | `account/${'summary' | 'assets'}` | `review/${string}/trades${string}`,
+    | 'profile'
+    | 'binding'
+    | 'model'
+    | `account/${'summary' | 'assets'}`
+    | `review/${string}/trades${string}`,
   signal: AbortSignal,
   expectedUserId?: string,
-  submission?: CredentialSubmission | boolean,
+  submission?: CredentialSubmission | ModelKeySubmission | boolean,
 ): Promise<Response> {
   const scope =
     resource === 'profile'
       ? 'profile:read'
-      : resource === 'binding'
+      : resource === 'binding' || resource === 'model'
         ? submission
-          ? 'binding:write'
-          : 'binding:read'
+          ? (`${resource}:write` as const)
+          : (`${resource}:read` as const)
         : resource.startsWith('review/')
           ? 'review:read'
           : 'account:read';
