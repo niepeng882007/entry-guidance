@@ -1,24 +1,10 @@
 import { onMounted, onUnmounted, ref, shallowRef } from 'vue';
-import { parseDecimal } from '../public/draft.js';
+import { validateAccountAmounts } from '../public/account-amounts.ts';
 import type { readAccountAssets } from '../src/account.ts';
 
 type Assets = Omit<Awaited<ReturnType<typeof readAccountAssets>>, 'source'> & {
   source: 'binance' | 'demo';
 };
-
-const coreAmounts = ['equity', 'availableBalance', 'walletBalance', 'unrealizedProfit'] as const;
-const detailAmounts = [
-  'positionInitialMargin',
-  'openOrderInitialMargin',
-  'maintMargin',
-  'maxWithdrawAmount',
-] as const;
-
-function decimal(value: unknown): bigint {
-  if (typeof value !== 'string' || !/^-?\d{1,24}(\.\d{1,8})?$/.test(value))
-    throw new Error('账户金额无效，本次快照不可用。');
-  return parseDecimal(value.replace('-', ''), '账户金额') * (value.startsWith('-') ? -1n : 1n);
-}
 
 function validateAssets(value: unknown, expectedSource: Assets['source']): Assets {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -31,10 +17,7 @@ function validateAssets(value: unknown, expectedSource: Assets['source']): Asset
     Math.abs(Date.now() - Date.parse(data.queriedAt)) > 60_000
   )
     throw new Error('账户来源或查询时间无效，本次快照不可用。');
-  for (const field of coreAmounts) decimal(data[field]);
-  for (const field of detailAmounts) if (data[field] !== null) decimal(data[field]);
-  if (decimal(data.equity) !== decimal(data.walletBalance) + decimal(data.unrealizedProfit))
-    throw new Error('账户权益与钱包余额、未实现盈亏不一致。');
+  validateAccountAmounts(data, true);
   return data as Assets;
 }
 

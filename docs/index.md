@@ -62,6 +62,10 @@
 - 归属事务及凭据封装：`src/bindings/binding.ts`、`src/bindings/credential.ts`；`src/business-server.ts` 独立授权，`prisma/migrations/202610160002_binance_binding/` 保证唯一约束。
 - 合成 PostgreSQL 与生产浏览器验收：`test/auth/binding.test.ts`、`test/auth/credential.test.ts`、`test/auth/browser/connections.spec.ts`。运行及独立主密钥配置见[开发与验证](development.md#binance-只读绑定票据-04)。
 
+## 多用户资产入口
+
+新多用户资产入口位于 `web/app/account/`，工作台摘要复用同一面板及生命周期 hook。`src/bindings/account.ts` 管理绑定内的读取与缓存；`src/binance-egress.ts` 及迁移 `202610160003_binance_egress` 管理跨实例出口调度与冷却；`public/account-amounts.ts` 为新旧页面提供金额校验。定向测试为 `test/auth/assets.test.ts`、`test/auth/egress.test.ts` 和 `test/auth/browser/assets.spec.ts`；运行及人工验证见[票据 05 开发说明](development.md#多用户资产与读取协调票据-05)。
+
 ## 规则入口
 
 - [根 AGENTS.md](../AGENTS.md) 是共享入口；[CLAUDE.md](../CLAUDE.md) 导入它。

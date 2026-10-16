@@ -7,9 +7,11 @@ import Workbench from './workbench.tsx';
 async function ProtectedWorkbench({
   connections,
   security,
+  account,
 }: {
   connections: boolean;
   security: boolean;
+  account: boolean;
 }) {
   let identity;
   try {
@@ -23,18 +25,20 @@ async function ProtectedWorkbench({
     );
   }
   if (!identity) redirect('/login');
-  return <Workbench connections={connections} security={security} />;
+  return <Workbench connections={connections} security={security} account={account} />;
 }
 export default function WorkbenchPage({
   connections = false,
   security = false,
+  account = false,
 }: {
   connections?: boolean;
   security?: boolean;
+  account?: boolean;
 }) {
   return (
     <Suspense fallback={<p role="status">正在确认登录状态…</p>}>
-      <ProtectedWorkbench connections={connections} security={security} />
+      <ProtectedWorkbench connections={connections} security={security} account={account} />
     </Suspense>
   );
 }

@@ -37,6 +37,8 @@
 
 读取协调由 [src/account-refresh.ts](../src/account-refresh.ts) 和 [src/server.ts](../src/server.ts) 承担。正式生成、完整行情和止损核验保持独立完整查询，不能使用账户观察缓存或部分成功数据生成可执行建议。
 
+多用户兼容入口由票据 05 迁移到 React，保留上述资产展示与刷新行为，固定读取受委托保护的 `/v1/users/:userId/account/assets`；工作台摘要使用同作用域 `/account/summary`。新入口在读取前后核对产品用户、活跃绑定及凭据/授权代次，由 `src/bindings/account.ts` 管理私有状态、`src/binance-egress.ts` 持久协调出口额度和冷却。原 Vue 入口继续保留；新旧入口的具体运行与人工验收见[开发文档](development.md#多用户资产与读取协调票据-05)。
+
 ## 访问与交互
 
 沿用会话、Host/Origin、固定白名单 GET、静态资源白名单和生产 CSP。凭据留在后端；页面不持久化账户数值，不因读取失败扩大交易、提现或划转权限。

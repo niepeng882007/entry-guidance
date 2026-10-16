@@ -4,18 +4,22 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { businessRequest, BusinessRequestError } from './business-request.ts';
 import ConnectionsForm, { type BindingMetadata } from './connections-form.tsx';
 import SecuritySessions from './security-sessions.tsx';
+import AccountPanel from '../account/account-panel.tsx';
 
 interface Profile {
   id: string;
   name: string;
   email: string;
+  simulation?: boolean;
 }
 export default function Workbench({
   connections = false,
   security = false,
+  account = false,
 }: {
   connections?: boolean;
   security?: boolean;
+  account?: boolean;
 }) {
   const [binding, setBinding] = useState<BindingMetadata | null>(null);
   const [busy, setBusy] = useState(false);
@@ -136,7 +140,13 @@ export default function Workbench({
     <main className="page">
       <header className="page-header">
         <h1 className="page-title">
-          {security ? '密码与设备会话' : connections ? 'Binance 只读连接' : '我的工作台'}
+          {security
+            ? '密码与设备会话'
+            : connections
+              ? 'Binance 只读连接'
+              : account
+                ? '账户快照'
+                : '我的工作台'}
         </h1>
         <button className="button button--secondary" onClick={() => void logout()}>
           退出登录
@@ -145,13 +155,23 @@ export default function Workbench({
       <nav aria-label="工作台导航">
         <a
           className="button button--text"
-          href={connections || security ? '/dashboard' : '/dashboard/connections'}
+          href={connections || security || account ? '/dashboard' : '/dashboard/connections'}
         >
-          {connections || security ? '返回工作台' : '连接设置'}
+          {connections || security || account ? '返回工作台' : '连接设置'}
         </a>
         {!security && (
           <a className="button button--text" href="/dashboard/security">
             安全设置
+          </a>
+        )}
+        {!account && (
+          <a className="button button--text" href="/account">
+            账户资产
+          </a>
+        )}
+        {account && (
+          <a className="button button--text" href="/dashboard/connections">
+            连接设置
           </a>
         )}
       </nav>
@@ -161,14 +181,31 @@ export default function Workbench({
           <h2>{profile.name}</h2>
           <p>{profile.email}</p>
           <p className="muted">
-            {binding ? `已绑定真实 Binance 账户：${binding.uid}` : '尚未绑定 Binance 账户。'}
+            {binding
+              ? `已绑定${profile.simulation ? '合成演示' : '真实 Binance'}账户：${binding.uid}`
+              : '尚未绑定 Binance 账户。'}
           </p>
         </section>
       ) : (
         <p role="status">{error || '正在确认身份并读取资料…'}</p>
       )}
       {connections && profile && (
-        <ConnectionsForm binding={binding} busy={busy} onSubmit={saveConnection} />
+        <ConnectionsForm
+          binding={binding}
+          busy={busy}
+          onSubmit={saveConnection}
+          simulation={profile.simulation}
+        />
+      )}
+      {!connections && !security && profile && binding && (
+        <AccountPanel
+          key={`${profile.id}:${binding.id}:${binding.credentialVersion}:${binding.authorizationVersion}`}
+          userId={profile.id}
+          binding={binding}
+          simulation={profile.simulation}
+          summary={!account}
+          onIdentityInvalid={identityLost}
+        />
       )}
       {security && profile && (
         <SecuritySessions userId={profile.id} onIdentityLost={identityLost} />

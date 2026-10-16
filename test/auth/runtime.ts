@@ -45,7 +45,13 @@ async function stop(child: ChildProcess | undefined) {
   clearTimeout(timer);
 }
 export async function startAuthRuntime(
-  ports: { web?: number; business?: number; mail?: number; transport?: Transport } = {},
+  ports: {
+    web?: number;
+    business?: number;
+    mail?: number;
+    transport?: Transport;
+    simulation?: boolean;
+  } = {},
 ) {
   const mail = {
     messages: [] as { email: string; url: string }[],
@@ -210,6 +216,7 @@ export async function startAuthRuntime(
         publicKey: keys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
         credentialMaster,
         transport: ports.transport,
+        simulation: ports.simulation,
       });
       await new Promise<void>((resolve) =>
         businessServer!.listen(Number(new URL(businessOrigin).port), '127.0.0.1', resolve),

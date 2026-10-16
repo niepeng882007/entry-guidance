@@ -100,3 +100,22 @@ model BindingMutation {
   @@id([userId, requestId])
   @@map("binding_mutation")
 }
+
+model BinanceEgress {
+  id String @id
+  blockedUntil DateTime @default(dbgenerated("'1970-01-01'::timestamp"))
+  activeId String?
+  activeUntil DateTime @default(dbgenerated("'1970-01-01'::timestamp"))
+  nextArchiveAt DateTime @default(dbgenerated("'1970-01-01'::timestamp"))
+  limitsAt DateTime @default(dbgenerated("'1970-01-01'::timestamp"))
+  budgets Json @default("{}")
+  @@map("binance_egress")
+}
+model BinanceReadRequest {
+  id String @id
+  priority String
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  @@index([priority, createdAt])
+  @@map("binance_read_request")
+}

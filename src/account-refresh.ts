@@ -135,6 +135,34 @@ export class SharedRead<T> {
   }
 }
 
+export function binanceRequestWeight(url: URL) {
+  const single = url.searchParams.has('symbol');
+  const weights: Record<string, number> = {
+    '/fapi/v2/account': 5,
+    '/fapi/v2/positionRisk': 5,
+    '/fapi/v1/exchangeInfo': 1,
+    '/fapi/v1/openOrders': single ? 1 : 40,
+    '/fapi/v1/openAlgoOrders': single ? 1 : 40,
+    '/fapi/v2/ticker/price': single ? 1 : 2,
+    '/fapi/v1/premiumIndex': single ? 1 : 10,
+    '/fapi/v1/klines': 2,
+    '/fapi/v1/markPriceKlines': 2,
+    '/fapi/v1/time': 1,
+    '/fapi/v1/userTrades': 5,
+    '/fapi/v1/allOrders': 5,
+    '/fapi/v1/allAlgoOrders': 5,
+    '/fapi/v1/income': 30,
+    '/fapi/v1/forceOrders': single ? 20 : 50,
+    '/fapi/v1/ticker/bookTicker': single ? 2 : 5,
+    '/fapi/v1/leverageBracket': 1,
+    '/fapi/v1/commissionRate': 20,
+    '/fapi/v1/positionSide/dual': 30,
+    '/fapi/v1/order/asyn': 1000,
+    '/fapi/v1/order/asyn/id': 10,
+  };
+  return weights[url.pathname] ?? 0;
+}
+
 export function coordinateAccountReads(config: AccountConfig) {
   const upstream = config.transport ?? binanceTransport;
   let blocked: AccountError | undefined;
@@ -142,33 +170,7 @@ export function coordinateAccountReads(config: AccountConfig) {
     string,
     { duration: number; limit: number; used: number; window: number }
   >();
-  const weight = (url: URL) => {
-    const single = url.searchParams.has('symbol');
-    const weights: Record<string, number> = {
-      '/fapi/v2/account': 5,
-      '/fapi/v2/positionRisk': 5,
-      '/fapi/v1/exchangeInfo': 1,
-      '/fapi/v1/openOrders': single ? 1 : 40,
-      '/fapi/v1/openAlgoOrders': single ? 1 : 40,
-      '/fapi/v2/ticker/price': single ? 1 : 2,
-      '/fapi/v1/premiumIndex': single ? 1 : 10,
-      '/fapi/v1/klines': 2,
-      '/fapi/v1/markPriceKlines': 2,
-      '/fapi/v1/time': 1,
-      '/fapi/v1/userTrades': 5,
-      '/fapi/v1/allOrders': 5,
-      '/fapi/v1/allAlgoOrders': 5,
-      '/fapi/v1/income': 30,
-      '/fapi/v1/forceOrders': single ? 20 : 50,
-      '/fapi/v1/ticker/bookTicker': single ? 2 : 5,
-      '/fapi/v1/leverageBracket': 1,
-      '/fapi/v1/commissionRate': 20,
-      '/fapi/v1/positionSide/dual': 30,
-      '/fapi/v1/order/asyn': 1000,
-      '/fapi/v1/order/asyn/id': 10,
-    };
-    return weights[url.pathname] ?? 0;
-  };
+  const weight = binanceRequestWeight;
   const defer = (until: number, message: string, shared = true) => {
     const error = new AccountError('rate_limited', message, 429);
     error.retryAt = new Date(until).toISOString();
@@ -211,7 +213,7 @@ export function coordinateAccountReads(config: AccountConfig) {
       url.searchParams.has('signature')
     )
       signBinanceRequest(config, url);
-    const response = await upstream(url, headers, signal);
+    const response = await upstream(url, headers, signal, priority);
     if (response.status === 429 || response.status === 418) {
       const retry = Object.entries(response.headers ?? {}).find(
         ([key]) => key.toLowerCase() === 'retry-after',

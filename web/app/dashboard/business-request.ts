@@ -1,5 +1,10 @@
+import type { Delegation } from '../../../src/identity/delegation.ts';
+
 export class BusinessRequestError extends Error {
   status: number;
+  code?: string;
+  retryAt?: string;
+  attemptedAt?: string;
   constructor(status: number, message: string) {
     super(message);
     this.status = status;
@@ -10,25 +15,17 @@ interface CredentialSubmission {
   apiSecret: string;
   requestId: string;
 }
-export function businessRequest(resource: 'profile', signal: AbortSignal): Promise<Response>;
-export function businessRequest(
-  resource: 'binding',
-  signal: AbortSignal,
-  expectedUserId: string,
-  submission?: CredentialSubmission,
-): Promise<Response>;
-export async function businessRequest(
-  resource: 'profile' | 'binding',
+export async function requestBusinessGrant(
+  scope: Delegation['scope'],
   signal: AbortSignal,
   expectedUserId?: string,
-  submission?: CredentialSubmission,
-): Promise<Response> {
+) {
   const grant = await fetch('/api/delegation', {
     method: 'POST',
     signal,
     cache: 'no-store',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ scope: `${resource}:${submission ? 'write' : 'read'}` }),
+    body: JSON.stringify({ scope }),
   });
   if (!grant.ok)
     throw new BusinessRequestError(
@@ -38,17 +35,48 @@ export async function businessRequest(
         : '认证服务暂时不可用，请稍后重试。',
     );
   const delegation: { token: string; userId: string; businessOrigin: string } = await grant.json();
-  if (resource === 'binding' && delegation.userId !== expectedUserId)
+  if (expectedUserId !== undefined && delegation.userId !== expectedUserId)
     throw new BusinessRequestError(401, '登录身份已变化，请重新登录。');
+  return delegation;
+}
+export function businessRequest(
+  resource: `account/${'summary' | 'assets'}`,
+  signal: AbortSignal,
+  expectedUserId: string,
+  automatic?: boolean,
+): Promise<Response>;
+export function businessRequest(resource: 'profile', signal: AbortSignal): Promise<Response>;
+export function businessRequest(
+  resource: 'binding',
+  signal: AbortSignal,
+  expectedUserId: string,
+  submission?: CredentialSubmission,
+): Promise<Response>;
+export async function businessRequest(
+  resource: 'profile' | 'binding' | `account/${'summary' | 'assets'}`,
+  signal: AbortSignal,
+  expectedUserId?: string,
+  submission?: CredentialSubmission | boolean,
+): Promise<Response> {
+  const scope =
+    resource === 'profile'
+      ? 'profile:read'
+      : resource === 'binding'
+        ? submission
+          ? 'binding:write'
+          : 'binding:read'
+        : 'account:read';
+  const delegation = await requestBusinessGrant(scope, signal, expectedUserId);
   const response = await fetch(
     `${delegation.businessOrigin}/v1/users/${encodeURIComponent(delegation.userId)}/${resource}`,
     {
-      method: submission ? 'POST' : 'GET',
+      method: typeof submission === 'object' ? 'POST' : 'GET',
       headers: {
         Authorization: `Bearer ${delegation.token}`,
-        ...(submission ? { 'Content-Type': 'application/json' } : {}),
+        ...(typeof submission === 'object' ? { 'Content-Type': 'application/json' } : {}),
+        ...(submission === true ? { 'X-Account-Refresh': 'automatic' } : {}),
       },
-      body: submission ? JSON.stringify(submission) : undefined,
+      body: typeof submission === 'object' ? JSON.stringify(submission) : undefined,
       credentials: 'omit',
       signal,
       cache: 'no-store',
@@ -56,8 +84,16 @@ export async function businessRequest(
     },
   );
   if (!response.ok) {
-    const failure: { error?: string } = await response.json();
-    throw new BusinessRequestError(response.status, failure.error ?? '业务服务暂时不可用。');
+    const failure: { error?: string; code?: string; retryAt?: string; attemptedAt?: string } =
+      await response.json();
+    const error = new BusinessRequestError(
+      response.status,
+      failure.error ?? '业务服务暂时不可用。',
+    );
+    error.code = failure.code;
+    error.retryAt = failure.retryAt;
+    error.attemptedAt = failure.attemptedAt;
+    throw error;
   }
   return response;
 }

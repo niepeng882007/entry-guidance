@@ -1,8 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { PrismaClient } from './generated/prisma/client.ts';
 import { verifyDelegation } from './identity/delegation.ts';
-import { AccountError, type Transport } from './account.ts';
+import { AccountError, binanceTransport, signBinanceRequest, type Transport } from './account.ts';
+import { createBinanceEgress } from './binance-egress.ts';
 import { credentialMasterKey } from './bindings/credential.ts';
+import { createBoundAccountReader, type AccountResource } from './bindings/account.ts';
 import {
   BindingError,
   bindingMetadata,
@@ -18,7 +20,15 @@ export function createBusinessServer(options: {
   publicKey: string;
   credentialMaster?: { key: Buffer; version: number };
   transport?: Transport;
+  simulation?: boolean;
 }) {
+  const egress = createBinanceEgress(options.database, options.transport);
+  const accounts = createBoundAccountReader({
+    database: options.database,
+    master: () => options.credentialMaster ?? credentialMasterKey(),
+    transport: options.transport,
+    egress,
+  });
   async function handle(request: IncomingMessage, response: ServerResponse) {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -36,7 +46,10 @@ export function createBusinessServer(options: {
       response.setHeader('Access-Control-Allow-Origin', options.authOrigin);
     if (request.method === 'OPTIONS') {
       response.setHeader('Access-Control-Allow-Methods', 'GET, POST');
-      response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+      response.setHeader(
+        'Access-Control-Allow-Headers',
+        'Authorization, Content-Type, X-Account-Refresh',
+      );
       response.writeHead(204).end();
       return;
     }
@@ -46,7 +59,10 @@ export function createBusinessServer(options: {
     } catch {
       return reply(400, { error: '请求地址无效。' });
     }
-    const match = /^\/v1\/users\/([^/]+)\/(profile|binding)$/.exec(url.pathname);
+    const match =
+      /^\/v1\/users\/([^/]+)\/(profile|binding|account\/(summary|assets|positions|orders|conditional-orders))$/.exec(
+        url.pathname,
+      );
     const writing = request.method === 'POST' && match?.[2] === 'binding';
     if (!match || (request.method !== 'GET' && !writing) || url.search)
       return reply(404, { error: '此入口不可用。' });
@@ -62,16 +78,35 @@ export function createBusinessServer(options: {
         )
       : null;
     if (!claims) return reply(401, { error: '请重新登录。' });
-    const expectedScope = `${match[2]}:${writing ? 'write' : 'read'}`;
+    const expectedScope = `${match[3] ? 'account' : match[2]}:${writing ? 'write' : 'read'}`;
     if (claims.scope !== expectedScope) return reply(403, { error: '操作未授权。' });
     if (match[1] !== claims.sub) return reply(403, { error: '无权访问此资料。' });
     try {
       const session = await requireBusinessIdentity(options.database, claims, writing);
+      if (match[3]) {
+        const controller = new AbortController();
+        const cancel = () => {
+          if (!response.writableEnded) controller.abort();
+        };
+        response.once('close', cancel);
+        try {
+          const result = await accounts.read(
+            claims,
+            match[3] as AccountResource,
+            request.headers['x-account-refresh'] === 'automatic',
+            controller.signal,
+          );
+          return reply(200, { ...result, ...(options.simulation ? { source: 'demo' } : {}) });
+        } finally {
+          response.off('close', cancel);
+        }
+      }
       if (match[2] === 'profile')
         return reply(200, {
           id: session.user.id,
           name: session.user.name,
           email: session.user.email,
+          ...(options.simulation ? { simulation: true } : {}),
         });
       if (!writing) {
         const binding = await options.database.binanceBinding.findFirst({
@@ -102,12 +137,41 @@ export function createBusinessServer(options: {
         claims,
         submission,
         master: options.credentialMaster ?? credentialMasterKey(),
-        transport: options.transport,
+        transport: (url, headers, signal, priority = 'foreground') =>
+          egress.run(url, signal, priority, async (bounded) => {
+            await requireBusinessIdentity(options.database, claims, true);
+            bounded.throwIfAborted();
+            if (url.searchParams.has('signature')) signBinanceRequest(submission, url);
+            return (options.transport ?? binanceTransport)(url, headers, bounded, priority);
+          }),
         signal: AbortSignal.timeout(10000),
       });
       return reply(200, result);
-    } catch (error) {
+    } catch (cause) {
+      let error = cause;
+      if (writing && error instanceof AccountError) {
+        try {
+          await requireBusinessIdentity(options.database, claims, true);
+        } catch (identityError) {
+          error = identityError;
+        }
+      }
       if (error instanceof BindingError) return reply(error.status, { error: error.message });
+      if (error instanceof AccountError && match[3]) {
+        if (error.retryAt)
+          response.setHeader(
+            'Retry-After',
+            Math.max(0, Math.ceil((Date.parse(error.retryAt) - Date.now()) / 1000)),
+          );
+        return reply(error.status, {
+          source: 'binance',
+          code: error.code,
+          error: error.message,
+          attemptedAt: error.attemptedAt ?? new Date().toISOString(),
+          retryAt: error.retryAt,
+          scopeConfirmed: error.scopeConfirmed,
+        });
+      }
       if (error instanceof AccountError)
         return reply(
           error.code === 'unsafe_permissions' ||
@@ -125,5 +189,6 @@ export function createBusinessServer(options: {
     void handle(request, response).catch(() => response.destroy());
   });
   server.requestTimeout = 15000;
+  server.once('close', () => accounts.stop());
   return server;
 }

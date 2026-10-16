@@ -32,7 +32,12 @@ export async function POST(request: Request) {
       return Response.json({ error: '请求格式无效。' }, { status: 422 });
     }
     const scope = body && typeof body === 'object' && 'scope' in body ? body.scope : 'profile:read';
-    if (scope !== 'profile:read' && scope !== 'binding:read' && scope !== 'binding:write')
+    if (
+      scope !== 'profile:read' &&
+      scope !== 'binding:read' &&
+      scope !== 'binding:write' &&
+      scope !== 'account:read'
+    )
       return Response.json({ error: '操作不受支持。' }, { status: 422 });
     if (
       scope === 'binding:write' &&

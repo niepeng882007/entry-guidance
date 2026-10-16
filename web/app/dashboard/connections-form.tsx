@@ -12,10 +12,12 @@ export default function ConnectionsForm({
   binding,
   busy,
   onSubmit,
+  simulation = false,
 }: {
   binding: BindingMetadata | null;
   busy: boolean;
   onSubmit: (value: { apiKey: string; apiSecret: string; requestId: string }) => Promise<void>;
+  simulation?: boolean;
 }) {
   const [ready, setReady] = useState(false);
   useEffect(() => setReady(true), []);
@@ -35,7 +37,9 @@ export default function ConnectionsForm({
       <p>凭据由业务服务加密保存，不会回显。修改需要最近 15 分钟内的密码登录。</p>
       {binding ? (
         <div>
-          <p>真实 Binance 账户 · 已验证只读绑定</p>
+          <p>
+            {simulation ? '合成演示账户 · 不代表真实绑定' : '真实 Binance 账户 · 已验证只读绑定'}
+          </p>
           <p>UID：{binding.uid}</p>
           <p>更新同一 UID 的 Key 会保留账户归属与历史。不同 UID 需先解绑归档。</p>
         </div>
