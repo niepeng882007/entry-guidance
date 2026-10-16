@@ -95,7 +95,7 @@ test('a cookie identity change without a broadcast cannot submit the previous us
   let switched = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     const response = await context.request.post('/api/auth/sign-in/email', {
-      headers: { Origin: 'http://127.0.0.1:4180' },
+      headers: { Origin: new URL(page.url()).origin },
       data: { email: users[1]!.email, password: users[1]!.password },
     });
     if (response.status() !== 429) {
