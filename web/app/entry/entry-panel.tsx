@@ -120,6 +120,31 @@ export default function EntryPanel(props: EntryProps) {
               </select>
             </label>
             <label className="field">
+              <span className="field-label">入场方式</span>
+              <select
+                className="field-control field-control--select"
+                disabled={restoring}
+                value={input.entryType ?? 'MARKET'}
+                onChange={(event) => change('entryType', event.target.value)}
+              >
+                <option value="MARKET">市价</option>
+                <option value="LIMIT">普通限价 · GTC</option>
+              </select>
+            </label>
+            {input.entryType === 'LIMIT' && (
+              <label className="field">
+                <span className="field-label">限价委托价（USDT）</span>
+                <input
+                  className="field-control"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  disabled={restoring}
+                  value={input.limitPrice ?? ''}
+                  onChange={(event) => change('limitPrice', event.target.value)}
+                />
+              </label>
+            )}
+            <label className="field">
               <span className="field-label">预算方式</span>
               <select
                 aria-label="预算方式"
@@ -160,7 +185,7 @@ export default function EntryPanel(props: EntryProps) {
             ))}
           </div>
           <p className="help">
-            单层市价 · 逐仓 · 单向持仓 · 仅支持空仓起点。资金费与本单资金上限可留空；预算单位为{' '}
+            单层止损 · 逐仓 · 单向持仓 · 仅支持空仓起点。资金费与本单资金上限可留空；预算单位为{' '}
             {input.budgetMode === 'percent' ? '权益 %' : 'USDT'}，止损值单位为{' '}
             {input.stopMode === 'percent' ? '%' : 'USDT'}。
           </p>
@@ -244,9 +269,25 @@ export default function EntryPanel(props: EntryProps) {
           <p>{saved.plan.notice}</p>
           <p role="status">{reason}</p>
           <p>
-            {saved.plan.symbol} · {saved.plan.side === 'long' ? '做多' : '做空'} · 市价 ·{' '}
+            {saved.plan.symbol} · {saved.plan.side === 'long' ? '做多' : '做空'} ·{' '}
+            {saved.plan.execution.entryType === 'LIMIT' ? '普通限价 · GTC' : '市价'} ·{' '}
             {saved.plan.leverage} 倍杠杆
           </p>
+          {saved.plan.execution.entryType === 'LIMIT' && (
+            <div className="copy-row">
+              <div className="copy-row__content">
+                <p>限价委托价</p>
+                <p className="amount amount--card amount--copy">{saved.plan.limitPrice} USDT</p>
+              </div>
+              <button
+                className="button button--copy"
+                disabled={!current}
+                onClick={() => void copy(saved.plan.limitPrice)}
+              >
+                复制限价
+              </button>
+            </div>
+          )}
           <div className="copy-row">
             <div className="copy-row__content">
               <p>开仓数量</p>
@@ -287,8 +328,9 @@ export default function EntryPanel(props: EntryProps) {
             资金费：{saved.plan.fundingReserved ? `${saved.plan.funding} USDT` : '未预留资金费'}
           </p>
           <p className="help">
-            在 Binance
-            手动设置逐仓、单向持仓和所选杠杆，市价开仓并附带整仓止损市价；使用标记价触发，关闭价格保护。所有交易均由你执行。
+            在 Binance 手动设置逐仓、单向持仓和所选杠杆，
+            {saved.plan.execution.entryType === 'LIMIT' ? '按原委托价使用普通 GTC 限价' : '市价'}
+            开仓并附带整仓止损市价；使用标记价触发，关闭价格保护。所有交易均由你执行。
           </p>
           <p className="help">
             输入变化、离开页面或数据失效后撤销当前结果。已有持仓请恢复原方案并核验，不要重新生成。
@@ -373,7 +415,7 @@ export default function EntryPanel(props: EntryProps) {
           {verification.pendingEntries?.map((order) => (
             <p key={order.orderId}>
               入场余单 {order.orderId}：已成交 {order.filledQuantity}，剩余{' '}
-              {order.remainingQuantity}；请在 Binance 处理。
+              {order.remainingQuantity}；请先在 Binance 撤销余单，再重新查询。
             </p>
           ))}
           <p className="help">

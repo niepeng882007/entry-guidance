@@ -42,7 +42,7 @@ test('single market entry previews, saves and copies a fixed card, then conserva
   await login(page);
   await connect(page);
   await page.goto('/entry');
-  await expect(page.getByRole('heading', { name: '单层市价开仓' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '单层开仓' })).toBeVisible();
   await fillPlan(page);
   await expect(page.getByText('草稿数量：')).toBeVisible();
   const button = page.getByRole('button', { name: '刷新并生成开仓卡' });
@@ -76,6 +76,13 @@ test('single market entry previews, saves and copies a fixed card, then conserva
   await page.getByLabel('亏损预算', { exact: true }).fill('21');
   await expect(card.getByRole('button', { name: '复制数量' })).toBeDisabled();
   await expect(card.getByText('固定预算：20 USDT')).toBeVisible();
+  // Ticket 07 records predate the optional limit field.
+  await page.evaluate(() => {
+    const key = Object.keys(localStorage).find((key) => key.startsWith('entry-current:'))!;
+    const record = JSON.parse(localStorage.getItem(key)!);
+    delete record.input.limitPrice;
+    localStorage.setItem(key, JSON.stringify(record));
+  });
   await page.reload();
   await expect(page.getByLabel('亏损预算', { exact: true })).toHaveValue('21');
   await expect(card.getByText('固定预算：20 USDT')).toBeVisible();
@@ -403,4 +410,141 @@ test('failed recovery preserves the plan ID through edits and reconnect retries 
   } finally {
     release();
   }
+});
+
+test('GTC partial fills keep the fixed card and require manual remainder cancellation before approval', async ({
+  page,
+  request,
+}) => {
+  await login(page);
+  await connect(page);
+  await page.goto('/entry');
+  await fillPlan(page);
+  await page.getByLabel('入场方式').selectOption('LIMIT');
+  await page.getByLabel('限价委托价（USDT）').fill('100');
+  await page.getByRole('button', { name: '刷新并生成开仓卡' }).click();
+  const card = page.getByRole('region', { name: '本次开仓卡' });
+  const check = page.getByRole('region', { name: '成交与止损核验' });
+  await expect(card).toContainText('普通限价 · GTC');
+  await expect(card.getByText('0.495 BTC', { exact: true })).toBeVisible();
+  await expect(card.getByRole('button', { name: '复制限价' })).toBeEnabled();
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          document.documentElement.dataset.copied = text;
+        },
+      },
+    });
+  });
+  await card.getByRole('button', { name: '复制限价' }).focus();
+  await page.keyboard.press('Enter');
+  expect(await page.locator('html').getAttribute('data-copied')).toBe('100');
+  await page.reload();
+  await expect(page.getByLabel('限价委托价（USDT）')).toHaveValue('100');
+  await expect(check).toContainText('尚未成交');
+  for (const [scenario, state, quantity] of [
+    ['limit-waiting', '尚未成交', '0'],
+    ['limit-partial', '需要处理', '0.1'],
+    ['limit-partial-more', '需要处理', '0.4'],
+    ['limit-canceled', '查询时点核验通过', '0.4'],
+  ]) {
+    expect(
+      (
+        await request.post('http://127.0.0.1:4182/entry-scenario', {
+          data: { user: 'alice', scenario },
+        })
+      ).ok(),
+    ).toBe(true);
+    await page.getByRole('button', { name: '重新查询原方案' }).click();
+    await expect(check.getByRole('status')).toHaveText(state!);
+    if (quantity !== '0')
+      await expect(check.getByText(`${quantity} BTC`, { exact: true })).toBeVisible();
+    await expect(card.getByText('0.495 BTC', { exact: true })).toBeVisible();
+    await expect(card).toContainText('固定预算：20 USDT');
+    if (scenario?.startsWith('limit-partial')) {
+      await expect(check).toContainText('请先在 Binance 撤销');
+      await expect(card.getByRole('button', { name: '复制限价' })).toBeDisabled();
+    }
+  }
+  await expect(check).toContainText('0.04 USDT');
+  for (const width of [320, 390, 1280]) {
+    await page.setViewportSize({ width, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({
+    path: test.info().outputPath('limit-partial-phone.png'),
+    fullPage: true,
+  });
+  await page.getByLabel('限价委托价（USDT）').fill('99.9');
+  await expect(check).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByLabel('限价委托价（USDT）')).toHaveValue('99.9');
+  await expect(check).toHaveCount(0);
+  await page.getByRole('button', { name: '恢复原方案输入并核验' }).click();
+  await expect(page.getByLabel('限价委托价（USDT）')).toHaveValue('100');
+  await expect(check).toContainText('查询时点核验通过');
+  await page.getByLabel('入场方式').selectOption('MARKET');
+  await expect(page.getByLabel('限价委托价（USDT）')).toHaveCount(0);
+  await expect(check).toHaveCount(0);
+});
+
+test('changing a limit rejects late verification, and offline or failed queries revoke approval', async ({
+  page,
+  request,
+}) => {
+  await login(page);
+  await connect(page);
+  await page.goto('/entry');
+  await fillPlan(page);
+  await page.getByLabel('入场方式').selectOption('LIMIT');
+  await page.getByLabel('限价委托价（USDT）').fill('100');
+  await page.getByRole('button', { name: '刷新并生成开仓卡' }).click();
+  await expect(page.getByRole('button', { name: '复制限价' })).toBeEnabled();
+  await request.post('http://127.0.0.1:4182/entry-scenario', {
+    data: { user: 'alice', scenario: 'limit-canceled' },
+  });
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const seen = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  await page.route('**/entry/plans/*/verify', async (route) => {
+    const response = await route.fetch();
+    entered();
+    await gate;
+    await route.fulfill({ response }).catch(() => {});
+  });
+  const check = page.getByRole('region', { name: '成交与止损核验' });
+  try {
+    await page.getByRole('button', { name: '重新查询原方案' }).click();
+    await seen;
+    await page.getByLabel('限价委托价（USDT）').fill('99.9');
+    release();
+    await expect(check).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '复制限价' })).toBeDisabled();
+  } finally {
+    release();
+  }
+  await page.unroute('**/entry/plans/*/verify');
+  await page.getByRole('button', { name: '恢复原方案输入并核验' }).click();
+  await expect(check).toContainText('查询时点核验通过');
+  await page.evaluate(() => window.dispatchEvent(new Event('offline')));
+  await expect(check).toHaveCount(0);
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect(check).toContainText('查询时点核验通过');
+  await request.post('http://127.0.0.1:4182/entry-scenario', {
+    data: { user: 'alice', scenario: 'failed' },
+  });
+  await page.getByRole('button', { name: '重新查询原方案' }).click();
+  await expect(page.getByRole('region', { name: '开仓计划' }).getByRole('alert')).toBeVisible();
+  await expect(check).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '复制限价' })).toBeDisabled();
 });

@@ -371,3 +371,74 @@ void test('market data that expires during strict generation cannot become a sav
   assert.equal(response.status, 409);
   assert.equal((await response.json()).plan, undefined);
 });
+
+void test('GTC limit generation uses limit lot sizes and restores the fixed plan after restart', async (t) => {
+  const runtime = await startAuthRuntime({ transport: entryTransport });
+  t.after(() => runtime.close());
+  const cookie = await login(runtime);
+  await bind(runtime, cookie);
+  const limit = { ...input, entryType: 'LIMIT', limitPrice: '100' };
+  const response = await request(runtime, cookie, 'plans', limit);
+  assert.equal(response.status, 201, await response.clone().text());
+  const saved = await response.json();
+  assert.equal(saved.plan.quantity, '0.495');
+  assert.equal(saved.plan.limitPrice, '100');
+  assert.equal(saved.plan.execution.entryType, 'LIMIT');
+  assert.equal(saved.plan.execution.timeInForce, 'GTC');
+  assert.equal(saved.plan.budget, '20');
+  assert.equal(saved.plan.stopPrice, '98');
+  await runtime.restartBusiness();
+  const restored = await request(runtime, cookie, `plans/${saved.plan.id}`);
+  assert.equal(restored.status, 200);
+  assert.deepEqual(await restored.json(), saved);
+  for (const limitPrice of ['', '100.01', '121']) {
+    const invalid = await request(runtime, cookie, 'plans', { ...limit, limitPrice });
+    assert.ok(invalid.status >= 400);
+    assert.equal((await invalid.json()).plan, undefined);
+  }
+});
+
+void test('limit remainder blocks approval until cancellation reconciles, without counting unfilled quantity or costs', async (t) => {
+  const scenarios = entryScenarios();
+  const runtime = await startAuthRuntime({ transport: scenarios.transport });
+  t.after(() => runtime.close());
+  const cookie = await login(runtime);
+  await bind(runtime, cookie);
+  const saved = await (
+    await request(runtime, cookie, 'plans', { ...input, entryType: 'LIMIT', limitPrice: '100' })
+  ).json();
+  const path = `plans/${saved.plan.id}/verify`;
+  for (const [scenario, status, quantity, remainder, commission] of [
+    ['limit-waiting', 'waiting', '0', '0.495', undefined],
+    ['limit-unfilled-canceled', 'ended', '0', undefined, undefined],
+    ['limit-partial', 'needs-action', '0.1', '0.395', '0.01'],
+    ['limit-partial-more', 'needs-action', '0.4', '0.095', '0.04'],
+    ['limit-inconsistent', 'incomplete', '0.4', undefined, undefined],
+    ['limit-missing-stop', 'needs-action', '0.4', undefined, '0.04'],
+    ['limit-canceled', 'verified', '0.4', undefined, '0.04'],
+  ]) {
+    scenarios.select({ user: 'alice', scenario });
+    const response = await request(runtime, cookie, path, {});
+    assert.equal(response.status, 200, await response.clone().text());
+    const result = await response.json();
+    const checked = result.verification;
+    assert.equal(checked.status, status, JSON.stringify(checked));
+    assert.equal(checked.quantity, quantity);
+    assert.equal(checked.pendingEntries[0]?.remainingQuantity, remainder);
+    if (commission) assert.equal(checked.paidCommission, commission);
+    assert.deepEqual(result.plan, saved.plan);
+    if (scenario === 'limit-canceled') {
+      assert.equal(checked.paidFunding, '0.3');
+      assert.equal(checked.remainingFunding, '0.7');
+      assert.equal(checked.plannedLoss, '2.270808');
+    }
+  }
+  scenarios.select({ user: 'alice', scenario: 'limit-missing-cost' });
+  const missing = await request(runtime, cookie, path, {});
+  assert.equal(missing.status, 502);
+  assert.equal((await missing.json()).verification, undefined);
+  const bob = await login(runtime, 1);
+  await bind(runtime, bob, 1);
+  assert.equal((await request(runtime, bob, path, {}, 1)).status, 404);
+  assert.equal((await request(runtime, bob, `plans/${saved.plan.id}`, undefined, 1)).status, 404);
+});

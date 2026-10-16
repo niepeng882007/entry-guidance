@@ -20,6 +20,7 @@ const initial: EntryInput = {
   symbol: '',
   side: '',
   entryType: 'MARKET',
+  limitPrice: '',
   stopLevels: 'single',
   budgetMode: 'amount',
   budget: '',
@@ -156,7 +157,8 @@ export function useEntryPlan({
                 !(key in initial) || typeof local.input[key as keyof EntryInput] !== 'string',
             ) ||
             Object.keys(initial).some(
-              (key) => typeof local.input[key as keyof EntryInput] !== 'string',
+              (key) =>
+                key !== 'limitPrice' && typeof local.input[key as keyof EntryInput] !== 'string',
             ) ||
             (local.planId !== null &&
               (typeof local.planId !== 'string' || !/^[a-f0-9-]{36}$/.test(local.planId))) ||

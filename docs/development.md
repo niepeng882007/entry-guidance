@@ -316,3 +316,45 @@ pnpm exec playwright test -c playwright.auth.config.ts test/auth/browser/review.
 8. 同一浏览器另开复盘标签并退出登录：原标签私有内容清除，后退不能恢复；重新登录另一用户不会显示前一用户账本。检查 320px、390px、1280px：仅表格内部横向滚动，Tab 与 Enter 可操作，重新读取后按钮焦点保持。
 
 Ctrl-C 停止演示会删除临时数据库，再次启动需要重新绑定并注入样本。自动测试另覆盖非法参数、详情越权、换 Key 后旧授权拒绝、超过 4.5 MiB 证据直传及无损金额；本地合成验收不代表真实 Neon/Binance、实体手机或生产部署通过。
+
+## 限价开仓与部分成交（票据 08）
+
+`/entry` 支持单层市价及普通 GTC 限价。限价委托价必须满足原价格步长与范围，不静默取整；数量、资金缩量与费用预留继续复用共享 BigInt 计算。可信恢复支持两种入场方式，兼容票据 07 没有限价字段的浏览器记录。修改限价或入场方式立即撤销旧卡及核验，恢复只能取回固定原方案后重查。
+
+部分成交按实际持仓与已发生费用核验，原方案数量、预算和绝对止损保持不变。入场余单存在时提示用户先在 Binance 撤销；止损或平仓不代表余单自动取消。历史终止状态与当前挂单不一致、费用缺失或止损不足均不能通过。工具只读，不下单或撤单。
+
+### 票据 08 人工验证
+
+使用 Node 24.22.0、pnpm 11.7.0，启动 Docker，在包含本票的工作目录执行：
+
+```sh
+pnpm build
+pnpm demo:auth
+```
+
+1. 打开 `http://127.0.0.1:3100/login`，以 `alice@example.test` / `synthetic-login-only-01` 登录，在连接设置保存合成值 `synthetic-key-alice` / `synthetic-secret-alice`。勿输入真实 Key。
+2. 打开 `/entry`，选 BTCUSDT、做多、普通限价 GTC、限价 `100`、固定预算 `20` USDT、绝对止损 `98`、杠杆 `10`、滑点 `1`%、资金费 `1` USDT、最低缓冲 `1`%、本单资金上限 `5` USDT。生成后数量为 `0.495 BTC`，可复制限价 `100`；刷新后恢复原卡并重新查询，空仓仍显示“尚未成交”。
+3. 另开终端运行以下命令，再在页面点击“重新查询原方案”。这是本机演示夹具入口，生产没有此路由：
+
+   ```sh
+   curl --fail http://127.0.0.1:3102/entry-scenario \
+     -H 'Content-Type: application/json' \
+     -d '{"user":"alice","scenario":"limit-partial"}'
+   ```
+
+   预期实际持仓 `0.1 BTC`、手续费 `0.01 USDT`、余单 `0.395 BTC`，显示“需要处理”及人工撤余单提示，不显示通过。
+
+4. 将命令中的场景改为 `limit-partial-more`：实际持仓 `0.4 BTC`、手续费 `0.04 USDT`、余单 `0.095 BTC`，仍不通过。改为 `limit-canceled` 模拟人工撤销余单，再查应显示“查询时点核验通过”；已付资金费 `0.3 USDT`、剩余预留 `0.7 USDT`、含成本计划亏损 `2.270808 USDT`。原卡始终为数量 `0.495`、预算 `20`、止损 `98`。
+5. 依次切换 `limit-inconsistent`、`limit-missing-stop`、`limit-missing-cost`、`failed` 并重新查询：分别显示无法完整核验、需要处理或错误，不保留通过。恢复 `limit-canceled` 后重新查询才可通过。`limit-waiting` 为零成交挂单；`limit-unfilled-canceled` 为零成交已撤销，均不能通过。
+6. 通过后将限价改为 `99.9`：旧通过立即消失，原卡仍为限价 `100`，复制停用。刷新保留编辑值且不自动核验；点击“恢复原方案输入并核验”恢复 `100` 并重查。断网、隐藏页面后旧结果失效，联网或返回后重新确认身份及查询。
+7. 将夹具切为 `flat` 并清除本浏览器记录，重新填写相同参数但选市价：限价输入隐藏，生成数量回到 `0.4 BTC`。限价 `100.01`（不符合步长）或 `121`（超出价格范围）不能生成有效卡。
+8. 用 320px、390px、1280px 检查横向溢出、Tab 焦点与 Enter 复制；无痕登录 `bob@example.test`（同口令）并绑定 `synthetic-key-bob` / `synthetic-secret-bob`，不应看到甲的本单。跨标签退出后私有内容清除。
+
+演示全为合成响应；停止 `demo:auth` 会删除临时数据库。真实 Binance、Neon、实体手机及生产迁移未在本票验收。迟到响应、跨用户恢复拒绝及数据库持久恢复由自动测试补充。
+
+定向检查（HTTP/浏览器前先构建）：
+
+```sh
+node --test test/auth/entry.test.ts test/draft.test.ts test/verification.test.ts
+pnpm exec playwright test -c playwright.auth.config.ts test/auth/browser/entry.spec.ts
+```

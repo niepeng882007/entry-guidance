@@ -155,7 +155,7 @@ export default function Workbench({
                 : account
                   ? '账户快照'
                   : entry
-                    ? '单层市价开仓'
+                    ? '单层开仓'
                     : '我的工作台'}
         </h1>
         <button className="button button--secondary" onClick={() => void logout()}>

@@ -139,9 +139,22 @@ export function entryScenarios() {
       !('user' in value) ||
       !('scenario' in value) ||
       !['alice', 'bob'].includes(String(value.user)) ||
-      !['flat', 'protected', 'missing-stop', 'wrong-stop', 'missing-cost', 'failed'].includes(
-        String(value.scenario),
-      )
+      ![
+        'flat',
+        'protected',
+        'missing-stop',
+        'wrong-stop',
+        'missing-cost',
+        'failed',
+        'limit-waiting',
+        'limit-partial',
+        'limit-partial-more',
+        'limit-canceled',
+        'limit-unfilled-canceled',
+        'limit-inconsistent',
+        'limit-missing-stop',
+        'limit-missing-cost',
+      ].includes(String(value.scenario))
     )
       throw new Error('Invalid synthetic entry scenario');
     scenarios.set(String(value.user), { scenario: String(value.scenario), time: Date.now() - 100 });
@@ -151,6 +164,42 @@ export function entryScenarios() {
     const selected = scenarios.get(headers['X-MBX-APIKEY']?.includes('bob') ? 'bob' : 'alice');
     if (!selected || selected.scenario === 'flat') return result;
     const { scenario, time } = selected;
+    const limit = scenario.startsWith('limit-');
+    const unfilled = ['limit-waiting', 'limit-unfilled-canceled'].includes(scenario);
+    const quantity = unfilled ? '0' : scenario === 'limit-partial' ? '0.1' : '0.4';
+    const active = [
+      'limit-waiting',
+      'limit-partial',
+      'limit-partial-more',
+      'limit-inconsistent',
+    ].includes(scenario);
+    let status = 'FILLED';
+    if (limit) status = active ? 'PARTIALLY_FILLED' : 'CANCELED';
+    if (limit && active && unfilled) status = 'NEW';
+    const order = {
+      symbol: 'BTCUSDT',
+      orderId: 10,
+      side: 'BUY',
+      positionSide: 'BOTH',
+      type: limit ? 'LIMIT' : 'MARKET',
+      origType: limit ? 'LIMIT' : 'MARKET',
+      status,
+      time,
+      updateTime: time,
+      origQty: limit ? '0.495' : '0.4',
+      executedQty: quantity,
+      avgPrice: unfilled ? '0' : '100',
+      price: limit ? '100' : '0',
+      stopPrice: '0',
+      workingType: 'CONTRACT_PRICE',
+      priceProtect: false,
+      goodTillDate: 0,
+      timeInForce: 'GTC',
+      reduceOnly: false,
+      closePosition: false,
+    };
+    if (limit && url.pathname === '/fapi/v1/openOrders')
+      return { status: 200, body: active && scenario !== 'limit-inconsistent' ? [order] : [] };
     if (scenario === 'failed' && url.pathname === '/fapi/v1/premiumIndex')
       return { status: 503, body: { msg: 'Synthetic market unavailable' } };
     if (url.pathname === '/fapi/v1/time') return { status: 200, body: { serverTime: Date.now() } };
@@ -160,7 +209,7 @@ export function entryScenarios() {
         body: {
           ...(result.body as object),
           positions: [
-            { symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0.4', isolated: true },
+            { symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: quantity, isolated: true },
           ],
         },
       };
@@ -170,8 +219,8 @@ export function entryScenarios() {
         body: [
           {
             ...entryFixture().position,
-            positionAmt: '0.4',
-            entryPrice: '100',
+            positionAmt: quantity,
+            entryPrice: unfilled ? '0' : '100',
             liquidationPrice: '90',
             isolatedWallet: '4',
             updateTime: time,
@@ -181,64 +230,51 @@ export function entryScenarios() {
     if (url.pathname === '/fapi/v1/userTrades')
       return {
         status: 200,
-        body: [
-          {
-            symbol: 'BTCUSDT',
-            id: 1,
-            orderId: 10,
-            side: 'BUY',
-            positionSide: 'BOTH',
-            time,
-            price: '100',
-            qty: '0.4',
-            quoteQty: '40',
-            commission: scenario === 'missing-cost' ? undefined : '0.04',
-            commissionAsset: 'USDT',
-            realizedPnl: '0',
-          },
-        ],
+        body: unfilled
+          ? []
+          : [
+              {
+                symbol: 'BTCUSDT',
+                id: 1,
+                orderId: 10,
+                side: 'BUY',
+                positionSide: 'BOTH',
+                time,
+                price: '100',
+                qty: quantity,
+                quoteQty: quantity === '0.1' ? '10' : '40',
+                commission: scenario.endsWith('missing-cost')
+                  ? undefined
+                  : quantity === '0.1'
+                    ? '0.01'
+                    : '0.04',
+                commissionAsset: 'USDT',
+                realizedPnl: '0',
+              },
+            ],
       };
-    if (url.pathname === '/fapi/v1/allOrders')
-      return {
-        status: 200,
-        body: [
-          {
-            symbol: 'BTCUSDT',
-            orderId: 10,
-            side: 'BUY',
-            positionSide: 'BOTH',
-            type: 'MARKET',
-            origType: 'MARKET',
-            status: 'FILLED',
-            time,
-            updateTime: time,
-            origQty: '0.4',
-            executedQty: '0.4',
-            avgPrice: '100',
-            reduceOnly: false,
-            closePosition: false,
-          },
-        ],
-      };
+    if (url.pathname === '/fapi/v1/allOrders') return { status: 200, body: [order] };
     if (url.pathname === '/fapi/v1/income')
       return {
         status: 200,
-        body: [
-          {
-            symbol: 'BTCUSDT',
-            incomeType: 'FUNDING_FEE',
-            income: '-0.3',
-            asset: 'USDT',
-            time,
-            tranId: 123,
-          },
-        ],
+        body: unfilled
+          ? []
+          : [
+              {
+                symbol: 'BTCUSDT',
+                incomeType: 'FUNDING_FEE',
+                income: '-0.3',
+                asset: 'USDT',
+                time,
+                tranId: 123,
+              },
+            ],
       };
     if (url.pathname === '/fapi/v1/openAlgoOrders')
       return {
         status: 200,
         body:
-          scenario === 'missing-stop'
+          unfilled || scenario.endsWith('missing-stop')
             ? []
             : [
                 {
