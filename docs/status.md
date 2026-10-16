@@ -12,6 +12,10 @@
 
 首次 [Linux CI](https://github.com/niepeng882007/entry-guidance/actions/runs/38852536597) 的类型、lint、格式、构建及 369 项 Node 测试通过，旧浏览器 172/180 通过。失败暴露了 4 项依赖 macOS `/private/tmp` 的截图写入，以及 WebKit 初始化、滚动条和键盘交互差异。后续将截图迁入 Playwright 输出目录，明确测试夹具的初始页面与经典滚动条条件，并补充失败证据上传。下拉控件的同步更新会关闭展开菜单，已用现有浏览器夹具稳定复现并先观察回归失败；最小修复保留未禁用控件的当前键盘选项，禁用仍关闭。修复后类型、零警告 lint、构建及 14 项 Chromium/WebKit 定向回归通过，未放宽原断言；因另一个 worktree 使用 4179，定向回归使用临时配置和独立端口 43179。
 
+第二轮 Linux 浏览器为 177/180；trace 显示一次登录 POST 被后续跳转取消，并暴露已选锚点位于激活线另一侧时的高亮边界。后续为成功登录流程统一等待首页就绪，保留视口内的已选锚点，下拉菜单在 resize 时重新定位而不丢失键盘选项。经典滚动条夹具的 `body` 最小高度被 `.workbench` 覆盖，已修正选择器，并在页面切换前后断言强制溢出条件真实成立；未保留无效的产品样式尝试。导航、resize 和夹具条件均先观察到稳定失败再修复，32 项重复定向回归通过，临时诊断日志已移除。
+
+因其他任务同步更新主线及构建产物，本轮最后在固定 `160d7a2` 的独立 worktree 复验，保留已合入的公开注册与只读绑定功能。完整 `pnpm check` 退出 0：类型、零警告 lint、格式、双构建、Node 369 项、认证/注册/绑定 Node 26 项、旧浏览器 180 项及新入口浏览器 14 项全部通过，共 395 项 Node、194 项浏览器。日志位于本机 `/tmp/entry-standards-isolated-full-check.log`，仅使用合成账户和临时 PostgreSQL；此记录不扩展为实体手机、真实 Binance 或模型验收。
+
 公开仓库为 [entry-guidance](https://github.com/niepeng882007/entry-guidance)。新增的 [Code quality 工作流](https://github.com/niepeng882007/entry-guidance/actions/workflows/check.yml) 对 PR 与 `main` 推送运行同一入口；每次远端运行结果以 GitHub Actions 为准，本地通过不代替远端结果。规则与命令说明见[开发与验证](development.md#代码规范与提交)。
 
 ## 多用户兼容入口：票据 01

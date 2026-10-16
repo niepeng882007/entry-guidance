@@ -8,6 +8,7 @@ test('manual order updates read once and refresh running progress only on reques
   await page.goto('/review');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.route('**/review', async (route) => {
     const response = await route.fetch();
     await route.fulfill({
@@ -101,6 +102,7 @@ test('orders are the default view with separate realized pnl and links to comple
   await page.goto('/review');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/review?page=999');
   await expect(page.getByRole('heading', { name: '订单记录', exact: true })).toBeVisible();
   await expect(page.locator('.ant-table-row')).toHaveCount(3);
@@ -145,6 +147,7 @@ test('order filters wait for query, reject invalid dates and reset the submitted
   await page.goto('/review?from=2026-10-10&to=2026-10-10');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/review?from=2026-10-10&to=2026-10-10');
   const rows = page.locator('.ant-table-row');
   await expect(rows).toHaveCount(3);
@@ -180,6 +183,7 @@ test('all manual order actions fit the toolbar on mobile and desktop', async ({ 
   await page.goto('/review');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.route('**/review', async (route) => {
     const response = await route.fetch();
     await route.fulfill({

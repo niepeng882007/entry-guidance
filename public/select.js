@@ -391,7 +391,7 @@ export function enhanceSelects(root = document, signal) {
       { signal },
     );
     const onResize = () => {
-      if (searchable && !menu.hidden) position();
+      if (!menu.hidden && !select.disabled) position();
       else close();
     };
     window.addEventListener('resize', onResize, { signal });

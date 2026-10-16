@@ -6,6 +6,7 @@ test('list batch analysis is explicit, freezes its range and preserves old repor
   await page.goto('/review?view=cycles');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/review?view=cycles&symbol=BTCUSDT');
   const analysis = page.getByRole('region', { name: '筛选范围模型复盘' });
   let starts = 0;
@@ -49,6 +50,7 @@ test('over 100 selected trades blocks a new analysis independently of the visibl
   await page.goto('/review?view=cycles');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   const list = await (await page.request.get('/api/review/trades')).json();
   const { withStatistics } = await import('./review-statistics-fixtures.ts');
   const trades = Array.from({ length: 101 }, (_, index) => ({
@@ -78,6 +80,7 @@ test('a model style suggestion stays separate until the user saves a personal ta
   await page.goto('/review?view=cycles');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   const endpoint = '/api/review/analysis';
   await page.request.post(endpoint, {
     data: { includeNotes: false, regenerate: true, query: 'symbol=BTCUSDT' },

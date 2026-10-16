@@ -52,8 +52,8 @@ function syncModuleCurrent(modules: HTMLElement[], links: Element[]) {
   let current: HTMLElement | null = passed[0]?.target ?? document.getElementById('plan-module');
   if (atBottom) {
     const hashed = positions.find((item) => item.target.id === location.hash.slice(1));
-    // A short section at the end of the page cannot reach the activation line.
-    if (hashed && hashed.top > offset && hashed.top < window.innerHeight) current = hashed.target;
+    // Scroll clamping can leave a visible target on either side of the activation line.
+    if (hashed && hashed.top >= 0 && hashed.top < window.innerHeight) current = hashed.target;
     else {
       const visible = positions
         .filter(

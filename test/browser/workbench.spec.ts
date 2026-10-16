@@ -5,6 +5,7 @@ async function login(page: Page) {
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/entry');
   await expect(page.locator('#status')).toHaveText('模拟查询成功');
 }
@@ -67,6 +68,9 @@ test('review navigation stays current when its section cannot reach the activati
   const link = (name: string) => page.locator('.module-nav__link', { hasText: name });
   for (const width of [390, 1280]) {
     await page.setViewportSize({ width, height: 960 });
+    await page.locator('.module-nav').evaluate((node) => {
+      (node as HTMLElement).style.minHeight = '300px';
+    });
     await link('成交核验').click();
     await expect(link('成交核验')).toHaveAttribute('aria-current', 'location');
     await expect(link('开仓卡')).not.toHaveAttribute('aria-current', 'location');
@@ -588,6 +592,7 @@ test('reload and re-login restore the signed original plan and reverify it', asy
   await page.locator('#relogin a').click();
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/entry');
   await expect(page.locator('#verification')).toHaveAttribute('data-state', 'needs-action');
   await expect(page.locator('#card-quantity')).toHaveText(quantity!);

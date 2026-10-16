@@ -6,6 +6,7 @@ test('trade chart distinguishes price sources and links real fill markers at mob
   await page.goto('/review?view=cycles');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/review?view=cycles');
   await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
   const chart = page.getByRole('region', { name: '行情与交易事件' });
@@ -52,6 +53,7 @@ test('late period responses, offline events and invalid sources cannot replace t
   await page.goto('/review?view=cycles');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/review?view=cycles');
   await page.getByRole('button', { name: '查看 BTCUSDT 交易详情' }).click();
   const chart = page.getByRole('region', { name: '行情与交易事件' });
@@ -98,6 +100,7 @@ test('a mark-price gap stays separate from complete contract prices and can be r
   await page.goto('/review?view=cycles');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/review?view=cycles');
   await page.route('**/market?interval=*', async (route) => {
     const response = await route.fetch();

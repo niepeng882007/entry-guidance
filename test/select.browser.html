@@ -98,6 +98,8 @@
               'BTCUSDT',
           '同步组件更新保留展开状态与键盘选项',
         );
+        window.dispatchEvent(new Event('resize'));
+        assert(!menu.hidden, '视口变化保留展开菜单，重新定位后继续键盘选择');
         key('ArrowDown');
         assert(
           document.getElementById(trigger.getAttribute('aria-activedescendant')).textContent ===

@@ -7,6 +7,7 @@ async function comparisonFixture(page: Page, two = false) {
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/entry');
   const response = await page.request.post('/api/plan', {
     data: {

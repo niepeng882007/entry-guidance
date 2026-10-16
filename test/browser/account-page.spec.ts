@@ -5,6 +5,7 @@ async function login(page: Page) {
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/entry');
   await expect(page.locator('#status')).toHaveText('模拟查询成功');
 }

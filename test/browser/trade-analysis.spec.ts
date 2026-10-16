@@ -6,6 +6,7 @@ test('analysis is explicit, reports are text, and leaving the detail preserves t
   await page.goto('/review?view=cycles');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   let starts = 0;
   page.on('request', (request) => {
     if (request.method() === 'POST' && request.url().endsWith('/analysis')) starts++;
@@ -52,6 +53,7 @@ test('cancel and continue require explicit clicks; model text is escaped and inv
   await page.goto('/review?view=cycles');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   const endpoint = '/api/review/trades/BTCUSDT-demo-fill-1/analysis';
   await page.request.post(endpoint, {
     data: { includeNotes: false, regenerate: true, query: '' },

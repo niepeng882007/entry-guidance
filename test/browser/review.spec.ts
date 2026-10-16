@@ -23,6 +23,7 @@ test('background archive completion and page recovery preserve detail and note d
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   const original = await (await page.request.get('/api/review/trades')).json();
   const detail = await (
     await page.request.get(`/api/review/trades/${original.trades[0].id}`)
@@ -132,6 +133,7 @@ test('account archive refreshes progress manually without polling while idle or 
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   const original = await (await page.request.get('/api/review/trades')).json();
   await page.route('**/review?view=cycles', async (route) => {
     const response = await route.fetch();
@@ -276,6 +278,7 @@ test('a user opens one archived trade and expands linked orders, fills and PnL',
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/entry');
   await navigate(page, '交易记录');
   await page.getByRole('button', { name: '完整交易复盘', exact: true }).click();
@@ -324,6 +327,7 @@ test('clearing the current plan leaves archived trades available after relogin',
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/entry');
   await page.locator('#symbol-trigger').click();
   await page
@@ -353,6 +357,7 @@ test('clearing the current plan leaves archived trades available after relogin',
   await page.getByRole('button', { name: '退出登录' }).click();
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/entry');
   await navigate(page, '交易记录');
   await page.getByRole('button', { name: '完整交易复盘', exact: true }).click();
@@ -365,6 +370,7 @@ test('review handles expired login, failed reads and invalid source without show
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/entry');
   await page.route('**/api/review/trades', (route) =>
     route.fulfill({
@@ -393,6 +399,7 @@ test('leaving review cancels a pending detail and rejects its late response', as
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/entry');
   await page.goto('/review?view=cycles');
   await expect(page.getByText('1 笔归档交易', { exact: true })).toBeVisible();
@@ -425,6 +432,7 @@ test('the real-mode page clearly displays an unsynced empty ledger', async ({ pa
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/entry');
   // The backend real-mode contract is independently verified by the HTTP tests.
   await page.route('**/review?view=cycles', async (route) => {
@@ -471,6 +479,7 @@ test('real history sync reads progress and gaps manually without polling', async
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/entry');
   await page.route('**/review?view=cycles', async (route) => {
     const response = await route.fetch();
@@ -590,6 +599,7 @@ test('a late sync response after leaving the page cannot restore current progres
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/entry');
   await page.route('**/review?view=cycles', async (route) => {
     const response = await route.fetch();
@@ -648,6 +658,7 @@ test('complex trade detail shows mixed execution types, shared reversal evidence
   await page.goto('/');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/entry');
   const list = await (await page.request.get('/api/review/trades')).json();
   const detail = await (await page.request.get(`/api/review/trades/${list.trades[0].id}`)).json();
@@ -722,12 +733,13 @@ test.describe('review loading with classic scrollbars', () => {
         await route.fulfill({
           response,
           // Keep short pages scrollable too so every navigation exercises classic scrollbars.
-          body: `${await response.text()}\nhtml::-webkit-scrollbar { width: 16px; } body { min-height: calc(100vh + 1px); }`,
+          body: `${await response.text()}\nhtml::-webkit-scrollbar { width: 16px; } .workbench { min-height: calc(100vh + 1px); }`,
         });
       });
       await page.goto('/');
       await page.getByLabel('个人访问密码').fill('browser-test-only');
       await page.getByRole('button', { name: '进入账户' }).click();
+      await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
       let release!: () => void;
       await page.route('**/api/review/trades', async (route) => {
         const response = await route.fetch();
@@ -747,6 +759,11 @@ test.describe('review loading with classic scrollbars', () => {
           const { x, width } = node.getBoundingClientRect();
           return { x, width };
         });
+      const scrollbarIsForced = () =>
+        page.evaluate(
+          () => Number.parseFloat(getComputedStyle(document.body).minHeight) > innerHeight,
+        );
+      await expect.poll(scrollbarIsForced).toBe(true);
       const loading = await measure();
       release();
       await page.unroute('**/api/review/trades');
@@ -763,6 +780,7 @@ test.describe('review loading with classic scrollbars', () => {
       );
       await navigate(page, '首页');
       await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
+      await expect.poll(scrollbarIsForced).toBe(true);
       // WebKit can expose the new heading before its forced scrollbar layout settles.
       await expect.poll(measure).toEqual(loading);
     });

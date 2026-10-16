@@ -36,6 +36,7 @@ async function login(page: Page) {
   await page.goto('/review?view=cycles');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
 }
 
 test('date and searchable symbol filters paginate a real table without CSP violations or viewport overflow', async ({

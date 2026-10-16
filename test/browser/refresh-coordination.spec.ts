@@ -4,6 +4,7 @@ async function open(page: Page) {
   await page.goto('/login');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await expect(page).toHaveURL('/');
   await page.clock.install();
   await page.clock.pauseAt(new Date());
@@ -112,6 +113,7 @@ test('first asset read failures show unknown facts and recover without zero bala
   await page.goto('/login');
   await page.getByLabel('个人访问密码').fill('browser-test-only');
   await page.getByRole('button', { name: '进入账户' }).click();
+  await expect(page.getByRole('heading', { name: '首页', exact: true })).toBeVisible();
   await page.goto('/account');
   await expect(page.locator('.status__message').first()).toHaveText('刷新失败，请重试。');
   await expect(page.locator('#asset-equity')).toHaveText('—');
