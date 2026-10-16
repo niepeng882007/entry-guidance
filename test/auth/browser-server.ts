@@ -6,4 +6,5 @@ await startAuthRuntime({
   mail: 4182,
   transport: assetsTransport,
   simulation: true,
+  reviewFixtures: true,
 });

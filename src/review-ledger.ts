@@ -1,5 +1,5 @@
+import { reviewSummary, type ReviewReader } from './review-reader.ts';
 import {
-  entryType,
   matchesReview,
   sortReview,
   defaultReviewFilters,
@@ -321,7 +321,7 @@ function summarize(identity: ReviewIdentity, evidence: TradeEvidence): ReviewTra
   };
 }
 
-export class ReviewLedger {
+export class ReviewLedger implements ReviewReader {
   private db: DatabaseSync;
   private identity: ReviewIdentity;
 
@@ -506,31 +506,10 @@ export class ReviewLedger {
       .all(this.identity.source, this.identity.accountId)
       .map((row) => {
         const trade = this.withPlan(JSON.parse(String(row.payload)) as ReviewTrade, plans);
-        const { evidence: _evidence, planComparison: _comparison, ...summary } = trade;
-        const elapsed =
-          trade.openedAt && trade.closedAt
-            ? Date.parse(trade.closedAt) - Date.parse(trade.openedAt)
-            : null;
-        const durationMs =
-          trade.status !== 'open' &&
-          trade.evidence.fillsComplete &&
-          trade.evidence.startPosition === '0' &&
-          trade.evidence.endPosition === '0' &&
-          elapsed !== null &&
-          Number.isSafeInteger(elapsed) &&
-          elapsed >= 0
-            ? elapsed
-            : null;
-        return {
-          ...summary,
-          durationMs,
-          entryType: entryType(trade),
-          tagIds: [
-            ...new Set(
-              notes.filter((note) => noteBelongsTo(note, trade)).flatMap((note) => note.tagIds),
-            ),
-          ].sort(),
-        };
+        return reviewSummary(
+          trade,
+          notes.filter((note) => noteBelongsTo(note, trade)).flatMap((note) => note.tagIds),
+        );
       })
       .filter((trade) => matchesReview(trade, filters))
       .sort(sortReview);

@@ -229,7 +229,8 @@ p {
   justify-content: center;
   text-decoration: none;
 }
-.button:disabled {
+.button:disabled,
+.button[aria-disabled='true'] {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -2061,4 +2062,27 @@ p {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-8);
   }
+}
+
+/* React trade-cycle table retains the existing review surfaces and phone scrolling. */
+.cycle-table {
+  max-width: 100%;
+  overflow-x: auto;
+  font-variant-numeric: tabular-nums;
+}
+.cycle-table__table {
+  width: 100%;
+  min-width: 860px;
+  border-collapse: collapse;
+  text-align: left;
+}
+.cycle-table__table th,
+.cycle-table__table td {
+  padding: var(--space-12);
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+.cycle-table__table th {
+  background: var(--color-page);
+  font-weight: 500;
 }

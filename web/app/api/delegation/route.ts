@@ -36,7 +36,8 @@ export async function POST(request: Request) {
       scope !== 'profile:read' &&
       scope !== 'binding:read' &&
       scope !== 'binding:write' &&
-      scope !== 'account:read'
+      scope !== 'account:read' &&
+      scope !== 'review:read'
     )
       return Response.json({ error: '操作不受支持。' }, { status: 422 });
     if (

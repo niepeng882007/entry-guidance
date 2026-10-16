@@ -5,7 +5,7 @@ export interface Delegation {
   sub: string;
   sid: string;
   version: number;
-  scope: 'profile:read' | 'binding:read' | 'binding:write' | 'account:read';
+  scope: 'profile:read' | 'binding:read' | 'binding:write' | 'account:read' | 'review:read';
   iss: string;
   aud: string;
   iat: number;
@@ -74,7 +74,7 @@ export function verifyDelegation(
       !claims.sid ||
       !Number.isSafeInteger(claims.version) ||
       (claims.version ?? -1) < 0 ||
-      !['profile:read', 'binding:read', 'binding:write', 'account:read'].includes(
+      !['profile:read', 'binding:read', 'binding:write', 'account:read', 'review:read'].includes(
         claims.scope ?? '',
       ) ||
       claims.iss !== issuer ||

@@ -1,3 +1,5 @@
+import { readBoundReview } from './bindings/review.ts';
+import { ReviewFilterError } from './review-filters.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { PrismaClient } from './generated/prisma/client.ts';
 import { verifyDelegation } from './identity/delegation.ts';
@@ -59,12 +61,16 @@ export function createBusinessServer(options: {
     } catch {
       return reply(400, { error: '请求地址无效。' });
     }
+    const review =
+      /^\/v1\/users\/([^/]+)\/review\/([A-Za-z0-9-]{1,160})\/trades(?:\/([A-Za-z0-9-]{1,160}))?$/.exec(
+        url.pathname,
+      );
     const match =
       /^\/v1\/users\/([^/]+)\/(profile|binding|account\/(summary|assets|positions|orders|conditional-orders))$/.exec(
         url.pathname,
       );
     const writing = request.method === 'POST' && match?.[2] === 'binding';
-    if (!match || (request.method !== 'GET' && !writing) || url.search)
+    if ((!match && !review) || (request.method !== 'GET' && !writing) || (!review && url.search))
       return reply(404, { error: '此入口不可用。' });
     if (writing && request.headers.origin !== options.authOrigin)
       return reply(403, { error: '访问来源不受支持。' });
@@ -78,12 +84,26 @@ export function createBusinessServer(options: {
         )
       : null;
     if (!claims) return reply(401, { error: '请重新登录。' });
-    const expectedScope = `${match[3] ? 'account' : match[2]}:${writing ? 'write' : 'read'}`;
+    const expectedScope = review
+      ? 'review:read'
+      : `${match?.[3] ? 'account' : match?.[2]}:${writing ? 'write' : 'read'}`;
     if (claims.scope !== expectedScope) return reply(403, { error: '操作未授权。' });
-    if (match[1] !== claims.sub) return reply(403, { error: '无权访问此资料。' });
+    if ((review ?? match)?.[1] !== claims.sub) return reply(403, { error: '无权访问此资料。' });
     try {
       const session = await requireBusinessIdentity(options.database, claims, writing);
-      if (match[3]) {
+      if (review)
+        return reply(
+          200,
+          await readBoundReview(
+            options.database,
+            claims,
+            review[2]!,
+            review[3],
+            url.searchParams,
+            options.simulation,
+          ),
+        );
+      if (match?.[3]) {
         const controller = new AbortController();
         const cancel = () => {
           if (!response.writableEnded) controller.abort();
@@ -101,7 +121,7 @@ export function createBusinessServer(options: {
           response.off('close', cancel);
         }
       }
-      if (match[2] === 'profile')
+      if (match?.[2] === 'profile')
         return reply(200, {
           id: session.user.id,
           name: session.user.name,
@@ -148,6 +168,7 @@ export function createBusinessServer(options: {
       });
       return reply(200, result);
     } catch (cause) {
+      if (cause instanceof ReviewFilterError) return reply(400, { error: cause.message });
       let error = cause;
       if (writing && error instanceof AccountError) {
         try {
@@ -157,7 +178,7 @@ export function createBusinessServer(options: {
         }
       }
       if (error instanceof BindingError) return reply(error.status, { error: error.message });
-      if (error instanceof AccountError && match[3]) {
+      if (error instanceof AccountError && match?.[3]) {
         if (error.retryAt)
           response.setHeader(
             'Retry-After',

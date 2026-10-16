@@ -154,7 +154,10 @@ function fill(value: unknown, symbol?: unknown) {
   if (row.event !== undefined)
     requireValue(['entry', 'add', 'reduce', 'exit'].includes(String(row.event)));
 }
-function trade(value: unknown, scope: ReviewIdentity) {
+export function validateReviewTrade(
+  value: unknown,
+  scope: ReviewIdentity,
+): asserts value is ReviewTrade {
   const row = object(value);
   scoped(row, scope);
   id(row.id);
@@ -296,7 +299,7 @@ function trade(value: unknown, scope: ReviewIdentity) {
 }
 function note(value: unknown, scope: ReviewIdentity) {
   const row = object(value);
-  trade(row.trade, scope);
+  validateReviewTrade(row.trade, scope);
   date(row.updatedAt);
   requireValue(['current', 'pending'].includes(String(row.binding)));
   noteInput({
@@ -379,7 +382,7 @@ function market(value: unknown, scope: ReviewIdentity) {
   const row = object(value);
   scoped(row, scope);
   id(row.tradeId);
-  trade(row.evidence, scope);
+  validateReviewTrade(row.evidence, scope);
   requireValue(
     object(row.evidence).id === row.tradeId &&
       object(row.evidence).symbol === row.symbol &&
@@ -469,7 +472,7 @@ function payload(row: BackupRecord, scope: ReviewIdentity) {
     data = row.data;
   switch (row.table) {
     case 'trades':
-      trade(value, scope);
+      validateReviewTrade(value, scope);
       requireValue(
         value.id === data.id &&
           data.opened_at ===
@@ -538,7 +541,9 @@ function payload(row: BackupRecord, scope: ReviewIdentity) {
       requireValue(task.id === data.id);
       date(task.createdAt);
       date(task.updatedAt);
-      (task.snapshot.trades ?? [task.snapshot.trade]).forEach((item) => trade(item, scope));
+      (task.snapshot.trades ?? [task.snapshot.trade]).forEach((item) =>
+        validateReviewTrade(item, scope),
+      );
       task.snapshot.markets.forEach((item) => market(item, scope));
       break;
     }

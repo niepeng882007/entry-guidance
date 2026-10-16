@@ -45,6 +45,11 @@ export function businessRequest(
   expectedUserId: string,
   automatic?: boolean,
 ): Promise<Response>;
+export function businessRequest(
+  resource: `review/${string}/trades${string}`,
+  signal: AbortSignal,
+  expectedUserId: string,
+): Promise<Response>;
 export function businessRequest(resource: 'profile', signal: AbortSignal): Promise<Response>;
 export function businessRequest(
   resource: 'binding',
@@ -53,7 +58,8 @@ export function businessRequest(
   submission?: CredentialSubmission,
 ): Promise<Response>;
 export async function businessRequest(
-  resource: 'profile' | 'binding' | `account/${'summary' | 'assets'}`,
+  resource:
+    'profile' | 'binding' | `account/${'summary' | 'assets'}` | `review/${string}/trades${string}`,
   signal: AbortSignal,
   expectedUserId?: string,
   submission?: CredentialSubmission | boolean,
@@ -65,7 +71,9 @@ export async function businessRequest(
         ? submission
           ? 'binding:write'
           : 'binding:read'
-        : 'account:read';
+        : resource.startsWith('review/')
+          ? 'review:read'
+          : 'account:read';
   const delegation = await requestBusinessGrant(scope, signal, expectedUserId);
   const response = await fetch(
     `${delegation.businessOrigin}/v1/users/${encodeURIComponent(delegation.userId)}/${resource}`,

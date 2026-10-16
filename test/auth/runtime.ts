@@ -1,3 +1,4 @@
+import { seedReview } from './review-fixture.ts';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
@@ -51,14 +52,26 @@ export async function startAuthRuntime(
     mail?: number;
     transport?: Transport;
     simulation?: boolean;
+    reviewFixtures?: boolean;
   } = {},
 ) {
+  let database: ReturnType<typeof createIdentityDatabase> | undefined;
   const mail = {
     messages: [] as { email: string; url: string }[],
     mode: 'accept' as 'accept' | 'fail' | 'timeout',
   };
   const mailServer = createHttpServer((request, response) => {
     void (async () => {
+      if (
+        ports.reviewFixtures &&
+        request.method === 'POST' &&
+        request.url === '/seed-review' &&
+        database
+      ) {
+        response.setHeader('Content-Type', 'application/json');
+        response.end(JSON.stringify({ bindings: await seedReview(database) }));
+        return;
+      }
       if (request.method === 'GET' && request.url === '/messages') {
         response.setHeader('Content-Type', 'application/json');
         response.end(JSON.stringify(mail.messages));
@@ -98,7 +111,6 @@ export async function startAuthRuntime(
   let businessServer: Server | undefined;
   const credentialMaster = { key: randomBytes(32), version: 1 };
   const replicas: ChildProcess[] = [];
-  let database: ReturnType<typeof createIdentityDatabase> | undefined;
   let created = false;
   let serving = false;
   let interrupted = false;

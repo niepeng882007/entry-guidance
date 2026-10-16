@@ -199,3 +199,34 @@ pnpm exec playwright test -c playwright.auth.config.ts test/auth/browser/assets.
 ```
 
 浏览器测试使用固定 4180–4182 端口；完整 `pnpm check` 还使用旧入口 4179，避免多个 worktree 同时占用这些端口。测试需先构建；模拟浏览器不等于实体手机和真实 Binance 验收。
+
+## 完整交易账本（票据 11）
+
+新 `/review` 与 `/review/trades/:id` 从 PostgreSQL 读取当前用户活跃绑定的周期及证据。`src/review-reader.ts` 提供可等待的读取边界，原 SQLite 同步调用继续保留；摘要和交易校验沿用旧实现。`review_cycle` 按归属实例、来源和稳定周期 ID 隔离，金额为字符串；列表不携带完整证据，详情通过受保护 Node 直连返回，包含原始订单、成交、资金费与缺口，不经过 Next 代理大 JSON。
+
+本票不提供同步、订单主列表、笔记或方案对照操作。真实新账户的空账本是正常状态；同步与归并由票据 12 接入。页面进入、主动筛选/翻页和列表/详情切换读取本地账本；隐藏/离线取消请求，恢复可见只确认身份，保留已有内容与筛选输入，不自动重读账本。退出、不同登录用户及绑定代次变化不会恢复旧私有内容。
+
+定向检查（先 `pnpm build`）：
+
+```sh
+node --test test/auth/review.test.ts test/review-ledger.test.ts
+pnpm exec playwright test -c playwright.auth.config.ts test/auth/browser/review.spec.ts
+```
+
+### 票据 11 人工验证
+
+1. 使用 Node 24.22.0、pnpm 11.7.0 并启动 Docker。在当前分支运行 `pnpm build`，再运行 `pnpm demo:auth`。访问 <http://127.0.0.1:3100/login>。
+2. 普通窗口登录 `alice@example.test`，无痕窗口登录 `bob@example.test`，密码均为 `synthetic-login-only-01`。分别在连接设置提交 `synthetic-key-alice` / `synthetic-secret-alice` 和 `synthetic-key-bob` / `synthetic-secret-bob`。这些全是合成夹具值，不能输入真实凭据。
+3. 在另一个终端运行以下命令，将周期写入刚才两个绑定各自的临时 PostgreSQL 账本。此路由仅属于本机测试运行器，生产服务没有对应入口；未绑定的合成用户不会写入记录。
+
+   ```sh
+   curl --fail --request POST http://127.0.0.1:3102/seed-review
+   ```
+
+4. 从工作台进入“完整交易”。甲共 25 条，乙共 2 条；甲首页 20 条，第二页 5 条。打开两个用户都存在的 `cycle-00`，净盈亏分别为 `9.8 USDT`、`29.8 USDT`。页面显示模拟来源及未发现历史范围的提示。
+5. 甲第二页打开 `missing-cost`：已实现盈亏 `10 USDT`，手续费和净盈亏待确认；打开 `missing-start`：起点、开仓时间和净盈亏待确认，已知成交仍可展开。检查订单、逐笔成交、资金费和原始证据。浏览器后退应回到第二页，详情 URL 可直接打开。
+6. 按北京时间开仓日期筛选 `2026-10-14`：甲匹配 24 条，未知起点被排除；`2026-10-15` 无匹配记录。选择交易对、翻页、进入详情再返回，条件保持。反向日期应报错，不能显示为已确认的零记录。
+7. 在筛选框填写日期但先不提交，切到其他标签页再返回：输入和原结果保留。Network 中复盘请求没有定时轮询或返回后重读，也没有 `/account/` 资产请求。离线时保留旧结果提示，联网后点击“重新读取”。
+8. 同一浏览器另开复盘标签并退出登录：原标签私有内容清除，后退不能恢复；重新登录另一用户不会显示前一用户账本。检查 320px、390px、1280px：仅表格内部横向滚动，Tab 与 Enter 可操作，重新读取后按钮焦点保持。
+
+Ctrl-C 停止演示会删除临时数据库，再次启动需要重新绑定并注入样本。自动测试另覆盖非法参数、详情越权、换 Key 后旧授权拒绝、超过 4.5 MiB 证据直传及无损金额；本地合成验收不代表真实 Neon/Binance、实体手机或生产部署通过。

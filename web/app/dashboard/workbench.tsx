@@ -174,6 +174,9 @@ export default function Workbench({
             连接设置
           </a>
         )}
+        <a className="button button--text" href="/review?view=cycles">
+          完整交易
+        </a>
       </nav>
       <p className="eyebrow">个人资料</p>
       {profile ? (

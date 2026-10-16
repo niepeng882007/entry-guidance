@@ -84,6 +84,7 @@ model BinanceBinding {
   credentialVersion Int @default(1)
   keyVersion Int
   sealedCredential String
+  reviewCycles ReviewCycle[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@unique([source, uid])
@@ -118,4 +119,15 @@ model BinanceReadRequest {
   expiresAt DateTime
   @@index([priority, createdAt])
   @@map("binance_read_request")
+}
+
+model ReviewCycle {
+  bindingId String
+  binding BinanceBinding @relation(fields: [bindingId], references: [id], onDelete: Restrict)
+  source String
+  id String
+  summary Json
+  payload Json
+  @@id([bindingId, source, id])
+  @@map("review_cycle")
 }
