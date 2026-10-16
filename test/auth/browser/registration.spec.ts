@@ -4,7 +4,7 @@ test('public site and two registrations support recovery, keyboard, narrow scree
   page,
   request,
   browserName,
-}) => {
+}, testInfo) => {
   test.setTimeout(90000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));

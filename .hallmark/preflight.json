@@ -13,5 +13,24 @@
   "sources": [
     "public/style.css:10 (tokens and system fonts)",
     "package.json (existing Next/React, no motion dependency)"
-  ]
+  ],
+  "validation": {
+    "command": "pnpm check",
+    "nodeTests": 385,
+    "browserTests": 188,
+    "publicRegistrationBrowsers": [
+      "Chromium",
+      "WebKit"
+    ],
+    "viewports": [
+      320,
+      375,
+      390,
+      414,
+      768,
+      1280
+    ],
+    "physicalPhone": false,
+    "realMailDelivery": false
+  }
 }
