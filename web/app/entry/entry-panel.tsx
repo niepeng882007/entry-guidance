@@ -72,7 +72,7 @@ export default function EntryPanel(props: EntryProps) {
               <span className="field-label">合约</span>
               <select
                 aria-label="合约"
-                className="field-control"
+                className="field-control field-control--select"
                 value={input.symbol}
                 onChange={(event) => change('symbol', event.target.value)}
               >
@@ -86,7 +86,7 @@ export default function EntryPanel(props: EntryProps) {
               <span className="field-label">方向</span>
               <select
                 aria-label="方向"
-                className="field-control"
+                className="field-control field-control--select"
                 value={input.side}
                 onChange={(event) => change('side', event.target.value)}
               >
@@ -99,7 +99,7 @@ export default function EntryPanel(props: EntryProps) {
               <span className="field-label">预算方式</span>
               <select
                 aria-label="预算方式"
-                className="field-control"
+                className="field-control field-control--select"
                 value={input.budgetMode}
                 onChange={(event) => change('budgetMode', event.target.value)}
               >
@@ -111,7 +111,7 @@ export default function EntryPanel(props: EntryProps) {
               <span className="field-label">止损方式</span>
               <select
                 aria-label="止损方式"
-                className="field-control"
+                className="field-control field-control--select"
                 value={input.stopMode}
                 onChange={(event) => change('stopMode', event.target.value)}
               >
