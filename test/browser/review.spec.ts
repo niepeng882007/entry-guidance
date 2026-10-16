@@ -733,7 +733,7 @@ test.describe('review loading with classic scrollbars', () => {
         await route.fulfill({
           response,
           // Keep short pages scrollable too so every navigation exercises classic scrollbars.
-          body: `${await response.text()}\nhtml::-webkit-scrollbar { width: 16px; } .workbench { min-height: calc(100vh + 1px); }`,
+          body: `${await response.text()}\nhtml::-webkit-scrollbar { width: 16px; } .workbench { min-height: 200vh; }`,
         });
       });
       await page.goto('/');
