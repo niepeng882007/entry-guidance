@@ -223,6 +223,12 @@ p {
   cursor: pointer;
   white-space: nowrap;
 }
+.button--action-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
 .button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -1975,5 +1981,84 @@ p {
   }
   .review-page__detail .details__value {
     max-width: 100%;
+  }
+}
+
+/* Hallmark · macrostructure: Product field guide · tone: austere · anchor hue: neutral
+ * genre: modern-minimal · theme: existing monochrome · nav: inline · footer: inline-rule
+ * audience: Binance perpetual users · use: register · enrichment: none
+ * Project constraint: existing tokens, system fonts and single stylesheet.
+ * Hallmark · pre-emit critique: P5 H4 E4 S5 R5 V4
+ */
+.public-site {
+  max-width: 1040px;
+  padding-block: var(--space-24) var(--space-48);
+}
+.public-site__nav,
+.public-site__footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-24);
+  flex-wrap: wrap;
+}
+.public-site__nav a,
+.public-site__footer a {
+  white-space: nowrap;
+  color: var(--color-text);
+}
+.public-site__brand {
+  font-weight: 700;
+  color: var(--color-text);
+}
+.public-site__intro {
+  padding-block: var(--space-48);
+  max-width: 680px;
+}
+.public-site__title {
+  font-size: clamp(36px, 6vw, 64px);
+  line-height: 1.2;
+  letter-spacing: -0.04em;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  margin-block: var(--space-20) var(--space-24);
+}
+.public-site__lead {
+  font-size: 18px;
+  margin-bottom: var(--space-28);
+}
+.public-site__section {
+  border-top: 1px solid var(--color-border);
+  padding-block: var(--space-32);
+}
+.public-site__section h2 {
+  font-size: 22px;
+  margin: 0 0 var(--space-24);
+}
+.public-site__workflow {
+  margin: 0;
+}
+.public-site__workflow > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: var(--space-24);
+  padding-block: var(--space-20);
+}
+.public-site__workflow dt {
+  font-weight: 600;
+}
+.public-site__workflow dd {
+  margin: 0;
+  color: var(--color-muted);
+}
+.public-site__footer {
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-24);
+  color: var(--color-muted);
+}
+@media (max-width: 560px) {
+  .public-site__workflow > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-8);
   }
 }

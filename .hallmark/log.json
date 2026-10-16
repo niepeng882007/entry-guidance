@@ -1,5 +1,17 @@
 [
   {
+    "date": "2026-10-16",
+    "scope": "public-site",
+    "macrostructure": "Product field guide",
+    "theme": "monochrome (existing system)",
+    "enrichment": "none",
+    "brief": "官网产品正文、注册与验证入口，区分当前身份功能与待迁移交易功能",
+    "project_overrides": [
+      "existing tokens and single public/style.css",
+      "no external fonts or new tokens.css"
+    ]
+  },
+  {
     "date": "2026-10-14",
     "scope": "review-module",
     "macrostructure": "Filterable ledger + separate trade detail",

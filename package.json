@@ -19,7 +19,7 @@
     "prepare": "husky",
     "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm build && pnpm test && pnpm test:browser && pnpm test:auth && pnpm test:browser:auth",
     "build:legacy": "vite build",
-    "build:web": "NEXT_TELEMETRY_DISABLED=1 next build web",
+    "build:web": "node scripts/public-security.ts --prepare && NEXT_TELEMETRY_DISABLED=1 next build web && node scripts/public-security.ts",
     "db:generate": "CHECKPOINT_DISABLE=1 prisma generate",
     "start:web": "NEXT_TELEMETRY_DISABLED=1 next start web --hostname 127.0.0.1 --port 3100",
     "dev:web": "NEXT_TELEMETRY_DISABLED=1 next dev web --hostname 127.0.0.1 --port 3100",
