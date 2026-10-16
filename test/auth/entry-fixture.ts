@@ -155,6 +155,20 @@ export function entryScenarios() {
         'limit-inconsistent',
         'limit-missing-stop',
         'limit-missing-cost',
+        ...['two-', 'two-limit-'].flatMap((prefix) =>
+          [
+            'protected',
+            'final-only',
+            'near-filled',
+            'near-canceled',
+            'partial-canceled',
+            'partial-covered',
+            'final-canceled',
+            'missing-pnl',
+            'missing-attribution',
+            'missing-cost',
+          ].map((scenario) => `${prefix}${scenario}`),
+        ),
       ].includes(String(value.scenario))
     )
       throw new Error('Invalid synthetic entry scenario');
@@ -164,8 +178,27 @@ export function entryScenarios() {
     const result = await entryTransport(url, headers, signal);
     const selected = scenarios.get(headers['X-MBX-APIKEY']?.includes('bob') ? 'bob' : 'alice');
     if (!selected || selected.scenario === 'flat') return result;
-    const { scenario, time } = selected;
+    const { time } = selected;
+    const two = selected.scenario.startsWith('two-');
+    const scenario = two ? selected.scenario.slice(4) : selected.scenario;
+    const state = scenario.replace(/^limit-/, '');
     const limit = scenario.startsWith('limit-');
+    const partialExit = two && state.startsWith('partial-');
+    const nearFilled =
+      two &&
+      [
+        'near-filled',
+        'final-canceled',
+        'missing-pnl',
+        'missing-attribution',
+        'missing-cost',
+      ].includes(state);
+    const exited = partialExit || nearFilled;
+    let remaining = '0.4';
+    if (nearFilled) remaining = '0.2';
+    if (partialExit) remaining = '0.3';
+    const closed = partialExit ? '0.1' : '0.2';
+    const realizedPnl = partialExit ? '-0.1' : '-0.2';
     const unfilled = ['limit-waiting', 'limit-unfilled-canceled'].includes(scenario);
     const quantity = unfilled ? '0' : scenario === 'limit-partial' ? '0.1' : '0.4';
     const active = [
@@ -199,6 +232,81 @@ export function entryScenarios() {
       reduceOnly: false,
       closePosition: false,
     };
+    const exitOrder = {
+      ...order,
+      orderId: 11,
+      side: 'SELL',
+      type: 'MARKET',
+      origType: 'STOP_MARKET',
+      status: partialExit ? 'CANCELED' : 'FILLED',
+      origQty: '0.2',
+      executedQty: closed,
+      avgPrice: '99',
+      price: '0',
+      reduceOnly: true,
+      time: time + 10,
+      updateTime: time + 10,
+    };
+    const finalStop = {
+      symbol: 'BTCUSDT',
+      algoId: 20,
+      algoType: 'CONDITIONAL',
+      algoStatus: two && state === 'final-canceled' ? 'CANCELED' : 'NEW',
+      orderType: 'STOP_MARKET',
+      side: 'SELL',
+      positionSide: 'BOTH',
+      quantity: '0',
+      triggerPrice: scenario === 'wrong-stop' ? '97' : '98',
+      workingType: 'MARK_PRICE',
+      priceProtect: false,
+      closePosition: true,
+      reduceOnly: false,
+      actualOrderId: '',
+      triggerTime: 0,
+      createTime: time,
+      updateTime: time,
+      timeInForce: 'GTC',
+      goodTillDate: 0,
+    };
+    let nearStatus = 'NEW';
+    if (state === 'near-canceled') nearStatus = 'CANCELED';
+    if (exited) nearStatus = 'FINISHED';
+    const nearStop = {
+      ...finalStop,
+      algoId: 21,
+      algoStatus: nearStatus,
+      quantity: '0.2',
+      triggerPrice: '99',
+      closePosition: false,
+      reduceOnly: true,
+      actualOrderId: exited ? '11' : '',
+      triggerTime: exited ? time + 10 : 0,
+      updateTime: exited ? time + 10 : time,
+    };
+    const replacement = {
+      ...nearStop,
+      algoId: 22,
+      algoStatus: 'NEW',
+      quantity: '0.1',
+      actualOrderId: '',
+      triggerTime: 0,
+      createTime: time + 20,
+      updateTime: time + 20,
+    };
+    const activeStops = [
+      ...(finalStop.algoStatus === 'NEW' ? [finalStop] : []),
+      ...(two && state === 'protected' ? [nearStop] : []),
+      ...(two && state === 'partial-covered' ? [replacement] : []),
+    ];
+    if (two && url.pathname === '/fapi/v1/allAlgoOrders')
+      return {
+        status: 200,
+        body: [
+          finalStop,
+          ...(['final-only', 'missing-attribution'].includes(state) ? [] : [nearStop]),
+          ...(state === 'partial-covered' ? [replacement] : []),
+        ],
+      };
     if (limit && url.pathname === '/fapi/v1/openOrders')
       return { status: 200, body: active && scenario !== 'limit-inconsistent' ? [order] : [] };
     if (scenario === 'failed' && url.pathname === '/fapi/v1/premiumIndex')
@@ -210,7 +318,12 @@ export function entryScenarios() {
         body: {
           ...(result.body as object),
           positions: [
-            { symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: quantity, isolated: true },
+            {
+              symbol: 'BTCUSDT',
+              positionSide: 'BOTH',
+              positionAmt: two ? remaining : quantity,
+              isolated: true,
+            },
           ],
         },
       };
@@ -220,7 +333,7 @@ export function entryScenarios() {
         body: [
           {
             ...entryFixture().position,
-            positionAmt: quantity,
+            positionAmt: two ? remaining : quantity,
             entryPrice: unfilled ? '0' : '100',
             liquidationPrice: '90',
             isolatedWallet: '4',
@@ -252,9 +365,28 @@ export function entryScenarios() {
                 commissionAsset: 'USDT',
                 realizedPnl: '0',
               },
+              ...(exited
+                ? [
+                    {
+                      symbol: 'BTCUSDT',
+                      id: 2,
+                      orderId: 11,
+                      side: 'SELL',
+                      positionSide: 'BOTH',
+                      time: time + 10,
+                      price: '99',
+                      qty: closed,
+                      quoteQty: partialExit ? '9.9' : '19.8',
+                      commission: partialExit ? '0.0099' : '0.0198',
+                      commissionAsset: 'USDT',
+                      realizedPnl,
+                    },
+                  ]
+                : []),
             ],
       };
-    if (url.pathname === '/fapi/v1/allOrders') return { status: 200, body: [order] };
+    if (url.pathname === '/fapi/v1/allOrders')
+      return { status: 200, body: [order, ...(exited ? [exitOrder] : [])] };
     if (url.pathname === '/fapi/v1/income')
       return {
         status: 200,
@@ -269,37 +401,24 @@ export function entryScenarios() {
                 time,
                 tranId: 123,
               },
+              ...(exited && state !== 'missing-pnl'
+                ? [
+                    {
+                      symbol: 'BTCUSDT',
+                      incomeType: 'REALIZED_PNL',
+                      income: realizedPnl,
+                      asset: 'USDT',
+                      tradeId: '2',
+                      time: time + 10,
+                    },
+                  ]
+                : []),
             ],
       };
     if (url.pathname === '/fapi/v1/openAlgoOrders')
       return {
         status: 200,
-        body:
-          unfilled || scenario.endsWith('missing-stop')
-            ? []
-            : [
-                {
-                  symbol: 'BTCUSDT',
-                  algoId: 20,
-                  algoType: 'CONDITIONAL',
-                  algoStatus: 'NEW',
-                  orderType: 'STOP_MARKET',
-                  side: 'SELL',
-                  positionSide: 'BOTH',
-                  quantity: '0',
-                  triggerPrice: scenario === 'wrong-stop' ? '97' : '98',
-                  workingType: 'MARK_PRICE',
-                  priceProtect: false,
-                  closePosition: true,
-                  reduceOnly: false,
-                  actualOrderId: '',
-                  triggerTime: 0,
-                  createTime: time,
-                  updateTime: time,
-                  timeInForce: 'GTC',
-                  goodTillDate: 0,
-                },
-              ],
+        body: unfilled || scenario.endsWith('missing-stop') ? [] : activeStops,
       };
     return result;
   };

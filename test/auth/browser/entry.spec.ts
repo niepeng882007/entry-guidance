@@ -28,7 +28,7 @@ async function fillPlan(page: Page) {
   await page.getByLabel('合约', { exact: true }).selectOption('BTCUSDT');
   await page.getByLabel('方向', { exact: true }).selectOption('long');
   await page.getByLabel('亏损预算', { exact: true }).fill('20');
-  await page.getByLabel('止损方式').selectOption('price');
+  await page.getByLabel('止损方式', { exact: true }).selectOption('price');
   await page.getByLabel('止损值', { exact: true }).fill('98');
   await page.getByLabel('杠杆倍数').fill('10');
   await page.getByLabel('滑点预留（%）').fill('1');
@@ -42,7 +42,7 @@ test('single market entry previews, saves and copies a fixed card, then conserva
   await login(page);
   await connect(page);
   await page.goto('/entry');
-  await expect(page.getByRole('heading', { name: '单层开仓' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '开仓与止损' })).toBeVisible();
   await fillPlan(page);
   await expect(page.getByText('草稿数量：')).toBeVisible();
   const button = page.getByRole('button', { name: '刷新并生成开仓卡' });
@@ -81,6 +81,9 @@ test('single market entry previews, saves and copies a fixed card, then conserva
     const key = Object.keys(localStorage).find((key) => key.startsWith('entry-current:'))!;
     const record = JSON.parse(localStorage.getItem(key)!);
     delete record.input.limitPrice;
+    delete record.input.nearStopMode;
+    delete record.input.nearStop;
+    delete record.input.nearPercent;
     localStorage.setItem(key, JSON.stringify(record));
   });
   await page.reload();
@@ -92,6 +95,116 @@ test('single market entry previews, saves and copies a fixed card, then conserva
   await expect(page.getByRole('region', { name: '成交与止损核验' })).toContainText('尚未成交');
   await expect(card.getByRole('button', { name: '复制数量' })).toBeEnabled();
 });
+
+for (const entryType of ['MARKET', 'LIMIT']) {
+  test(`two-level ${entryType} keeps its fixed card through near exits, recovery and edits`, async ({
+    page,
+    request,
+  }) => {
+    await login(page);
+    await connect(page);
+    await page.goto('/entry');
+    await fillPlan(page);
+    await page.getByLabel('止损层数').selectOption('two');
+    await expect(page.getByLabel('近端比例（%）')).toHaveValue('70');
+    await expect(page.getByLabel('近端止损值', { exact: true })).toHaveValue('');
+    await page.getByLabel('近端止损方式').selectOption('price');
+    await page.getByLabel('近端止损值', { exact: true }).fill('99');
+    await page.getByLabel('入场方式').selectOption(entryType);
+    if (entryType === 'LIMIT') await page.getByLabel('限价委托价（USDT）').fill('100');
+    await page.getByRole('button', { name: '刷新并生成开仓卡' }).click();
+    const card = page.getByRole('region', { name: '本次开仓卡' });
+    const checked = page.getByRole('region', { name: '成交与止损核验' });
+    await expect(
+      card.getByText(`${entryType === 'MARKET' ? '0.4' : '0.495'} BTC`, { exact: true }),
+    ).toBeVisible();
+    await expect(card).toContainText('近端部分退出');
+    await expect(card).toContainText('最终整仓退出');
+    await expect(card.getByText('99 USDT', { exact: true })).toBeVisible();
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: async (text: string) => {
+            document.documentElement.dataset.copied = text;
+          },
+        },
+      });
+    });
+    await card.getByRole('button', { name: '复制近端数量' }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('html')).toHaveAttribute(
+      'data-copied',
+      entryType === 'MARKET' ? '0.2' : '0.3',
+    );
+    for (const width of [320, 390, 1280]) {
+      await page.setViewportSize({ width, height: 844 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
+    }
+    async function scenario(value: string) {
+      expect(
+        (
+          await request.post('http://127.0.0.1:4182/entry-scenario', {
+            data: {
+              user: 'alice',
+              scenario: `two-${entryType === 'LIMIT' ? 'limit-' : ''}${value}`,
+            },
+          })
+        ).ok(),
+      ).toBe(true);
+      await card.getByRole('button', { name: '重新查询原方案' }).click();
+    }
+    await scenario('protected');
+    await expect(checked).toContainText('查询时点核验通过');
+    await expect(checked).toContainText('有效待触发');
+    await scenario('near-filled');
+    await expect(checked).toContainText('查询时点核验通过');
+    await expect(checked).toContainText('已执行');
+    await expect(checked).toContainText('0.0598 USDT');
+    await expect(checked).toContainText('1.875204 USDT');
+    await expect(card).toContainText('固定预算：20 USDT');
+    await page.reload();
+    await expect(checked).toContainText('查询时点核验通过');
+    await expect(page.getByLabel('近端止损值', { exact: true })).toHaveValue('99');
+    for (const [key, value] of [
+      ['近端比例（%）', '60'],
+      ['近端止损值', '98.9'],
+    ] as const) {
+      await page.getByLabel(key, { exact: true }).fill(value);
+      await expect(checked).toHaveCount(0);
+      await expect(card.getByRole('button', { name: '复制近端数量' })).toBeDisabled();
+      await page.reload();
+      await expect(page.getByLabel(key, { exact: true })).toHaveValue(value);
+      await expect(checked).toHaveCount(0);
+      await card.getByRole('button', { name: '恢复原方案输入并核验' }).click();
+      await expect(checked).toContainText('查询时点核验通过');
+    }
+    await page.getByLabel('近端止损方式').selectOption('percent');
+    await expect(checked).toHaveCount(0);
+    await card.getByRole('button', { name: '恢复原方案输入并核验' }).click();
+    await expect(checked).toContainText('查询时点核验通过');
+    await scenario('partial-canceled');
+    await expect(checked).toContainText('需要处理');
+    await expect(checked).toContainText('近端计划仍待补齐');
+    await scenario('partial-covered');
+    await expect(checked).toContainText('查询时点核验通过');
+    await expect(checked).toContainText('部分执行，剩余近端有效待触发');
+    await scenario('near-canceled');
+    await expect(checked).toContainText('需要处理');
+    await scenario('final-canceled');
+    await expect(checked).toContainText('需要处理');
+    await scenario('missing-pnl');
+    await expect(checked).toContainText('无法完整核验');
+    await expect(checked).not.toContainText('查询时点核验通过');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({
+      path: test.info().outputPath(`two-level-${entryType}-phone.png`),
+      fullPage: true,
+    });
+  });
+}
 
 test('failed generation, offline state and a late response cannot enable a card', async ({
   page,

@@ -22,6 +22,9 @@ const initial: EntryInput = {
   entryType: 'MARKET',
   limitPrice: '',
   stopLevels: 'single',
+  nearStopMode: 'percent',
+  nearStop: '',
+  nearPercent: '70',
   budgetMode: 'amount',
   budget: '',
   stopMode: 'percent',
@@ -114,7 +117,9 @@ export function useEntryPlan({
   }
   const matches = (left: EntryInput, right: EntryInput) =>
     Object.keys(initial).every(
-      (key) => (left[key as keyof EntryInput] ?? '') === (right[key as keyof EntryInput] ?? ''),
+      (key) =>
+        (left[key as keyof EntryInput] ?? initial[key as keyof EntryInput]) ===
+        (right[key as keyof EntryInput] ?? initial[key as keyof EntryInput]),
     );
   const continuing = Boolean(saved && matches(input, saved.input));
   const checkOwner = (value: Pick<SavedEntryPlan, 'userId' | 'binding'>) => {
@@ -158,7 +163,8 @@ export function useEntryPlan({
             ) ||
             Object.keys(initial).some(
               (key) =>
-                key !== 'limitPrice' && typeof local.input[key as keyof EntryInput] !== 'string',
+                !['limitPrice', 'nearStopMode', 'nearStop', 'nearPercent'].includes(key) &&
+                typeof local.input[key as keyof EntryInput] !== 'string',
             ) ||
             (local.planId !== null &&
               (typeof local.planId !== 'string' || !/^[a-f0-9-]{36}$/.test(local.planId))) ||
@@ -173,7 +179,7 @@ export function useEntryPlan({
         }
         storageBlocked.current = false;
         pendingPlanId.current = local.planId;
-        setInput(local.input);
+        setInput({ ...initial, ...local.input });
         setLastQuery(local.queriedAt);
         if (!local.planId) return;
         const response = await businessRequest(
@@ -358,6 +364,7 @@ export function useEntryPlan({
       ...input,
       [key]: value,
       ...(key === 'symbol' && input.stopMode === 'price' ? { stop: '' } : {}),
+      ...(key === 'symbol' && input.nearStopMode === 'price' ? { nearStop: '' } : {}),
     };
     setInput(next);
     remember(next, saved);
@@ -422,7 +429,7 @@ export function useEntryPlan({
   async function verify(restoreInput = false) {
     if (!saved || restoring || generating.current || !navigator.onLine || document.hidden) return;
     if (!restoreInput && !matches(input, saved.input)) return;
-    const nextInput = restoreInput ? saved.input : input;
+    const nextInput = restoreInput ? { ...initial, ...saved.input } : input;
     if (restoreInput) setInput(nextInput);
     const id = ++sequence.current;
     const controller = new AbortController();

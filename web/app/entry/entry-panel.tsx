@@ -1,5 +1,5 @@
 'use client';
-import { parseDecimal } from '../../../public/draft.js';
+import { formatDecimal, parseDecimal } from '../../../public/draft.js';
 import { useEntryPlan, type EntryProps } from './use-entry-plan.ts';
 const fields = [
   ['budget', '亏损预算'],
@@ -12,6 +12,14 @@ const fields = [
 ] as const;
 function time(value: string) {
   return new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+}
+function remainingPercent(value: string) {
+  try {
+    const near = parseDecimal(value, '近端比例');
+    return near > 0n && near < 10_000_000_000n ? formatDecimal(10_000_000_000n - near) : '—';
+  } catch {
+    return '—';
+  }
 }
 function liquidationPrice(value: string) {
   if (!value) return '无法估算';
@@ -158,6 +166,64 @@ export default function EntryPanel(props: EntryProps) {
               </select>
             </label>
             <label className="field">
+              <span className="field-label">止损层数</span>
+              <select
+                className="field-control field-control--select"
+                disabled={restoring}
+                value={input.stopLevels}
+                onChange={(event) => change('stopLevels', event.target.value)}
+              >
+                <option value="single">单层</option>
+                <option value="two">双层</option>
+              </select>
+            </label>
+            {input.stopLevels === 'two' && (
+              <>
+                <label className="field">
+                  <span className="field-label">近端止损方式</span>
+                  <select
+                    className="field-control field-control--select"
+                    disabled={restoring}
+                    value={input.nearStopMode}
+                    onChange={(event) => change('nearStopMode', event.target.value)}
+                  >
+                    <option value="percent">距离百分比</option>
+                    <option value="price">绝对价格（USDT）</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span className="field-label">近端止损值</span>
+                  <input
+                    className="field-control"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    disabled={restoring}
+                    value={input.nearStop}
+                    aria-label="近端止损值"
+                    onChange={(event) => change('nearStop', event.target.value)}
+                  />
+                  <span className="help">
+                    单位：{input.nearStopMode === 'percent' ? '%' : 'USDT'}
+                  </span>
+                </label>
+                <label className="field">
+                  <span className="field-label">近端比例（%）</span>
+                  <input
+                    className="field-control"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    disabled={restoring}
+                    value={input.nearPercent}
+                    aria-label="近端比例（%）"
+                    onChange={(event) => change('nearPercent', event.target.value)}
+                  />
+                  <span className="help">
+                    最终比例：{remainingPercent(input.nearPercent ?? '')}%；实际数量按步长取整。
+                  </span>
+                </label>
+              </>
+            )}
+            <label className="field">
               <span className="field-label">止损方式</span>
               <select
                 aria-label="止损方式"
@@ -172,7 +238,9 @@ export default function EntryPanel(props: EntryProps) {
             </label>
             {fields.map(([key, label]) => (
               <label className="field" key={key}>
-                <span className="field-label">{label}</span>
+                <span className="field-label">
+                  {key === 'stop' && input.stopLevels === 'two' ? '最终止损值' : label}
+                </span>
                 <input
                   className="field-control"
                   inputMode="decimal"
@@ -185,7 +253,8 @@ export default function EntryPanel(props: EntryProps) {
             ))}
           </div>
           <p className="help">
-            单层止损 · 逐仓 · 单向持仓 · 仅支持空仓起点。资金费与本单资金上限可留空；预算单位为{' '}
+            {input.stopLevels === 'two' ? '双层止损：初始全部仓位仍按最终止损计算。' : '单层止损。'}
+            逐仓 · 单向持仓 · 仅支持空仓起点。资金费与本单资金上限可留空；预算单位为{' '}
             {input.budgetMode === 'percent' ? '权益 %' : 'USDT'}，止损值单位为{' '}
             {input.stopMode === 'percent' ? '%' : 'USDT'}。
           </p>
@@ -211,6 +280,16 @@ export default function EntryPanel(props: EntryProps) {
                   资金约束后数量：{preview.quantity} {market?.baseAsset}
                 </p>
                 <p>资金需求：{preview.fundingRequired} USDT</p>
+                {preview.nearStop && (
+                  <p>
+                    资金约束后分层：近端 {preview.nearStop.price} USDT（距离{' '}
+                    {preview.nearStop.distance}%）， 退出 {preview.nearStop.quantity}{' '}
+                    {market?.baseAsset}（实际 {preview.nearStop.actualPercent}%）； 最终{' '}
+                    {preview.stopPrice} USDT（距离 {preview.stopDistance}%）， 计划余量{' '}
+                    {preview.finalQuantity} {market?.baseAsset}（{preview.finalPercent}
+                    %），使用整仓退出。
+                  </p>
+                )}
                 <p>
                   预估强平价：{liquidationPrice(preview.liquidationPrice)} USDT · 缓冲：
                   {preview.liquidationBuffer || '—'}%
@@ -305,7 +384,7 @@ export default function EntryPanel(props: EntryProps) {
           </div>
           <div className="copy-row">
             <div className="copy-row__content">
-              <p>绝对止损触发价</p>
+              <p>{saved.plan.nearStop ? '最终整仓退出 · 绝对止损触发价' : '绝对止损触发价'}</p>
               <p className="amount amount--card amount--copy">{saved.plan.stopPrice} USDT</p>
             </div>
             <button
@@ -316,6 +395,51 @@ export default function EntryPanel(props: EntryProps) {
               复制止损价
             </button>
           </div>
+          {saved.plan.nearStop && (
+            <>
+              <div className="copy-row">
+                <div className="copy-row__content">
+                  <p>近端部分退出 · 绝对止损触发价</p>
+                  <p className="amount amount--card amount--copy">
+                    {saved.plan.nearStop.price} USDT
+                  </p>
+                </div>
+                <button
+                  className="button button--copy"
+                  disabled={!current}
+                  onClick={() => void copy(saved.plan.nearStop!.price)}
+                >
+                  复制近端止损价
+                </button>
+              </div>
+              <div className="copy-row">
+                <div className="copy-row__content">
+                  <p>原方案近端只减仓数量</p>
+                  <p className="amount amount--card amount--copy">
+                    {saved.plan.nearStop.quantity} {saved.plan.baseAsset}
+                  </p>
+                </div>
+                <button
+                  className="button button--copy"
+                  disabled={!current}
+                  onClick={() => void copy(saved.plan.nearStop!.quantity)}
+                >
+                  复制近端数量
+                </button>
+              </div>
+              <p>
+                原近端比例：{saved.plan.nearStop.percent}% · 取整后实际比例：
+                {saved.plan.nearStop.actualPercent}% · 距离：{saved.plan.nearStop.distance}%
+              </p>
+              <p>
+                原计划最终余量：{saved.plan.finalQuantity} {saved.plan.baseAsset}（
+                {saved.plan.finalPercent}%）· 距离：{saved.plan.stopDistance}%
+              </p>
+              <p className="help">
+                最终止损始终使用整仓退出，覆盖触发时全部剩余仓位；不要把上述计划余量填为最终止损固定数量。近端与最终覆盖不相加。
+              </p>
+            </>
+          )}
           <p>固定预算：{saved.plan.budget} USDT</p>
           <p>
             计划亏损：{saved.plan.plannedLoss} USDT · 资金需求：{saved.plan.fundingRequired} USDT
@@ -331,6 +455,8 @@ export default function EntryPanel(props: EntryProps) {
             在 Binance 手动设置逐仓、单向持仓和所选杠杆，
             {saved.plan.execution.entryType === 'LIMIT' ? '按原委托价使用普通 GTC 限价' : '市价'}
             开仓并附带整仓止损市价；使用标记价触发，关闭价格保护。所有交易均由你执行。
+            {saved.plan.nearStop &&
+              '先确认最终止损覆盖整仓，再补近端固定数量、只减仓止损市价，同样使用标记价并关闭价格保护。成交量变化后按核验中的当前近端待退出量处理，原卡数量不随之改变。'}
           </p>
           <p className="help">
             输入变化、离开页面或数据失效后撤销当前结果。已有持仓请恢复原方案并核验，不要重新生成。
@@ -391,6 +517,9 @@ export default function EntryPanel(props: EntryProps) {
             {[
               ['实际持仓数量', verification.quantity, saved?.plan.baseAsset],
               ['实际成交均价', verification.entryPrice, 'USDT'],
+              ['本单已实现损益', verification.realizedPnl, 'USDT'],
+              ['当前近端待退出量', verification.nearQuantity, saved?.plan.baseAsset],
+              ['实际入场分层比例（近端）', verification.nearActualPercent, '%'],
               ['已付手续费', verification.paidCommission, 'USDT'],
               ['已付资金费', verification.paidFunding, 'USDT'],
               ['剩余资金费预留', verification.remainingFunding, 'USDT'],
@@ -412,6 +541,7 @@ export default function EntryPanel(props: EntryProps) {
             )}
           </dl>
           {verification.coverage && <p>止损覆盖：{verification.coverage}</p>}
+          {verification.nearStatus && <p>近端状态：{verification.nearStatus}</p>}
           {verification.pendingEntries?.map((order) => (
             <p key={order.orderId}>
               入场余单 {order.orderId}：已成交 {order.filledQuantity}，剩余{' '}

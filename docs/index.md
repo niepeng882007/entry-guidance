@@ -32,7 +32,7 @@
 
 ## 模块地图
 
-多用户单层本单的可信恢复与核验由 `src/bindings/entry.ts`、`web/app/entry/` 承接；原方案与查询证据持久化到 PostgreSQL。浏览器只保存按归属隔离的标识和输入，恢复后重新查询。实现及人工步骤见[票据 07 开发说明](development.md#单层核验与本单恢复票据-07)。
+多用户单层及双层本单的可信恢复与核验由 `src/bindings/entry.ts`、`web/app/entry/` 承接；原方案与查询证据持久化到 PostgreSQL。浏览器只保存按归属隔离的标识和输入，恢复后重新查询。实现及人工步骤见[票据 07 开发说明](development.md#单层核验与本单恢复票据-07)和[票据 09 双层验收](development.md#票据-09-人工验证)。
 
 自备模型 Key 设置位于 `web/app/dashboard/ai/`、`web/app/dashboard/model-settings.tsx` 与 `src/model-key.ts`，通过用户级授权管理加密凭据、版本和失效记录；配置与合成人工验收见[开发文档](development.md#自备模型-key票据-19)。
 

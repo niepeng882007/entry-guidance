@@ -62,8 +62,7 @@ export function createBoundEntryService(
       plan.source !== saved.source ||
       plan.id !== saved.id ||
       !['MARKET', 'LIMIT'].includes(plan.execution.entryType) ||
-      (plan.execution.entryType === 'LIMIT' && plan.execution.timeInForce !== 'GTC') ||
-      plan.nearStop
+      (plan.execution.entryType === 'LIMIT' && plan.execution.timeInForce !== 'GTC')
     )
       throw new BindingError(409, '原方案归属或来源不一致，不能恢复本单。');
     return {
@@ -169,13 +168,8 @@ export function createBoundEntryService(
       if (!input || typeof input !== 'object' || Array.isArray(input))
         throw new BindingError(400, '计划输入无效。');
       const fields = input as Record<string, unknown>;
-      if (
-        (fields.entryType !== undefined &&
-          !['MARKET', 'LIMIT'].includes(String(fields.entryType))) ||
-        (fields.stopLevels !== undefined && fields.stopLevels !== 'single') ||
-        ['nearStop', 'nearStopMode', 'nearPercent'].some((key) => key in fields)
-      )
-        throw new BindingError(400, '当前仅支持单层市价或 GTC 限价开仓。');
+      if (fields.entryType !== undefined && !['MARKET', 'LIMIT'].includes(String(fields.entryType)))
+        throw new BindingError(400, '当前仅支持市价或 GTC 限价开仓。');
       return accounts.strict(claims, signal, async (config, binding) => {
         const plan = await createPlan(config, input);
         if (plan.reviewAccountId !== binding.uid)

@@ -20,6 +20,13 @@ const input = {
   entryType: 'MARKET',
   stopLevels: 'single',
 };
+const twoInput = {
+  ...input,
+  stopLevels: 'two',
+  nearStopMode: 'price',
+  nearStop: '99',
+  nearPercent: '70',
+};
 async function login(runtime: Runtime, index = 0) {
   const user = users[index]!;
   const response = await fetch(`${runtime.webOrigin}/api/auth/sign-in/email`, {
@@ -73,6 +80,116 @@ async function request(runtime: Runtime, cookie: string, path: string, body?: un
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 }
+void test('two-level plans keep final-stop sizing and restore both fixed stops only for their owner', async (t) => {
+  const runtime = await startAuthRuntime({ transport: entryTransport });
+  t.after(() => runtime.close());
+  const alice = await login(runtime);
+  const bob = await login(runtime, 1);
+  await bind(runtime, alice);
+  await bind(runtime, bob, 1);
+  for (const entryType of ['MARKET', 'LIMIT']) {
+    const response = await request(runtime, alice, 'plans', {
+      ...twoInput,
+      entryType,
+      limitPrice: '100',
+    });
+    assert.equal(response.status, 201, await response.clone().text());
+    const saved = await response.json();
+    assert.equal(saved.plan.quantity, entryType === 'MARKET' ? '0.4' : '0.495');
+    assert.equal(saved.plan.nearStop.quantity, entryType === 'MARKET' ? '0.2' : '0.3');
+    assert.equal(saved.plan.finalQuantity, entryType === 'MARKET' ? '0.2' : '0.195');
+    assert.equal(saved.plan.nearStop.price, '99');
+    assert.equal(saved.plan.nearStop.percent, '70');
+    assert.equal(saved.plan.stopPrice, '98');
+    assert.equal(saved.plan.budget, '20');
+    await runtime.restartBusiness();
+    const restored = await request(runtime, alice, `plans/${saved.plan.id}`);
+    assert.equal(restored.status, 200);
+    assert.deepEqual(await restored.json(), saved);
+    assert.equal((await request(runtime, bob, `plans/${saved.plan.id}`, undefined, 1)).status, 404);
+    assert.equal((await request(runtime, bob, `plans/${saved.plan.id}/verify`, {}, 1)).status, 404);
+    const checked = await (
+      await request(runtime, alice, `plans/${saved.plan.id}/verify`, {})
+    ).json();
+    assert.equal(checked.verification.status, 'waiting');
+    assert.deepEqual(checked.plan, saved.plan);
+  }
+});
+void test('two-level verification reconciles near exits and costs without changing the original allocation', async (t) => {
+  const scenarios = entryScenarios();
+  const runtime = await startAuthRuntime({ transport: scenarios.transport });
+  t.after(() => runtime.close());
+  const cookie = await login(runtime);
+  await bind(runtime, cookie);
+  for (const entryType of ['MARKET', 'LIMIT']) {
+    scenarios.select({ user: 'alice', scenario: 'flat' });
+    const created = await request(runtime, cookie, 'plans', {
+      ...twoInput,
+      entryType,
+      limitPrice: '100',
+    });
+    assert.equal(created.status, 201, await created.clone().text());
+    const saved = await created.json();
+    for (const [scenario, status, quantity, nearQuantity, commission, loss] of [
+      ['protected', 'verified', '0.4', '0.2', '0.04', '2.270808'],
+      ['final-only', 'needs-action', '0.4', '0.2', '0.04', '2.270808'],
+      ['near-canceled', 'needs-action', '0.4', '0.2', '0.04', '2.270808'],
+      ['near-filled', 'verified', '0.2', '0', '0.0598', '1.875204'],
+      ['partial-canceled', 'needs-action', '0.3', '0.1', '0.0499', '2.073006'],
+      ['partial-covered', 'verified', '0.3', '0.1', '0.0499', '2.073006'],
+      ['final-canceled', 'needs-action', '0.2', '0', '0.0598', '1.875204'],
+    ]) {
+      scenarios.select({
+        user: 'alice',
+        scenario: `two-${entryType === 'LIMIT' ? 'limit-' : ''}${scenario}`,
+      });
+      const response = await request(runtime, cookie, `plans/${saved.plan.id}/verify`, {});
+      assert.equal(response.status, 200, await response.clone().text());
+      const result = await response.json();
+      const checked = result.verification;
+      assert.equal(checked.status, status, `${scenario}: ${JSON.stringify(checked)}`);
+      assert.equal(checked.quantity, quantity);
+      assert.equal(checked.nearQuantity, nearQuantity);
+      assert.equal(checked.paidCommission, commission);
+      assert.equal(checked.plannedLoss, loss);
+      assert.equal(checked.remainingFunding, '0.7');
+      assert.equal(checked.nearActualPercent, '50');
+      assert.equal(checked.reviewRetention, 'saved');
+      assert.deepEqual(result.plan, saved.plan);
+      if (status === 'verified') assert.equal(checked.coverage, '整仓退出');
+    }
+    for (const scenario of ['missing-pnl', 'missing-attribution', 'missing-cost']) {
+      scenarios.select({
+        user: 'alice',
+        scenario: `two-${entryType === 'LIMIT' ? 'limit-' : ''}${scenario}`,
+      });
+      const response = await request(runtime, cookie, `plans/${saved.plan.id}/verify`, {});
+      if (scenario === 'missing-cost') {
+        assert.equal(response.status, 502);
+        assert.equal((await response.json()).verification, undefined);
+        continue;
+      }
+      assert.equal(response.status, 200, scenario);
+      const result = await response.json();
+      assert.equal(result.verification.status, 'incomplete');
+      assert.equal(result.verification.plannedLoss, undefined);
+      assert.deepEqual(result.plan, saved.plan);
+    }
+    assert.equal(
+      (
+        await request(runtime, cookie, `plans/${saved.plan.id}/verify`, {
+          nearStop: '97',
+          budget: '999',
+        })
+      ).status,
+      400,
+    );
+    await runtime.restartBusiness();
+    const restored = await (await request(runtime, cookie, `plans/${saved.plan.id}`)).json();
+    assert.deepEqual(restored.plan, saved.plan);
+    assert.equal(restored.verification, undefined);
+  }
+});
 void test('restoring a saved plan never restores approval and checking a flat account keeps the original budget', async (t) => {
   const runtime = await startAuthRuntime({ transport: entryTransport });
   t.after(() => runtime.close());
