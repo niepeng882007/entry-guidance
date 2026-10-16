@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { businessRequest, BusinessRequestError } from './business-request.ts';
 import ConnectionsForm, { type BindingMetadata } from './connections-form.tsx';
 import SecuritySessions from './security-sessions.tsx';
+import EntryPanel from '../entry/entry-panel.tsx';
 import AccountPanel from '../account/account-panel.tsx';
 import ModelSettings from './model-settings.tsx';
 
@@ -18,11 +19,13 @@ export default function Workbench({
   security = false,
   account = false,
   ai = false,
+  entry = false,
 }: {
   connections?: boolean;
   security?: boolean;
   account?: boolean;
   ai?: boolean;
+  entry?: boolean;
 }) {
   const [binding, setBinding] = useState<BindingMetadata | null>(null);
   const [busy, setBusy] = useState(false);
@@ -151,7 +154,9 @@ export default function Workbench({
                 ? 'Binance 只读连接'
                 : account
                   ? '账户快照'
-                  : '我的工作台'}
+                  : entry
+                    ? '单层市价开仓'
+                    : '我的工作台'}
         </h1>
         <button className="button button--secondary" onClick={() => void logout()}>
           退出登录
@@ -160,9 +165,13 @@ export default function Workbench({
       <nav aria-label="工作台导航">
         <a
           className="button button--text"
-          href={connections || security || account || ai ? '/dashboard' : '/dashboard/connections'}
+          href={
+            connections || security || account || ai || entry
+              ? '/dashboard'
+              : '/dashboard/connections'
+          }
         >
-          {connections || security || account || ai ? '返回工作台' : '连接设置'}
+          {connections || security || account || ai || entry ? '返回工作台' : '连接设置'}
         </a>
         {!security && (
           <a className="button button--text" href="/dashboard/security">
@@ -184,9 +193,11 @@ export default function Workbench({
             连接设置
           </a>
         )}
-        <a className="button button--text" href="/review?view=cycles">
-          完整交易
-        </a>
+        {!entry && (
+          <a className="button button--text" href="/entry">
+            开仓计划
+          </a>
+        )}
       </nav>
       <p className="eyebrow">个人资料</p>
       {profile ? (
@@ -210,7 +221,7 @@ export default function Workbench({
           simulation={profile.simulation}
         />
       )}
-      {!connections && !security && !ai && profile && binding && (
+      {!connections && !security && !ai && !entry && profile && binding && (
         <AccountPanel
           key={`${profile.id}:${binding.id}:${binding.credentialVersion}:${binding.authorizationVersion}`}
           userId={profile.id}
@@ -220,6 +231,21 @@ export default function Workbench({
           onIdentityInvalid={identityLost}
         />
       )}
+      {entry &&
+        profile &&
+        (binding ? (
+          <EntryPanel
+            key={`${profile.id}:${binding.id}:${binding.credentialVersion}:${binding.authorizationVersion}`}
+            userId={profile.id}
+            binding={binding}
+            simulation={profile.simulation}
+            onIdentityInvalid={identityLost}
+          />
+        ) : (
+          <p>
+            请先<a href="/dashboard/connections">连接只读 Binance 账户</a>。
+          </p>
+        ))}
       {security && profile && (
         <SecuritySessions userId={profile.id} onIdentityLost={identityLost} />
       )}

@@ -1,3 +1,4 @@
+import type { EntryInput } from '../../../public/draft.js';
 import type { Delegation } from '../../../src/identity/delegation.ts';
 import type { ModelKeySubmission } from '../../../src/model-key.ts';
 
@@ -41,6 +42,12 @@ export async function requestBusinessGrant(
   return delegation;
 }
 export function businessRequest(
+  resource: `entry/${string}`,
+  signal: AbortSignal,
+  expectedUserId: string,
+  input?: EntryInput,
+): Promise<Response>;
+export function businessRequest(
   resource: `account/${'summary' | 'assets'}`,
   signal: AbortSignal,
   expectedUserId: string,
@@ -70,10 +77,11 @@ export async function businessRequest(
     | 'binding'
     | 'model'
     | `account/${'summary' | 'assets'}`
+    | `entry/${string}`
     | `review/${string}/trades${string}`,
   signal: AbortSignal,
   expectedUserId?: string,
-  submission?: CredentialSubmission | ModelKeySubmission | boolean,
+  submission?: CredentialSubmission | ModelKeySubmission | EntryInput | boolean,
 ): Promise<Response> {
   const scope =
     resource === 'profile'
@@ -84,7 +92,11 @@ export async function businessRequest(
           : (`${resource}:read` as const)
         : resource.startsWith('review/')
           ? 'review:read'
-          : 'account:read';
+          : resource.startsWith('entry/')
+            ? submission
+              ? 'entry:write'
+              : 'entry:read'
+            : 'account:read';
   const delegation = await requestBusinessGrant(scope, signal, expectedUserId);
   const response = await fetch(
     `${delegation.businessOrigin}/v1/users/${encodeURIComponent(delegation.userId)}/${resource}`,

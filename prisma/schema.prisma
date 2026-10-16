@@ -89,6 +89,7 @@ model BinanceBinding {
   reviewCycles ReviewCycle[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  entryPlans EntryPlan[]
   @@unique([source, uid])
   @@index([userId])
   @@map("binance_binding")
@@ -167,4 +168,18 @@ model ReviewCycle {
   payload Json
   @@id([bindingId, source, id])
   @@map("review_cycle")
+}
+
+model EntryPlan {
+  id String @id
+  bindingId String
+  binding BinanceBinding @relation(fields: [bindingId], references: [id], onDelete: Restrict)
+  userId String
+  source String
+  input Json
+  plan Json
+  owner Json
+  createdAt DateTime @default(now())
+  @@index([userId, bindingId])
+  @@map("entry_plan")
 }

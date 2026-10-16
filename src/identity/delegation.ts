@@ -12,7 +12,9 @@ export interface Delegation {
     | 'account:read'
     | 'review:read'
     | 'model:read'
-    | 'model:write';
+    | 'model:write'
+    | 'entry:read'
+    | 'entry:write';
   iss: string;
   aud: string;
   iat: number;
@@ -89,6 +91,8 @@ export function verifyDelegation(
         'review:read',
         'model:read',
         'model:write',
+        'entry:read',
+        'entry:write',
       ].includes(claims.scope ?? '') ||
       claims.iss !== issuer ||
       claims.aud !== audience ||

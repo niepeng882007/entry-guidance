@@ -68,6 +68,10 @@
 
 新多用户资产入口位于 `web/app/account/`，工作台摘要复用同一面板及生命周期 hook。`src/bindings/account.ts` 管理绑定内的读取与缓存；`src/binance-egress.ts` 及迁移 `202610160003_binance_egress` 管理跨实例出口调度与冷却；`public/account-amounts.ts` 为新旧页面提供金额校验。定向测试为 `test/auth/assets.test.ts`、`test/auth/egress.test.ts` 和 `test/auth/browser/assets.spec.ts`；运行及人工验证见[票据 05 开发说明](development.md#多用户资产与读取协调票据-05)。
 
+## 多用户单层开仓入口
+
+`web/app/entry/` 提供单层市价表单、草稿与固定卡片；`src/bindings/entry.ts`、`src/bindings/account.ts` 负责账户内严格读取与事务保存，迁移 `202610160004_entry_plan` 保存方案归属。HTTP 与浏览器测试分别为 `test/auth/entry.test.ts` 和 `test/auth/browser/entry.spec.ts`；人工操作及本票失效/恢复边界见[开发说明](development.md#单层市价开仓票据-06)。
+
 ## 规则入口
 
 - [根 AGENTS.md](../AGENTS.md) 是共享入口；[CLAUDE.md](../CLAUDE.md) 导入它。

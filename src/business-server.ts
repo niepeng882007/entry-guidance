@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { PrismaClient } from './generated/prisma/client.ts';
 import { verifyDelegation } from './identity/delegation.ts';
 import { AccountError, binanceTransport, signBinanceRequest, type Transport } from './account.ts';
+import { createBoundEntryService } from './bindings/entry.ts';
 import { createBinanceEgress } from './binance-egress.ts';
 import { credentialMasterKey } from './bindings/credential.ts';
 import { changeModelKey, modelKeySubmission, modelCredentialMetadata } from './model-key.ts';
@@ -33,6 +34,7 @@ export function createBusinessServer(options: {
     transport: options.transport,
     egress,
   });
+  const entry = createBoundEntryService(options.database, accounts, options.simulation);
   async function handle(request: IncomingMessage, response: ServerResponse) {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -71,9 +73,28 @@ export function createBusinessServer(options: {
       /^\/v1\/users\/([^/]+)\/(profile|binding|model|account\/(summary|assets|positions|orders|conditional-orders))$/.exec(
         url.pathname,
       );
+    const entryMatch =
+      /^\/v1\/users\/([^/]+)\/entry\/(symbols|market|plans(?:\/[a-f0-9-]{36})?)$/.exec(
+        url.pathname,
+      );
     const writing =
-      request.method === 'POST' && (match?.[2] === 'binding' || match?.[2] === 'model');
-    if ((!match && !review) || (request.method !== 'GET' && !writing) || (!review && url.search))
+      request.method === 'POST' &&
+      (match?.[2] === 'binding' || match?.[2] === 'model' || entryMatch?.[2] === 'plans');
+    if (entryMatch) {
+      if (
+        (request.method !== 'GET' && !writing) ||
+        (!writing && entryMatch[2] === 'plans') ||
+        (url.search &&
+          (entryMatch[2] !== 'market' ||
+            [...url.searchParams.keys()].some((key) => key !== 'symbol') ||
+            url.searchParams.getAll('symbol').length !== 1))
+      )
+        return reply(404, { error: '此入口不可用。' });
+    }
+    if (
+      !entryMatch &&
+      ((!match && !review) || (request.method !== 'GET' && !writing) || (!review && url.search))
+    )
       return reply(404, { error: '此入口不可用。' });
     if (writing && request.headers.origin !== options.authOrigin)
       return reply(403, { error: '访问来源不受支持。' });
@@ -89,11 +110,28 @@ export function createBusinessServer(options: {
     if (!claims) return reply(401, { error: '请重新登录。' });
     const expectedScope = review
       ? 'review:read'
-      : `${match?.[3] ? 'account' : match?.[2]}:${writing ? 'write' : 'read'}`;
+      : `${entryMatch ? 'entry' : match?.[3] ? 'account' : match?.[2]}:${writing ? 'write' : 'read'}`;
     if (claims.scope !== expectedScope) return reply(403, { error: '操作未授权。' });
-    if ((review ?? match)?.[1] !== claims.sub) return reply(403, { error: '无权访问此资料。' });
+    if ((entryMatch ?? review ?? match)?.[1] !== claims.sub)
+      return reply(403, { error: '无权访问此资料。' });
+    const controller = new AbortController();
+    const cancel = () => {
+      if (!response.writableEnded) controller.abort();
+    };
+    if (entryMatch) response.once('close', cancel);
+    const entrySignal = AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]);
     try {
-      const session = await requireBusinessIdentity(options.database, claims, writing);
+      const session = await requireBusinessIdentity(
+        options.database,
+        claims,
+        writing && !entryMatch,
+      );
+      if (entryMatch && !writing) {
+        return reply(
+          200,
+          await entry.read(claims, entryMatch[2]!, url.searchParams.get('symbol'), entrySignal),
+        );
+      }
       if (review)
         return reply(
           200,
@@ -172,6 +210,7 @@ export function createBusinessServer(options: {
         });
         return reply(200, result);
       }
+      if (entryMatch) return reply(201, await entry.generate(claims, body, entrySignal));
       const submission = bindingSubmission(body);
       const result = await saveBinding({
         database: options.database,
@@ -193,13 +232,13 @@ export function createBusinessServer(options: {
       let error = cause;
       if (writing && error instanceof AccountError) {
         try {
-          await requireBusinessIdentity(options.database, claims, true);
+          await requireBusinessIdentity(options.database, claims, !entryMatch);
         } catch (identityError) {
           error = identityError;
         }
       }
       if (error instanceof BindingError) return reply(error.status, { error: error.message });
-      if (error instanceof AccountError && match?.[3]) {
+      if (error instanceof AccountError && (match?.[3] || entryMatch)) {
         if (error.retryAt)
           response.setHeader(
             'Retry-After',
@@ -225,6 +264,8 @@ export function createBusinessServer(options: {
           { error: '无法确认凭据的只读权限或账户身份；原有数据已保留。' },
         );
       return reply(503, { error: '业务服务暂时不可用，请稍后重试。' });
+    } finally {
+      response.off('close', cancel);
     }
   }
   const server = createServer((request, response) => {

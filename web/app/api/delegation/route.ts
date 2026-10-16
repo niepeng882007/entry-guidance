@@ -39,7 +39,9 @@ export async function POST(request: Request) {
       scope !== 'account:read' &&
       scope !== 'review:read' &&
       scope !== 'model:read' &&
-      scope !== 'model:write'
+      scope !== 'model:write' &&
+      scope !== 'entry:read' &&
+      scope !== 'entry:write'
     )
       return Response.json({ error: '操作不受支持。' }, { status: 422 });
     if (

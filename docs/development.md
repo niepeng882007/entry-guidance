@@ -257,3 +257,29 @@ pnpm exec playwright test -c playwright.auth.config.ts test/auth/browser/model-k
 7. 用 320px、390px、1280px 视口检查溢出，用 Tab/Enter 提交，确认按钮忙碌状态。Ctrl-C 停止演示会清理本次临时 PostgreSQL；下次启动恢复为未配置状态。
 
 并发替换/撤销、旧委托拒绝、校验期间失效和数据库事务回滚由自动测试覆盖。真实 DeepSeek、Neon、实体手机及灾备恢复均需后续独立验收。
+
+## 单层市价开仓（票据 06）
+
+新入口为 `/entry`，从工作台的“开仓计划”进入。复用原 BigInt 计算、合约步长、费用、资金缩量、强平缓冲及 `createPlan` 空仓起点检查。`src/bindings/entry.ts` 负责绑定内严格读取及方案事务保存，`entry_plan` 保存固定方案、原输入、来源和不可复用绑定归属。`entry:read` / `entry:write` 为独立受限委托，正式生成不使用观察缓存；数据库写入成功前不返回卡片。读取已保存方案仅返回原始记录，不表示重新验证或恢复可执行状态。
+
+本票按用户确认采用阶段性保守失效：输入修改、离开/隐藏、离线、账户余额变化、读取失败或生成数据超过 30 秒后停用复制，摘要恢复成功不重启原卡。显式重新生成仍须严格确认空仓和无干扰委托，不能用于已有持仓扩大预算。成交核验、原卡最新检查和可信恢复留票据 07；限价、双层、浏览器偏好分别留后续票据。浏览器不持久化本票的输入与卡片，整页刷新后不恢复旧卡。
+
+### 本地人工验证
+
+使用 `.nvmrc` 指定的 Node 24.22.0、pnpm 11.7.0 并启动 Docker，然后运行：
+
+```sh
+pnpm build
+pnpm demo:auth
+```
+
+1. 打开 `http://127.0.0.1:3100/login`，使用合成用户 `alice@example.test`、口令 `synthetic-login-only-01` 登录。
+2. 在连接设置输入 `synthetic-key-alice` / `synthetic-secret-alice` 并保存。这里只验证合成响应，不提交真实 Key。
+3. 打开 `/entry`，选 BTCUSDT、做多、固定 USDT 预算 `20`、绝对止损 `98`、杠杆 `10`、滑点 `1`%、资金费 `1` USDT、最低缓冲 `1`%、本单资金上限 `5` USDT。
+4. 确认草稿与含资金约束的预演分开展示。点击“刷新并生成开仓卡”，预期数量 `0.4 BTC`、止损 `98 USDT`、固定预算 `20 USDT`，且明显标注模拟卡，不能用于真实交易。复制数量应仅得到 `0.4`，复制止损应仅得到 `98`。
+5. 将预算改为 `21`，原卡预算仍为 `20`，复制停用。重新生成后断网或等待 30 秒，应再次停用复制；恢复联网不自动启用旧卡。切换页面或刷新后，不出现已恢复的可执行本单。
+6. 将做多止损改为 `101`，或将最低缓冲提高到无法满足的值，应显示失败原因，不能生成有效卡。试用 320px、390px 和桌面宽度，并用 Tab 操作表单与按钮，检查溢出与焦点。
+7. 无痕窗口用 `bob@example.test`（同一合成口令）及 `synthetic-key-bob` / `synthetic-secret-bob` 登录绑定，确认不会看到 Alice 的卡片；退出或跨标签退出后私有内容清除。
+8. Ctrl-C 停止演示；临时数据库随之删除。演示数据不会保留到下次启动。
+
+定向检查：`node --test test/auth/entry.test.ts test/draft.test.ts`；浏览器为 `pnpm exec playwright test -c playwright.auth.config.ts test/auth/browser/entry.spec.ts`，HTTP/浏览器之前先构建。存储失败、UID 不一致和生成期间凭据变化由合成故障测试验证，人工正常流程无法制造这些故障。真实 Binance、Neon 与实体手机验收仍属于后续授权范围。

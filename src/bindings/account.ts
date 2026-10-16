@@ -7,6 +7,8 @@ import {
   binanceTransport,
   signBinanceRequest,
   type Transport,
+  type AccountConfig,
+  type ReadPriority,
 } from '../account.ts';
 import type { createBinanceEgress } from '../binance-egress.ts';
 import { readAccountPositions } from '../positions.ts';
@@ -40,8 +42,15 @@ export function createBoundAccountReader(options: {
       master.key,
     );
     const readers = new Map<string, number>();
-    const transport: Transport = (url, headers, signal, priority = 'foreground') =>
+    const transport = (
+      url: URL,
+      headers: Record<string, string>,
+      signal: AbortSignal,
+      priority: ReadPriority = 'foreground',
+      claims?: Delegation,
+    ): ReturnType<Transport> =>
       options.egress.run(url, signal, priority, async (bounded) => {
+        if (claims) await requireBusinessIdentity(database, claims);
         const current = await database.binanceBinding.findUnique({
           where: { id: binding.id },
           include: { user: true },
@@ -110,6 +119,13 @@ export function createBoundAccountReader(options: {
       userVersion,
       readers,
       coordinator,
+      strictConfig(claims: Delegation, signal: AbortSignal): AccountConfig {
+        return {
+          ...credential,
+          transport: (url, headers, pending, priority) =>
+            transport(url, headers, AbortSignal.any([signal, pending]), priority, claims),
+        };
+      },
       data,
       assets,
       positions,
@@ -134,62 +150,92 @@ export function createBoundAccountReader(options: {
     if (!binding) throw new BindingError(409, '请先连接只读 Binance 账户。');
     return binding;
   }
+  async function withinEntry<T>(
+    claims: Delegation,
+    signal: AbortSignal,
+    operation: (entry: ReturnType<typeof createEntry>) => Promise<T>,
+  ): Promise<T> {
+    await requireBusinessIdentity(database, claims);
+    const binding = await currentBinding(claims.sub);
+    for (const [key, entry] of entries) {
+      if (
+        entry.usedAt < Date.now() - 60_000 ||
+        (key === claims.sub &&
+          (entry.binding.id !== binding.id ||
+            entry.binding.credentialVersion !== binding.credentialVersion ||
+            entry.binding.authorizationVersion !== binding.authorizationVersion ||
+            entry.userVersion !== claims.version))
+      ) {
+        entry.stop();
+        entries.delete(key);
+      }
+    }
+    let entry = entries.get(claims.sub);
+    if (!entry) {
+      entry = createEntry(binding, claims.version);
+      entries.set(claims.sub, entry);
+    }
+    entry.usedAt = Date.now();
+    entry.readers.set(claims.sid, (entry.readers.get(claims.sid) ?? 0) + 1);
+    const generation = entry.generation;
+    try {
+      await options.egress.check();
+      entry.coordinator.check();
+      const result = await operation(entry);
+      signal.throwIfAborted();
+      await requireBusinessIdentity(database, claims);
+      const current = await currentBinding(claims.sub);
+      if (
+        current.id !== binding.id ||
+        current.credentialVersion !== binding.credentialVersion ||
+        current.authorizationVersion !== binding.authorizationVersion
+      )
+        throw new BindingError(401, '账户连接已变化，请重新查询。');
+      if (entry.generation !== generation) {
+        const error = new AccountError('scope_unconfirmed', '账户口径或权限未确认，请重新查询。');
+        error.scopeConfirmed = false;
+        throw error;
+      }
+      return result;
+    } catch (error) {
+      await requireBusinessIdentity(database, claims);
+      if (error instanceof AccountError && error.scopeConfirmed === false) entry.invalidate();
+      throw error;
+    } finally {
+      const remaining = (entry.readers.get(claims.sid) ?? 1) - 1;
+      if (remaining) entry.readers.set(claims.sid, remaining);
+      else entry.readers.delete(claims.sid);
+    }
+  }
   return {
+    async strict<T>(
+      claims: Delegation,
+      signal: AbortSignal,
+      operation: (
+        config: AccountConfig,
+        binding: Awaited<ReturnType<typeof currentBinding>>,
+      ) => Promise<T>,
+    ) {
+      return withinEntry(claims, signal, async (entry) => {
+        return operation(entry.strictConfig(claims, signal), entry.binding);
+      });
+    },
     async read(
       claims: Delegation,
       resource: AccountResource,
       automatic: boolean,
       signal: AbortSignal,
     ) {
-      await requireBusinessIdentity(database, claims);
-      const binding = await currentBinding(claims.sub);
-      for (const [key, entry] of entries) {
-        if (
-          entry.usedAt < Date.now() - 60_000 ||
-          (key === claims.sub &&
-            (entry.binding.id !== binding.id ||
-              entry.binding.credentialVersion !== binding.credentialVersion ||
-              entry.binding.authorizationVersion !== binding.authorizationVersion ||
-              entry.userVersion !== claims.version))
-        ) {
-          entry.stop();
-          entries.delete(key);
-        }
-      }
-      let entry = entries.get(claims.sub);
-      if (!entry) {
-        entry = createEntry(binding, claims.version);
-        entries.set(claims.sub, entry);
-      }
-      entry.usedAt = Date.now();
-      entry.readers.set(claims.sid, (entry.readers.get(claims.sid) ?? 0) + 1);
-      const generation = entry.generation;
-      try {
-        await options.egress.check();
-        entry.coordinator.check();
-        const lifetime = automatic ? 30_000 : 2900;
+      return withinEntry(claims, signal, async (entry) => {
         const result =
           resource === 'summary'
             ? await entry.data.read(signal)
             : await entry[resource === 'conditional-orders' ? 'conditional' : resource].read(
                 signal,
-                lifetime,
+                automatic ? 30_000 : 2900,
               );
-        signal.throwIfAborted();
-        await requireBusinessIdentity(database, claims);
-        const current = await currentBinding(claims.sub);
-        if (
-          current.id !== binding.id ||
-          current.credentialVersion !== binding.credentialVersion ||
-          current.authorizationVersion !== binding.authorizationVersion
-        )
-          throw new BindingError(401, '账户连接已变化，请重新查询。');
-        if (entry.generation !== generation) {
-          const error = new AccountError('scope_unconfirmed', '账户口径或权限未确认，请重新查询。');
-          error.scopeConfirmed = false;
-          throw error;
-        }
         const value = 'snapshot' in result.value ? result.value.snapshot : result.value;
+        const binding = entry.binding;
         return {
           ...value,
           userId: claims.sub,
@@ -203,15 +249,7 @@ export function createBoundAccountReader(options: {
           attemptedAt: 'attemptedAt' in value ? value.attemptedAt : result.attemptedAt,
           reused: result.reused || ('reused' in value && value.reused === true),
         };
-      } catch (error) {
-        await requireBusinessIdentity(database, claims);
-        if (error instanceof AccountError && error.scopeConfirmed === false) entry.invalidate();
-        throw error;
-      } finally {
-        const remaining = (entry.readers.get(claims.sid) ?? 1) - 1;
-        if (remaining) entry.readers.set(claims.sid, remaining);
-        else entry.readers.delete(claims.sid);
-      }
+      });
     },
     stop() {
       for (const entry of entries.values()) entry.stop();
