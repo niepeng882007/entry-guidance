@@ -74,7 +74,7 @@
 
 ## 多用户单层开仓入口
 
-`web/app/entry/` 提供单层市价表单、草稿与固定卡片；`src/bindings/entry.ts`、`src/bindings/account.ts` 负责账户内严格读取与事务保存，迁移 `202610160004_entry_plan` 保存方案归属。HTTP 与浏览器测试分别为 `test/auth/entry.test.ts` 和 `test/auth/browser/entry.spec.ts`；人工操作及本票失效/恢复边界见[开发说明](development.md#单层市价开仓票据-06)。
+`web/app/entry/` 提供单层市价 / GTC 限价表单、草稿与固定卡片；`src/bindings/entry.ts`、`src/bindings/account.ts` 负责账户内严格读取与事务保存，迁移 `202610160004_entry_plan` 保存方案归属。HTTP 与浏览器测试分别为 `test/auth/entry.test.ts` 和 `test/auth/browser/entry.spec.ts`；限价、部分成交与人工步骤见[票据 08 开发说明](development.md#限价开仓与部分成交票据-08)，可信本单恢复边界见[票据 07](development.md#单层核验与本单恢复票据-07)。
 
 ## 规则入口
 
