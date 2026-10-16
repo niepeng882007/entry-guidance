@@ -19,6 +19,9 @@ function createAuth() {
       disableSignUp: false,
       requireEmailVerification: true,
       minPasswordLength: 12,
+      resetPasswordTokenExpiresIn: 3600,
+      revokeSessionsOnPasswordReset: true,
+      sendResetPassword: async ({ user, url }) => sendVerificationMail({ email: user.email, url }),
     },
     emailVerification: {
       sendOnSignUp: false,
@@ -64,6 +67,7 @@ function createAuth() {
       customRules: {
         '/sign-up/email': false,
         '/send-verification-email': false,
+        '/request-password-reset': false,
       },
     },
     logger: { disabled: true },

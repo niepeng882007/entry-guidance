@@ -4,7 +4,13 @@ import { redirect } from 'next/navigation';
 import { currentIdentity } from '../../../src/identity/auth.ts';
 import Workbench from './workbench.tsx';
 
-async function ProtectedWorkbench({ connections }: { connections: boolean }) {
+async function ProtectedWorkbench({
+  connections,
+  security,
+}: {
+  connections: boolean;
+  security: boolean;
+}) {
   let identity;
   try {
     identity = await currentIdentity(await headers());
@@ -17,12 +23,18 @@ async function ProtectedWorkbench({ connections }: { connections: boolean }) {
     );
   }
   if (!identity) redirect('/login');
-  return <Workbench connections={connections} />;
+  return <Workbench connections={connections} security={security} />;
 }
-export default function WorkbenchPage({ connections = false }: { connections?: boolean }) {
+export default function WorkbenchPage({
+  connections = false,
+  security = false,
+}: {
+  connections?: boolean;
+  security?: boolean;
+}) {
   return (
     <Suspense fallback={<p role="status">正在确认登录状态…</p>}>
-      <ProtectedWorkbench connections={connections} />
+      <ProtectedWorkbench connections={connections} security={security} />
     </Suspense>
   );
 }

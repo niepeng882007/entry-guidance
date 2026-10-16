@@ -16,7 +16,8 @@ export default function Page() {
         <Form />
       </Suspense>
       <p>
-        <a href="/register">注册邮箱账号</a> · <a href="/verify-email">重发验证邮件</a> ·{' '}
+        <a href="/forgot-password">忘记密码</a> · <a href="/register">注册邮箱账号</a> ·{' '}
+        <a href="/verify-email">重发验证邮件</a> ·{' '}
         <Link href="/" prefetch={false}>
           返回官网
         </Link>

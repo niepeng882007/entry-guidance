@@ -3,13 +3,20 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { businessRequest, BusinessRequestError } from './business-request.ts';
 import ConnectionsForm, { type BindingMetadata } from './connections-form.tsx';
+import SecuritySessions from './security-sessions.tsx';
 
 interface Profile {
   id: string;
   name: string;
   email: string;
 }
-export default function Workbench({ connections = false }: { connections?: boolean }) {
+export default function Workbench({
+  connections = false,
+  security = false,
+}: {
+  connections?: boolean;
+  security?: boolean;
+}) {
   const [binding, setBinding] = useState<BindingMetadata | null>(null);
   const [busy, setBusy] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -26,6 +33,11 @@ export default function Workbench({ connections = false }: { connections?: boole
     setBinding(null);
     setBusy(false);
   }, []);
+  const identityLost = useCallback(() => {
+    signedOut.current = true;
+    clear();
+    window.location.replace('/login');
+  }, [clear]);
   const load = useCallback(async () => {
     clear();
     setError('');
@@ -123,7 +135,9 @@ export default function Workbench({ connections = false }: { connections?: boole
   return (
     <main className="page">
       <header className="page-header">
-        <h1 className="page-title">{connections ? 'Binance 只读连接' : '我的工作台'}</h1>
+        <h1 className="page-title">
+          {security ? '密码与设备会话' : connections ? 'Binance 只读连接' : '我的工作台'}
+        </h1>
         <button className="button button--secondary" onClick={() => void logout()}>
           退出登录
         </button>
@@ -131,10 +145,15 @@ export default function Workbench({ connections = false }: { connections?: boole
       <nav aria-label="工作台导航">
         <a
           className="button button--text"
-          href={connections ? '/dashboard' : '/dashboard/connections'}
+          href={connections || security ? '/dashboard' : '/dashboard/connections'}
         >
-          {connections ? '返回工作台' : '连接设置'}
+          {connections || security ? '返回工作台' : '连接设置'}
         </a>
+        {!security && (
+          <a className="button button--text" href="/dashboard/security">
+            安全设置
+          </a>
+        )}
       </nav>
       <p className="eyebrow">个人资料</p>
       {profile ? (
@@ -150,6 +169,9 @@ export default function Workbench({ connections = false }: { connections?: boole
       )}
       {connections && profile && (
         <ConnectionsForm binding={binding} busy={busy} onSubmit={saveConnection} />
+      )}
+      {security && profile && (
+        <SecuritySessions userId={profile.id} onIdentityLost={identityLost} />
       )}
       {connections && error && (
         <p role="alert">

@@ -187,7 +187,7 @@ void test('origin protection, private caching and dependency failure preserve th
   }
   assert.equal(
     (
-      await fetch(`${runtime.webOrigin}/api/auth/request-password-reset`, {
+      await fetch(`${runtime.webOrigin}/api/auth/change-password`, {
         method: 'POST',
         headers: { Origin: runtime.webOrigin, 'Content-Type': 'application/json' },
         body: '{}',
@@ -324,16 +324,25 @@ void test('the active session refresh reaches the browser cookie and RSC reads d
 });
 
 void test(
-  'interrupting the demo while its database starts leaves no synthetic container',
+  'interrupting the synthetic runtime while its database starts leaves no container',
   { timeout: 20000 },
   async (t) => {
     const { spawn, execFile } = await import('node:child_process');
     const { promisify } = await import('node:util');
     const exec = promisify(execFile);
-    const child = spawn(process.execPath, ['scripts/auth-demo.ts'], {
-      env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR },
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
+    // Exercise the demo's runtime with random ports so a running manual demo is unaffected.
+    const child = spawn(
+      process.execPath,
+      [
+        '--input-type=module',
+        '--eval',
+        "import { startAuthRuntime } from './test/auth/runtime.ts'; await startAuthRuntime(); console.log('合成用户工作台');",
+      ],
+      {
+        env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR },
+        stdio: ['ignore', 'pipe', 'ignore'],
+      },
+    );
     let output = '';
     child.stdout.on('data', (chunk: Buffer) => {
       output += chunk.toString();
