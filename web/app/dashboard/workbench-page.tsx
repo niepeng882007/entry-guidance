@@ -10,15 +10,15 @@ async function ProtectedWorkbench({
   security,
   account,
   review,
-  ai,
   entry,
+  ai,
 }: {
   connections: boolean;
   security: boolean;
   account: boolean;
   review: boolean;
-  ai: boolean;
   entry: boolean;
+  ai: boolean;
 }) {
   let identity;
   try {
@@ -48,15 +48,15 @@ export default function WorkbenchPage({
   security = false,
   account = false,
   review = false,
-  ai = false,
   entry = false,
+  ai = false,
 }: {
   connections?: boolean;
   security?: boolean;
   account?: boolean;
   review?: boolean;
-  ai?: boolean;
   entry?: boolean;
+  ai?: boolean;
 }) {
   return (
     <Suspense fallback={<p role="status">正在确认登录状态…</p>}>
@@ -65,8 +65,8 @@ export default function WorkbenchPage({
         security={security}
         account={account}
         review={review}
-        ai={ai}
         entry={entry}
+        ai={ai}
       />
     </Suspense>
   );

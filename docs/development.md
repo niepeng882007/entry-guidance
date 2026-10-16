@@ -259,6 +259,33 @@ pnpm demo:auth
 
 定向检查：先 `pnpm build`，再运行 `node --test test/auth/entry.test.ts test/verification.test.ts` 与 `pnpm exec playwright test -c playwright.auth.config.ts test/auth/browser/entry.spec.ts`。完整交付运行 `pnpm check`。
 
+## 自备模型 Key（票据 19）
+
+已验证用户可从工作台进入 `/dashboard/ai`，不需要先绑定 Binance。固定使用现有 DeepSeek / `deepseek-v4-pro` / `high`；保存时只通过固定 `https://api.deepseek.com/models` 读取并验证容量元数据，失败保留已有设置，不发起分析请求。浏览页面与撤销不会访问模型商，不接受自定义 URL，也不回退到平台 Key。费用由用户向模型商支付，Token 用量不等同账单金额。
+
+模型读写使用 `model:read` / `model:write` 委托，写入要求最近 15 分钟内的密码登录。服务端按产品用户授权，在事务内重新核验会话，保存时认证加密绑定用户、独立模型凭据 ID、用途及版本，复用票据 04 的主密钥配置。替换或撤销递增凭据和用户授权版本；旧委托失效，撤销删除密文及主密钥版本，即使主密钥不可用也可撤销。表单提交立即清空，隐藏、离开、退出清理组件与请求，页面身份和委托身份不一致时拒绝发送 Key。
+
+PostgreSQL 迁移 `202610160004_model_credential` 增加独立凭据、用户作用域幂等请求及失效记录，替换/撤销与失效记录同一事务提交；失败全部回滚。重复请求不再次验证或轮换，返回当前设置，不能恢复旧版本。凭据不进入业务备份和公开 DTO；Next 不持有解密主密钥。本票失效记录仍在业务库内，**独立于恢复点的控制记录与恢复重放由票据 24/25 实施，尚不能证明恢复旧库后凭据不会复活**。任务使用版本及换 Key 后明确继续由票据 20/21 接入；本票不会新增或启动模型分析任务。
+
+定向检查（先 `pnpm build`）：
+
+```sh
+node --test test/auth/model-key.test.ts test/auth/credential.test.ts
+pnpm exec playwright test -c playwright.auth.config.ts test/auth/browser/model-key.spec.ts
+```
+
+### 票据 19 人工验证
+
+1. 使用 `.nvmrc` 指定的 Node 24.22.0，启动 Docker，在仓库运行 `pnpm build`，再运行 `pnpm demo:auth`。若已有演示，先在原终端 Ctrl-C 关闭。打开 <http://127.0.0.1:3100/login>，用 `alice@example.test` / `synthetic-login-only-01` 登录。
+2. 不绑定 Binance，进入“模型设置”。确认固定模型、费用说明与“尚未设置模型 Key”。提交合成值 `synthetic-model-alice`，应显示已保存和北京时间验证时点，输入框立即清空；刷新后状态保留，Key 不回显。
+3. 提交 `synthetic-model-invalid`，应提示验证失败、原有设置保留；再提交 `synthetic-model-alice-rotated`，应成功更新。选择“撤销模型 Key”，应显示已撤销，刷新仍保持；再次保存可重新启用。成功替换、撤销及重新保存时，Network 响应的 `credential.version` 应递增。整个演示只使用合成 transport，勿输入真实 Key。
+4. 浏览器 Network 中模型业务响应只返回设置元数据，不含 Key 或密文；Application 中 localStorage/sessionStorage 不含 Key。输入一个尚未提交的 Key，切换标签再返回或离开页面后返回，输入框应为空。
+5. 在独立无痕窗口用 `bob@example.test` / `synthetic-login-only-01` 登录，设置 `synthetic-model-bob`。甲乙设置各自独立；同浏览器两个标签中任意一个退出，另一个须清除私有状态，返回不能恢复旧资料。
+6. 撤销后返回工作台、进入安全设置或已绑定账户的资产页，仍可正常使用。登录超过 15 分钟后修改 Key 应要求重新登录。旧报告的多用户入口及任务续跑仍待后续票据，不能以本页面代替其验收。
+7. 用 320px、390px、1280px 视口检查溢出，用 Tab/Enter 提交，确认按钮忙碌状态。Ctrl-C 停止演示会清理本次临时 PostgreSQL；下次启动恢复为未配置状态。
+
+并发替换/撤销、旧委托拒绝、校验期间失效和数据库事务回滚由自动测试覆盖。真实 DeepSeek、Neon、实体手机及灾备恢复均需后续独立验收。
+
 ## 完整交易账本（票据 11）
 
 新 `/review` 与 `/review/trades/:id` 从 PostgreSQL 读取当前用户活跃绑定的周期及证据。`src/review-reader.ts` 提供可等待的读取边界，原 SQLite 同步调用继续保留；摘要和交易校验沿用旧实现。`review_cycle` 按归属实例、来源和稳定周期 ID 隔离，金额为字符串；列表不携带完整证据，详情通过受保护 Node 直连返回，包含原始订单、成交、资金费与缺口，不经过 Next 代理大 JSON。
@@ -289,31 +316,3 @@ pnpm exec playwright test -c playwright.auth.config.ts test/auth/browser/review.
 8. 同一浏览器另开复盘标签并退出登录：原标签私有内容清除，后退不能恢复；重新登录另一用户不会显示前一用户账本。检查 320px、390px、1280px：仅表格内部横向滚动，Tab 与 Enter 可操作，重新读取后按钮焦点保持。
 
 Ctrl-C 停止演示会删除临时数据库，再次启动需要重新绑定并注入样本。自动测试另覆盖非法参数、详情越权、换 Key 后旧授权拒绝、超过 4.5 MiB 证据直传及无损金额；本地合成验收不代表真实 Neon/Binance、实体手机或生产部署通过。
-
-## 自备模型 Key（票据 19）
-
-已验证用户可从工作台进入 `/dashboard/ai`，不需要先绑定 Binance。固定使用现有 DeepSeek / `deepseek-v4-pro` / `high`；保存时只通过固定 `https://api.deepseek.com/models` 读取并验证容量元数据，失败保留已有设置，不发起分析请求。浏览页面与撤销不会访问模型商，不接受自定义 URL，也不回退到平台 Key。费用由用户向模型商支付，Token 用量不等同账单金额。
-
-模型读写使用 `model:read` / `model:write` 委托，写入要求最近 15 分钟内的密码登录。服务端按产品用户授权，在事务内重新核验会话，保存时认证加密绑定用户、独立模型凭据 ID、用途及版本，复用票据 04 的主密钥配置。替换或撤销递增凭据和用户授权版本；旧委托失效，撤销删除密文及主密钥版本，即使主密钥不可用也可撤销。表单提交立即清空，隐藏、离开、退出清理组件与请求，页面身份和委托身份不一致时拒绝发送 Key。
-
-PostgreSQL 迁移 `202610160004_model_credential` 增加独立凭据、用户作用域幂等请求及失效记录，替换/撤销与失效记录同一事务提交；失败全部回滚。重复请求不再次验证或轮换，返回当前设置，不能恢复旧版本。凭据不进入业务备份和公开 DTO；Next 不持有解密主密钥。本票失效记录仍在业务库内，**独立于恢复点的控制记录与恢复重放由票据 24/25 实施，尚不能证明恢复旧库后凭据不会复活**。任务使用版本及换 Key 后明确继续由票据 20/21 接入；本票不会新增或启动模型分析任务。
-
-定向检查（先 `pnpm build`）：
-
-```sh
-node --test test/auth/model-key.test.ts test/auth/credential.test.ts
-pnpm exec playwright test -c playwright.auth.config.ts test/auth/browser/model-key.spec.ts
-```
-
-### 票据 19 人工验证
-
-1. 使用 `.nvmrc` 指定的 Node 24.22.0，启动 Docker，在仓库运行 `pnpm build`，再运行 `pnpm demo:auth`。若已有演示，先在原终端 Ctrl-C 关闭。打开 <http://127.0.0.1:3100/login>，用 `alice@example.test` / `synthetic-login-only-01` 登录。
-2. 不绑定 Binance，进入“模型设置”。确认固定模型、费用说明与“尚未设置模型 Key”。提交合成值 `synthetic-model-alice`，应显示已保存和北京时间验证时点，输入框立即清空；刷新后状态保留，Key 不回显。
-3. 提交 `synthetic-model-invalid`，应提示验证失败、原有设置保留；再提交 `synthetic-model-alice-rotated`，应成功更新。选择“撤销模型 Key”，应显示已撤销，刷新仍保持；再次保存可重新启用。成功替换、撤销及重新保存时，Network 响应的 `credential.version` 应递增。整个演示只使用合成 transport，勿输入真实 Key。
-4. 浏览器 Network 中模型业务响应只返回设置元数据，不含 Key 或密文；Application 中 localStorage/sessionStorage 不含 Key。输入一个尚未提交的 Key，切换标签再返回或离开页面后返回，输入框应为空。
-5. 在独立无痕窗口用 `bob@example.test` / `synthetic-login-only-01` 登录，设置 `synthetic-model-bob`。甲乙设置各自独立；同浏览器两个标签中任意一个退出，另一个须清除私有状态，返回不能恢复旧资料。
-6. 撤销后返回工作台、进入安全设置或已绑定账户的资产页，仍可正常使用。登录超过 15 分钟后修改 Key 应要求重新登录。旧报告的多用户入口及任务续跑仍待后续票据，不能以本页面代替其验收。
-7. 用 320px、390px、1280px 视口检查溢出，用 Tab/Enter 提交，确认按钮忙碌状态。Ctrl-C 停止演示会清理本次临时 PostgreSQL；下次启动恢复为未配置状态。
-
-并发替换/撤销、旧委托拒绝、校验期间失效和数据库事务回滚由自动测试覆盖。真实 DeepSeek、Neon、实体手机及灾备恢复均需后续独立验收。
-

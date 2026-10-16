@@ -5,8 +5,8 @@ import { businessRequest, BusinessRequestError } from './business-request.ts';
 import ConnectionsForm, { type BindingMetadata } from './connections-form.tsx';
 import SecuritySessions from './security-sessions.tsx';
 import EntryPanel from '../entry/entry-panel.tsx';
-import AccountPanel from '../account/account-panel.tsx';
 import ModelSettings from './model-settings.tsx';
+import AccountPanel from '../account/account-panel.tsx';
 
 interface Profile {
   id: string;
@@ -18,14 +18,14 @@ export default function Workbench({
   connections = false,
   security = false,
   account = false,
-  ai = false,
   entry = false,
+  ai = false,
 }: {
   connections?: boolean;
   security?: boolean;
   account?: boolean;
-  ai?: boolean;
   entry?: boolean;
+  ai?: boolean;
 }) {
   const [binding, setBinding] = useState<BindingMetadata | null>(null);
   const [busy, setBusy] = useState(false);
@@ -166,21 +166,16 @@ export default function Workbench({
         <a
           className="button button--text"
           href={
-            connections || security || account || ai || entry
+            connections || security || account || entry || ai
               ? '/dashboard'
               : '/dashboard/connections'
           }
         >
-          {connections || security || account || ai || entry ? '返回工作台' : '连接设置'}
+          {connections || security || account || entry || ai ? '返回工作台' : '连接设置'}
         </a>
         {!security && (
           <a className="button button--text" href="/dashboard/security">
             安全设置
-          </a>
-        )}
-        {!ai && (
-          <a className="button button--text" href="/dashboard/ai">
-            模型设置
           </a>
         )}
         {!account && (
@@ -199,6 +194,11 @@ export default function Workbench({
         {!entry && (
           <a className="button button--text" href="/entry">
             开仓计划
+          </a>
+        )}
+        {!ai && (
+          <a className="button button--text" href="/dashboard/ai">
+            模型设置
           </a>
         )}
       </nav>
@@ -224,7 +224,7 @@ export default function Workbench({
           simulation={profile.simulation}
         />
       )}
-      {!connections && !security && !ai && !entry && profile && binding && (
+      {!connections && !security && !entry && !ai && profile && binding && (
         <AccountPanel
           key={`${profile.id}:${binding.id}:${binding.credentialVersion}:${binding.authorizationVersion}`}
           userId={profile.id}

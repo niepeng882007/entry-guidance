@@ -38,10 +38,10 @@ export async function POST(request: Request) {
       scope !== 'binding:write' &&
       scope !== 'account:read' &&
       scope !== 'review:read' &&
-      scope !== 'model:read' &&
-      scope !== 'model:write' &&
       scope !== 'entry:read' &&
-      scope !== 'entry:write'
+      scope !== 'entry:write' &&
+      scope !== 'model:read' &&
+      scope !== 'model:write'
     )
       return Response.json({ error: '操作不受支持。' }, { status: 422 });
     if (

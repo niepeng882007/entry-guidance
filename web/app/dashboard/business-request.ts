@@ -1,6 +1,6 @@
+import type { ModelKeySubmission } from '../../../src/model-key.ts';
 import type { EntryInput } from '../../../public/draft.js';
 import type { Delegation } from '../../../src/identity/delegation.ts';
-import type { ModelKeySubmission } from '../../../src/model-key.ts';
 
 export class BusinessRequestError extends Error {
   status: number;

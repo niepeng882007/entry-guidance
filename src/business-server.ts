@@ -115,7 +115,7 @@ export function createBusinessServer(options: {
       ? 'review:read'
       : `${entryMatch ? 'entry' : match?.[3] ? 'account' : match?.[2]}:${writing ? 'write' : 'read'}`;
     if (claims.scope !== expectedScope) return reply(403, { error: '操作未授权。' });
-    if ((entryMatch ?? review ?? match)?.[1] !== claims.sub)
+    if ((review ?? entryMatch ?? match)?.[1] !== claims.sub)
       return reply(403, { error: '无权访问此资料。' });
     const controller = new AbortController();
     const cancel = () => {
@@ -129,12 +129,6 @@ export function createBusinessServer(options: {
         claims,
         writing && !entryMatch,
       );
-      if (entryMatch && !writing) {
-        return reply(
-          200,
-          await entry.read(claims, entryMatch[2]!, url.searchParams.get('symbol'), entrySignal),
-        );
-      }
       if (review)
         return reply(
           200,
@@ -147,6 +141,12 @@ export function createBusinessServer(options: {
             options.simulation,
           ),
         );
+      if (entryMatch && !writing) {
+        return reply(
+          200,
+          await entry.read(claims, entryMatch[2]!, url.searchParams.get('symbol'), entrySignal),
+        );
+      }
       if (match?.[3]) {
         const controller = new AbortController();
         const cancel = () => {
