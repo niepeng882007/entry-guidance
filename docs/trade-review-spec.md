@@ -1,6 +1,6 @@
 # 交易复盘规格
 
-状态：设计决策及 12 项任务拆分已确认；任务 01–12 已实现演示归档、复盘入口、真实历史同步、复杂周期归并、全账户持续归档、个人笔记与风格标签、原方案与查询时点证据留存及执行对照、交易列表筛选与分页、全范围表现统计与分组图表、单笔双来源历史行情及事件图、单笔及筛选范围后台模型复盘；CSV 与完整备份恢复已实现；真实账户联调未验收。
+本文维护交易记录与完整交易复盘的现行约束。任务 01–12 的功能已有实现；后续已改为订单主列表及手动外部取数。代码入口见[模块地图](index.md#模块地图)，操作见[使用说明](usage.md)，自动与外部验收状态统一见[项目现状](status.md)。
 
 ## 已确认范围
 
@@ -14,7 +14,7 @@
 | 记录状态 | 保留持仓中、已结束及数据不完整记录；净盈亏归属未确认时展示待确认及已知分项。 |
 | 统计样本 | 胜率、平均净盈亏等默认仅使用已结束且对应数据完整的交易；展示有效样本数和排除数量。 |
 | 赢亏判定 | 以复盘净盈亏判断，详情分别展示已实现盈亏、手续费与资金费净收支；关键数据不完整时不判定净赢亏。 |
-| 首版历史 | 首次同步最近 3 个月并持续归档；更早历史后续补录。 |
+| 首版历史 | 首次手动同步默认最近 3 个月，后续主动更新；更早订单可按日期下载，完整成交链与费用不保证可补齐。 |
 
 领域定义见 [词汇表](../CONTEXT.md)。本功能扩展现有规格对完整交易历史的排除；开仓与止损功能的风险及执行边界继续以 [产品决策](product-spec.md) 和 [ADR 0003](adr/0003-readonly-account-verification.md) 为准。
 
@@ -37,7 +37,7 @@
 - 订单已实现盈亏按合约与订单 ID 汇总原始逐笔成交，成交数量须与订单执行数量对齐；缺失时显示待补齐，不以零代替。反手成交在订单列表只计一次，在周期复盘保留原分配。手续费按实际资产单列，资金费不强行归到某张订单。统计和批量 AI 分析继续按周期计算。
 - 列表保留同步摘要，将同步进度、单合约补查和原始证据折叠。详情按区块保留行情、盈亏分项、原方案对照、订单/逐笔成交与个人笔记。列表与详情间切换保留当前页面会话内的笔记草稿，整页离开继续使用未保存提示。
 - 本模块使用与现有 Vue 架构匹配的 Ant Design Vue，沿用工作台的黑白灰主题与本机字体。
-- 主列表优先显示币种、方向、状态、净盈亏、开平仓时间及持仓时长。包含不同入场订单类型时显示混合；元数据缺失显示未知。
+- 完整交易列表显示币种、方向、状态、净盈亏、开平仓时间及详情入口；入场类型、方案关联、标签与持仓时长留在详情。包含不同入场订单类型时显示混合，元数据缺失显示未知。
 - 用户填写风格标签和笔记；模型提出的分类单独展示，由用户确认。笔记支持入场理由、退出理由、执行问题、改进事项与自由记录。
 - 关联方案的交易对照原预算和止损；没有原计划的历史交易仅依据已有证据分析，不直接判定违反计划。
 
@@ -54,7 +54,7 @@
 - 批量分析使用筛选范围内全部有效交易的统计摘要与逐笔关键事实，首版每次最多 100 笔；超过时要求缩小范围，不静默抽样。此为每次分析范围上限，不是调用次数限制。
 - 单笔可分析持仓中或不完整记录，并明确缺项；批量表现结论沿用已结束且对应数据完整的交易口径。
 - 2026-10-14 任务 11 确认：100 笔按筛选总范围计算，排除样本仍发送逐笔证据但不参与对应表现结论；行情、笔记与继续/重试沿用任务 10 冻结边界。风格建议独立展示，用户进入详情沿用标签编辑与笔记保存流程确认。测试边界为任务 HTTP、持久账本公开接口和生产构建浏览器。
-- 当前本地配置指向 DeepSeek、`deepseek-v4-pro`、`high`；存在 `LLM_PROVIDER`、`LLM_MODEL`、`LLM_API_KEY`、`LLM_EFFORT`，单笔分析已读取这些配置。未调用模型或验证凭据有效性。
+- 当前后端实现只接受 DeepSeek、`deepseek-v4-pro`、`high`，通过 `LLM_PROVIDER`、`LLM_MODEL`、`LLM_API_KEY`、`LLM_EFFORT` 配置；单笔和批量共用模型入口。支持条件来自代码，不代表本机凭据已配置或有效。
 - 2026-10-12 查阅[官方 Responses 接口](https://api-docs.deepseek.com/api/create-response/)：该模型可通过 `/responses` 使用 `high` 推理与 JSON Schema 输出，`max_output_tokens` 同时约束可见输出和推理 token。接入已通过模拟响应测试；模型实连仍待单独授权验收。
 
 ## 已确认走势、统计与证据
@@ -78,23 +78,23 @@
 - 同步覆盖历史已交易合约，不能仅使用当前可交易币种列表；未能发现、读取或对账的区间与币种明确列为缺口，不宣称所有历史完整。
 - 行情注明合约价格或标记价来源；实际成交标记使用成交价格，止损触发条件按其触发依据解释。K 线无法提供精确的逐笔价格路径时保持相应精度边界。
 
-## 当前实现事实
+## 实现边界
 
-- 当前方案核验保留原读取契约；任务 01–06 提供独立演示账本、单笔复盘入口、真实历史分片/分页同步、复杂周期归并、全账户持续归档、个人笔记/风格标签及原方案执行对照。
+- 开仓方案核验保留原读取契约，不借复盘分页扩大支持边界。复盘独立提供历史分页、复杂周期归并、全账户手动归档、个人记录及原方案对照。
 - 浏览器保留当前一笔方案与原 recovery.v1 恢复契约；新生成方案按稳定 UID 连同查询时点核验、成交与止损设置长期保存在 SQLite。核验直接证据唯一匹配时关联交易；歧义或无证据时保持无法关联，缺少历史 UID 的旧凭证不补认领。身份或落盘失败时本次生成/核验明确失败，已有本单和归档保留。开仓仍使用最新行情快照；单笔复盘仅通过用户手动按钮读取和归档合约价与标记价历史 K 线，按来源展示范围、时点、完整性与缺口，抽稀图表与原始数据分别表达。行情与事件冻结快照可供后续分析，单笔模型复盘已接入（仅主动触发）。
 - 历史账户数据不能自动补出当时的亏损预算、计划止损、交易理由或历史核验结果。
 - 正式启动的复盘数据目录默认 `.local/review`，可通过 `REVIEW_DATA_DIR` 指定；真实和演示分别使用 `real.sqlite` 与 `demo.sqlite`，真实账户按服务端读取的 UID 隔离。单币种与全账户同步保留原始证据、完整区间、缺口及分页进度。正式真实服务仅在用户手动更新后下载与补查；重叠触发合并，失败与服务中断后须主动继续。浏览器隐藏或关闭取消待完成的页面读取，不影响后台归档；单笔及批量模型分析保留独立的任务进度轮询。账户发现联合全账户收入、当前 USDT 永续及已归档合约，持续披露未发现历史合约的未知范围；已下架或过期证据保留缺口。单笔及筛选范围批量 LLM、CSV 与完整备份恢复均已实现。
 
-这些事实用于界定新增工作，不代表复盘已实现或真实账户联调已通过。现有实现与验收状态见 [README](../README.md)。
+上述是实现边界，不能替代真实账户或模型联调结果；验证证据统一见[项目现状](status.md)。
 
 ## 外部数据约束
 
 核验日期：2026-10-12；只查官方说明，未连接真实账户。
 
-- 标准[成交历史接口](https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Account-Trade-List)按币种查询，仅可查过去 3 个月，单次时间跨度最多 7 天，最多 1000 条。当前核验读取没有复盘所需的分页同步。
+- 标准[成交历史接口](https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Account-Trade-List)按币种查询，仅可查过去 3 个月，单次时间跨度最多 7 天，最多 1000 条。开仓核验保留有限窗口；复盘已另行实现分片与分页，不共用完整性结论。
 - [普通订单](https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/All-Orders)和[条件单](https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Query-All-Algo-Orders)创建超过 90 天不可查；未成交取消或过期订单在创建超过 3 天后也不可查。订单元数据缺失不能被解释为未下单。
 - [收入流水](https://developers.binance.com/docs/derivatives/usds-margined-futures/account/rest-api/Get-Income-History)仅保留最近 3 个月，资金费流水没有保证提供持仓方向。推论：双向仓位的资金费无法总是精确归属各笔交易，需要明确归属或缺失规则。
-- 官方另提供成交、订单和收入的[历史下载入口](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/account)，单次窗口最多 1 年。2026-10-14 再核验：订单生成每月 10 次，成交与收入生成各每月 5 次，文档注明与网页导出共享额度。窗口长度不等于承诺的历史保留期限；较早历史的获取方式仍待选择与验证。
+- 官方另提供成交、订单和收入的[历史下载入口](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/account)，单次窗口最多 1 年。2026-10-14 再核验：订单生成每月 10 次，成交与收入生成各每月 5 次，文档注明与网页导出共享额度。窗口长度不等于承诺的历史保留期限；已选择订单下载优先；较早成交链、费用与完整历史覆盖仍待验证。
 - 任务 02 使用官方[现货账户查询](https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/rest-api/account)返回的 `uid` 作为稳定账户身份，身份或只读权限无法确认时停写保留旧账本；子账户兼容性及真实账户联调仍待实连，API Key 不作为稳定账户身份。2026-10-13 再次核对 UID、各历史接口窗口/上限、收入页码以及强制订单类型；成交 `fromId` 不与时间范围混用。
 - 官方[强制订单查询](https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Users-Force-Orders)区分强平与 ADL，可按币种和订单关联；缺少证据时，普通市价或限价类型不能确定退出原因。
 - 成交费用包含实际资产，可能不是 USDT；[官方成交接口](https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Account-Trade-List)未提供历史 USDT 换算价格。使用历史行情折算只能表达为估算。
@@ -110,32 +110,32 @@
 - 文件读取仅接受已验证固定 CDN 主机，GET 不携带 API 凭据且不跟随重定向；校验 ZIP 大小、CRC、文件表头、UID、时间与数值后原子入账。实际核查文件与任务状态保持本地并被 Git 忽略。
 - App 显示每月 100 次生成额度，公开 API 文档数字仍不同。单次成功没有证明 API 实际月额度为 100，也没有验证超过 3 个月的完整历史或完整真实同步链路；这些限制继续明确展示。
 
-## 首版交付与验收
+## 任务追溯与验收要求
 
-实施按下列本地任务的阻塞关系推进，每项包含可演示的用户行为及相应验证；完整交付包含全部已确认功能。
+下表保留最初 12 项任务的依赖关系，用于追溯实现与当时验收，不表示当前待领取顺序。当前行为以本文为准，原五分钟自动归档等旧要求已被后续决策取代。
 
 | 本地任务 | 直接阻塞 |
 | --- | --- |
-| [01 复盘入口与单笔持久归档](../.scratch/trade-review/issues/01-review-ledger.md) | 无 |
-| [02 单币种真实历史同步](../.scratch/trade-review/issues/02-symbol-history-sync.md) | 01 |
-| [03 复杂交易周期归并](../.scratch/trade-review/issues/03-trade-cycle-grouping.md) | 02 |
-| [04 全账户历史与持续归档](../.scratch/trade-review/issues/04-account-history-archive.md) | 02 |
-| [05 个人笔记与交易风格标签](../.scratch/trade-review/issues/05-notes-and-style-tags.md) | 03 |
-| [06 原方案关联与执行偏差](../.scratch/trade-review/issues/06-plan-execution-comparison.md) | 03 |
-| [07 交易列表与组合筛选](../.scratch/trade-review/issues/07-trade-list-filters.md) | 05、06 |
-| [08 表现统计与分组图表](../.scratch/trade-review/issues/08-performance-statistics.md) | 07 |
-| [09 单笔行情与交易事件图](../.scratch/trade-review/issues/09-market-trade-chart.md) | 06 |
-| [10 单笔 LLM 完整上下文分析](../.scratch/trade-review/issues/10-single-trade-analysis.md) | 08、09 |
-| [11 筛选范围批量 LLM 分析](../.scratch/trade-review/issues/11-batch-trade-analysis.md) | 10 |
-| [12 CSV 导出与完整备份恢复](../.scratch/trade-review/issues/12-export-backup-restore.md) | 10 |
+| [01 复盘入口与单笔持久归档](archive/trade-review/issues/01-review-ledger.md) | 无 |
+| [02 单币种真实历史同步](archive/trade-review/issues/02-symbol-history-sync.md) | 01 |
+| [03 复杂交易周期归并](archive/trade-review/issues/03-trade-cycle-grouping.md) | 02 |
+| [04 全账户历史与持续归档](archive/trade-review/issues/04-account-history-archive.md) | 02 |
+| [05 个人笔记与交易风格标签](archive/trade-review/issues/05-notes-and-style-tags.md) | 03 |
+| [06 原方案关联与执行偏差](archive/trade-review/issues/06-plan-execution-comparison.md) | 03 |
+| [07 交易列表与组合筛选](archive/trade-review/issues/07-trade-list-filters.md) | 05、06 |
+| [08 表现统计与分组图表](archive/trade-review/issues/08-performance-statistics.md) | 07 |
+| [09 单笔行情与交易事件图](archive/trade-review/issues/09-market-trade-chart.md) | 06 |
+| [10 单笔 LLM 完整上下文分析](archive/trade-review/issues/10-single-trade-analysis.md) | 08、09 |
+| [11 筛选范围批量 LLM 分析](archive/trade-review/issues/11-batch-trade-analysis.md) | 10 |
+| [12 CSV 导出与完整备份恢复](archive/trade-review/issues/12-export-backup-restore.md) | 10 |
 
-01–06、09 已实现；其余任务按各自直接阻塞独立推进。复盘任务没有账户快照功能的前置依赖，共享入口的变更仍须保持兼容。没有修改或关闭原有开仓任务，也没有创建远程 issue。
+任务 01–12 的功能均已有实现。复盘没有账户快照页面的前置依赖，共享入口变更仍须保持兼容；归档任务中的未完成外部验收集中记录在[项目现状](status.md)。
 
 | 验收场景 | 通过条件 |
 | --- | --- |
 | 分批入场、加减仓、反手、双向持仓 | 周期归属、成交关联与费用总额可对账；多空分开；相同来源记录重试不会重复计入。 |
 | 缺少起点、分页未读完、资金费归属不明、非 USDT 费用 | 展示事实、缺项及相应有效样本数，不将缺项当零或完整结果。 |
-| 首次同步、增量同步、限流、断网及服务重启 | 分批同步进度持久化；失败不推进完成区间；重启可补查；归档不受会话及当前本单清除影响。 |
+| 首次同步、增量同步、限流、断网及服务重启 | 分批同步进度持久化；失败不推进完成区间；重启后仅主动补查；归档不受会话及当前本单清除影响。 |
 | 账户身份变化、真实与模拟切换 | 数据隔离；同账户换密钥延续账本；身份无法确认时暂停新增归档。 |
 | 筛选、详情、走势图、笔记与统计 | 筛选口径一致；交易事件和价格来源清楚；笔记与模型推测分开；样本不足和未知指标有明确展示。 |
 | 单笔及批量 LLM 分析 | 仅主动触发；上下文清单、数据时点和完整覆盖可追溯；超过 100 笔提示缩小范围；无次数限制。 |
@@ -146,8 +146,12 @@
 
 代码修改先运行 `pnpm typecheck` 和相关定向测试，最终执行 `pnpm check`。自动测试使用临时账本、模拟 Binance 响应及模拟 LLM 响应；浏览器使用模拟数据。真实账户和模型实连结果单独记录，不以模拟验收代替。
 
-后续范围为更早历史补录；自动交易、自动触发 LLM 分析、收益预测承诺和公网部署不在本次实现中。自动归档仍仅在本机服务运行期间工作。
+更早完整历史补录仍需验证。自动交易、自动触发 LLM 分析、收益预测承诺和公网部署不在本模块范围；手动启动的归档任务仅在本机服务运行期间继续，重启不自动续查。
 
-## 实施状态
+## 筛选接口边界
 
-用户已确认上述 12 项拆分与阻塞关系。任务 01–12 已实现复杂周期归并、演示单笔归档、SQLite 留存、受保护复盘页面、按稳定 UID 隔离的单币种同步、全账户持续归档、个人笔记/风格标签、原方案执行对照、交易列表筛选与分页、全范围表现统计与分组图表及单笔双来源历史行情事件图、单笔及筛选范围后台模型复盘；身份或权限不可靠时暂停新增归档，不自动改用模拟数据。CSV 与完整备份恢复已实现，真实账户及模型实连仍待单独验收。实际验证状态见 README 与对应任务记录。此前已确认的开仓算法、固定预算与绝对止损规则继续适用。
+`GET /api/review/trades` 校验组合筛选并每页展示 20 笔，返回规范化 `filters`、全范围 `total`、`page`、`pageSize`、`nextPage` 和同账户币种/标签选项。账本 `list(filters)`、统计、批量分析与 CSV 使用全部匹配范围，分页不改变其依据。
+
+接口保留 `dateField=openedAt|closedAt`、`from`/`to`（YYYY-MM-DD）、`symbol`、`side=long|short|unknown`、`pnl=win|loss|flat|pending`、`status=closed|open|incomplete`、`entryType`、`plan=linked|unconfirmed`、可重复的 `tag` 与 `page`。`timeZone` 如提供只接受 Asia/Shanghai；未知参数、重复单值、重复标签值、非法或反向日期返回 400。日期为起始日 00:00 至结束日次日 00:00 的半开区间。
+
+默认按开仓时间倒序，同时间按交易 ID 升序，未知开仓时间排最后。标签须全部匹配，只使用归属已确认的已保存笔记；停用标签仍可筛选历史。只有唯一确认关联算有关联，歧义与未关联均归无确认关联。首次开仓与加仓共同确定入场类型，已知与未知并存为混合。页面只展示日期和交易对，其余能力保留于服务端。
