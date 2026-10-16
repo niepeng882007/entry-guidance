@@ -4,6 +4,7 @@ import type { createBoundAccountReader } from './account.ts';
 import { BindingError, requireBusinessIdentity } from './binding.ts';
 import { createPlan, type Plan } from '../verification.ts';
 import { readMarket, readSymbols } from '../market.ts';
+import { AccountError } from '../account.ts';
 import type { EntryInput } from '../../public/draft.js';
 
 export interface SavedEntryPlan {
@@ -17,6 +18,15 @@ export interface SavedEntryPlan {
   };
   input: EntryInput;
   plan: Plan;
+}
+function requireFreshPlan(plan: Plan) {
+  if (
+    [plan.accountTime, plan.bookTime, plan.markTime].some(
+      (value) =>
+        !Number.isFinite(Date.parse(value)) || Math.abs(Date.now() - Date.parse(value)) >= 30000,
+    )
+  )
+    throw new AccountError('stale_market', '生成期间账户或行情数据已过期，请重新生成。', 409);
 }
 export function createBoundEntryService(
   database: PrismaClient,
@@ -104,6 +114,7 @@ export function createBoundEntryService(
           )
             throw new BindingError(401, '账户连接已变化，未保存新方案。');
           signal.throwIfAborted();
+          requireFreshPlan(plan);
           await tx.entryPlan.create({
             data: {
               id: plan.id,
@@ -116,6 +127,7 @@ export function createBoundEntryService(
             },
           });
         });
+        requireFreshPlan(plan);
         return result;
       });
     },

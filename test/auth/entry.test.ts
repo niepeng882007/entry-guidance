@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { setTimeout } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { startAuthRuntime, users } from './runtime.ts';
 import { entryTransport } from './entry-fixture.ts';
@@ -194,4 +195,26 @@ void test('rotating the binding during generation rejects the old request before
   } finally {
     release();
   }
+});
+
+void test('market data that expires during strict generation cannot become a saved executable card', async (t) => {
+  let active = false,
+    identities = 0;
+  const runtime = await startAuthRuntime({
+    transport: async (url, headers, signal) => {
+      const response = await entryTransport(url, headers, signal);
+      if (active && ['/fapi/v1/ticker/bookTicker', '/fapi/v1/premiumIndex'].includes(url.pathname))
+        return { ...response, body: { ...(response.body as object), time: Date.now() - 29500 } };
+      if (active && url.pathname === '/api/v3/account' && ++identities === 2)
+        await setTimeout(1200, undefined, { signal });
+      return response;
+    },
+  });
+  t.after(() => runtime.close());
+  const cookie = await login(runtime);
+  await bind(runtime, cookie);
+  active = true;
+  const response = await request(runtime, cookie, 'plans', input);
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).plan, undefined);
 });

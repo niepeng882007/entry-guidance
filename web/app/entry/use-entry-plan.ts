@@ -64,6 +64,10 @@ export function useEntryPlan({
     summary: true,
     onIdentityInvalid,
   });
+  const accountState =
+    account.stale || !account.snapshot
+      ? ''
+      : JSON.stringify(amounts.map((key) => account.snapshot![key]));
   const invalidate = (message: string) => {
     setCurrent(false);
     setReason(message);
@@ -107,7 +111,7 @@ export function useEntryPlan({
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const load = async () => {
-      if (!input.symbol || document.hidden || !navigator.onLine) return;
+      if (!input.symbol || !accountState || document.hidden || !navigator.onLine) return;
       setLoading(true);
       setMarket(null);
       try {
@@ -142,24 +146,28 @@ export function useEntryPlan({
         }
       }
     };
+    setMarket(null);
+    setLoading(false);
     timer = setTimeout(() => void load(), 500);
     return () => {
       active = false;
       clearTimeout(timer);
       controller.abort();
     };
-  }, [input, userId, binding, simulation, onIdentityInvalid, reload]);
+  }, [input, userId, binding, simulation, onIdentityInvalid, reload, accountState]);
   useEffect(() => {
     if (!saved) return;
-    if (
-      account.stale ||
-      !account.snapshot ||
-      amounts.some((key) => account.snapshot![key] !== saved.plan.account[key])
-    ) {
+    const generatedAt = Date.parse(saved.plan.accountTime);
+    const failedAfterGeneration = account.stale && Date.parse(account.attempted) >= generatedAt;
+    const changedAfterGeneration =
+      account.snapshot &&
+      Date.parse(account.snapshot.queriedAt) > generatedAt &&
+      amounts.some((key) => account.snapshot![key] !== saved.plan.account[key]);
+    if (failedAfterGeneration || changedAfterGeneration) {
       setCurrent(false);
       setReason('账户数据已变化或待更新，请显式重新生成。');
     }
-  }, [account.snapshot, account.stale, saved]);
+  }, [account.snapshot, account.stale, account.attempted, saved]);
   useEffect(() => {
     const expire = () => {
       if (
@@ -221,7 +229,12 @@ export function useEntryPlan({
   let draft: ReturnType<typeof generateDraft> | null = null;
   let preview: ReturnType<typeof generateEntryPreview> | null = null;
   let draftError = '选择合约并填写本次计划。';
-  if (market) {
+  if (
+    market &&
+    accountState &&
+    account.snapshot &&
+    amounts.every((key) => market.account[key] === account.snapshot![key])
+  ) {
     try {
       draft = generateDraft(input, market);
       draftError = '';

@@ -123,3 +123,54 @@ test('failed generation, offline state and a late response cannot enable a card'
     release();
   }
 });
+
+test('account changes withdraw old estimates and an older summary cannot revoke a freshly saved card', async ({
+  page,
+}) => {
+  await login(page);
+  await connect(page);
+  await page.goto('/entry');
+  await fillPlan(page);
+  const draft = page.getByText('草稿数量：');
+  const generate = page.getByRole('button', { name: '刷新并生成开仓卡' });
+  await expect(draft).toBeVisible();
+  await expect(generate).toBeEnabled();
+  await page.route('**/account/summary', async (route) => {
+    const response = await route.fetch();
+    const value = await response.json();
+    value.equity = '976.09999999';
+    value.walletBalance = '1001.10000001';
+    value.queriedAt = new Date().toISOString();
+    await route.fulfill({ response, json: value });
+  });
+  await expect(draft).not.toBeVisible();
+  await expect(generate).toBeDisabled();
+  await page.unroute('**/account/summary');
+  await expect(generate).toBeEnabled();
+  // Keep the pre-generation summary frozen while a newer strict snapshot produces the card.
+  const summaryResponse = await page.waitForResponse((response) =>
+    response.url().endsWith('/account/summary'),
+  );
+  const oldSummary = await summaryResponse.json();
+  await page.route('**/account/summary', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      json: oldSummary,
+      headers: { 'Access-Control-Allow-Origin': 'http://127.0.0.1:4180' },
+    }),
+  );
+  await page.route('**/entry/plans', async (route) => {
+    const response = await route.fetch();
+    const value = await response.json();
+    value.plan.account.equity = '976.09999999';
+    value.plan.account.walletBalance = '1001.10000001';
+    value.plan.account.queriedAt = value.plan.accountTime = new Date().toISOString();
+    await route.fulfill({ response, json: value });
+  });
+  await generate.click();
+  const copy = page.getByRole('button', { name: '复制数量' });
+  await expect(copy).toBeEnabled();
+  await page.unroute('**/account/summary');
+  await expect(copy).toBeDisabled();
+});
