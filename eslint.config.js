@@ -3,7 +3,16 @@ import ts from 'typescript-eslint';
 import vue from 'eslint-plugin-vue';
 
 export default ts.config(
-  { ignores: ['dist/**', 'node_modules/**', 'test-results/**'] },
+  {
+    ignores: [
+      'dist/**',
+      'node_modules/**',
+      'test-results/**',
+      'web/.next/**',
+      'web/next-env.d.ts',
+      'src/generated/**',
+    ],
+  },
   js.configs.recommended,
   ...ts.configs.recommended,
   ...vue.configs['flat/essential'],

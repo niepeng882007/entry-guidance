@@ -32,6 +32,7 @@
 
 | 入口 | 职责与关联 |
 | --- | --- |
+| [web/](../web/)、[src/identity/](../src/identity/)、[src/business-main.ts](../src/business-main.ts) | 票据 01 的独立 Next/Better Auth/PostgreSQL 登录与资料链路；旧业务入口仍按下表运行，本地合成演示与检查见[开发文档](development.md#多用户兼容入口票据-01) |
 | [src/main.ts](../src/main.ts) | 读取启动配置，选择 HTTP/HTTPS 并启动服务 |
 | [src/server.ts](../src/server.ts) | 登录、会话、静态文件白名单、方案保存与签名恢复、HTTP 业务入口 |
 | [src/account.ts](../src/account.ts) | Binance 白名单读取与签名、权限与账户口径校验；`transport` 是测试替换外部响应的边界 |

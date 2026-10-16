@@ -4,36 +4,56 @@
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
-    "node": ">=22.21.0"
+    "node": ">=24.22.0 <25"
   },
   "scripts": {
     "start": "node --use-env-proxy --env-file-if-exists=.env src/main.ts",
     "dev": "node --watch --use-env-proxy --env-file-if-exists=.env src/main.ts --dev",
-    "build": "vite build",
-    "typecheck": "tsc --noEmit && vue-tsc --noEmit -p tsconfig.frontend.json",
+    "build": "pnpm db:generate && pnpm build:legacy && pnpm build:web",
+    "typecheck": "pnpm db:generate && tsc --noEmit && vue-tsc --noEmit -p tsconfig.frontend.json && NEXT_TELEMETRY_DISABLED=1 next typegen web && tsc --noEmit -p web/tsconfig.json",
     "test": "node --test test/*.test.ts",
     "test:browser": "playwright test",
-    "lint": "eslint frontend vite.config.ts playwright.config.ts test/browser",
-    "format": "prettier --write frontend vite.config.ts playwright.config.ts test/browser eslint.config.js",
-    "format:check": "prettier --check frontend vite.config.ts playwright.config.ts test/browser eslint.config.js",
-    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm build && pnpm test && pnpm test:browser"
+    "lint": "eslint frontend vite.config.ts playwright.config.ts test/browser web src/identity src/business-server.ts src/business-main.ts scripts test/auth playwright.auth.config.ts prisma.config.ts",
+    "format": "prettier --write frontend vite.config.ts playwright.config.ts test/browser eslint.config.js web src/identity src/business-server.ts src/business-main.ts scripts test/auth playwright.auth.config.ts prisma.config.ts",
+    "format:check": "prettier --check frontend vite.config.ts playwright.config.ts test/browser eslint.config.js web src/identity src/business-server.ts src/business-main.ts scripts test/auth playwright.auth.config.ts prisma.config.ts",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm build && pnpm test && pnpm test:browser && pnpm test:auth && pnpm test:browser:auth",
+    "build:legacy": "vite build",
+    "build:web": "NEXT_TELEMETRY_DISABLED=1 next build web",
+    "db:generate": "CHECKPOINT_DISABLE=1 prisma generate",
+    "start:web": "NEXT_TELEMETRY_DISABLED=1 next start web --hostname 127.0.0.1 --port 3100",
+    "dev:web": "NEXT_TELEMETRY_DISABLED=1 next dev web --hostname 127.0.0.1 --port 3100",
+    "start:business": "node src/business-main.ts",
+    "test:auth": "node --test test/auth/*.test.ts",
+    "test:browser:auth": "playwright test -c playwright.auth.config.ts",
+    "demo:auth": "node scripts/auth-demo.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.63.0",
-    "@types/node": "^22.20.4",
+    "@types/node": "^24.19.2",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "@vitejs/plugin-vue": "^6.0.9",
     "eslint": "^10.11.0",
     "eslint-plugin-vue": "^10.11.0",
     "prettier": "^3.9.8",
+    "prisma": "7.10.1",
     "typescript": "6.0.3",
     "typescript-eslint": "^8.70.0",
     "vite": "^8.3.0",
     "vue-tsc": "^3.3.11"
   },
   "dependencies": {
+    "@prisma/adapter-pg": "7.10.1",
+    "@prisma/client": "7.10.1",
     "ant-design-vue": "^4.2.6",
+    "better-auth": "1.7.10",
     "dayjs": "^1.11.23",
+    "next": "16.4.2",
+    "pg": "8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "vue": "^3.5.43"
   }
 }

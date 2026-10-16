@@ -1,2 +1,33 @@
 allowBuilds:
   core-js: false
+  '@prisma/engines': true
+  prisma: true
+minimumReleaseAgeExclude:
+  - '@better-auth/core@1.7.10'
+  - '@better-auth/drizzle-adapter@1.7.10'
+  - '@better-auth/kysely-adapter@1.7.10'
+  - '@better-auth/memory-adapter@1.7.10'
+  - '@better-auth/mongo-adapter@1.7.10'
+  - '@better-auth/prisma-adapter@1.7.10'
+  - '@better-auth/telemetry@1.7.10'
+  - '@next/env@16.4.2'
+  - '@next/swc-darwin-arm64@16.4.2'
+  - '@next/swc-darwin-x64@16.4.2'
+  - '@next/swc-linux-arm64-gnu@16.4.2'
+  - '@next/swc-linux-arm64-musl@16.4.2'
+  - '@next/swc-linux-x64-gnu@16.4.2'
+  - '@next/swc-linux-x64-musl@16.4.2'
+  - '@next/swc-win32-arm64-msvc@16.4.2'
+  - '@next/swc-win32-x64-msvc@16.4.2'
+  - '@prisma/adapter-pg@7.10.1'
+  - '@prisma/client-runtime-utils@7.10.1'
+  - '@prisma/client@7.10.1'
+  - '@prisma/debug@7.10.1'
+  - '@prisma/driver-adapter-utils@7.10.1'
+  - better-auth@1.7.10
+  - next@16.4.2
+  - '@prisma/config@7.10.1'
+  - '@prisma/engines@7.10.1'
+  - '@prisma/fetch-engine@7.10.1'
+  - '@prisma/get-platform@7.10.1'
+  - prisma@7.10.1

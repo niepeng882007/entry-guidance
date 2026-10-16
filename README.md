@@ -12,7 +12,7 @@
 
 ## 本机启动
 
-需要 Node.js **22.21.0 或更高的受支持版本**，使用 **pnpm 11.7.0**；版本约束以 [package.json](package.json) 为准。
+需要 Node.js **24.22.0（24 LTS）**（可运行 `nvm use`），使用 **pnpm 11.7.0**；版本约束以 [package.json](package.json) 为准。
 
 1. 运行 `pnpm install --frozen-lockfile`。
 2. 参考 [`.env.example`](.env.example)，在本机 `.env` 设置至少 12 字符的独立 `APP_PASSWORD`；已有文件逐项合并，不覆盖。凭据只留在后端。
@@ -35,11 +35,17 @@ APP_MODE=real pnpm start
 
 复盘账本默认按模式保存于 `.local/review/real.sqlite` 或 `demo.sqlite`；可用 `REVIEW_DATA_DIR` 指定目录。复盘外部取数与模型分析均需手动发起。手机 HTTPS、数据保存、备份和具体操作见[使用说明](docs/usage.md)。
 
+## 多用户兼容入口（票据 01）
+
+本地已增加独立的 Next / Better Auth / PostgreSQL 工作台，仅提供两个预置合成用户的登录、资料读取和退出；旧业务仍由上面的 Vue / Node 入口运行。公开注册、账户绑定和交易模块迁移按后续票据实施。
+
+在 Node 24 和已启动的 Docker 下，运行 `pnpm build`，然后 `pnpm demo:auth`，打开 <http://127.0.0.1:3100/login>。合成用户及隔离数据库的使用方式见[开发与验证](docs/development.md#多用户兼容入口票据-01)。此命令不读取 `.env`，退出时删除本次临时数据库。
+
 ## 开发与验证
 
 本机热更新：`APP_MODE=demo pnpm dev`。首次运行浏览器测试前执行 `pnpm exec playwright install chromium webkit`；完整检查入口为 `pnpm check`。修改后端会重启服务，须重新登录；手机使用生产构建与 HTTPS。定向检查见[开发与验证](docs/development.md)。
 
-功能代码及模拟验收记录已存在，**当前代码基线未在本次重新跑完整检查**。实体 iOS、完整真实账户链路和真实模型仍有未完成验收；已有一次真实订单文件格式核查不代表完整同步通过。证据及限制统一见[项目现状与验收](docs/status.md)。
+原版与票据 01 的检查结果分别记录于项目现状。实体 iOS、完整真实账户链路和真实模型仍有未完成验收；已有一次真实订单文件格式核查不代表完整同步通过。证据及限制统一见[项目现状与验收](docs/status.md)。
 
 ## 文档入口
 

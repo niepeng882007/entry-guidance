@@ -1,0 +1,72 @@
+generator client {
+  provider = "prisma-client"
+  output = "../src/generated/prisma"
+  moduleFormat = "esm"
+  generatedFileExtension = "ts"
+  importFileExtension = "ts"
+}
+datasource db {
+  provider = "postgresql"
+}
+model User {
+  id String @id
+  name String
+  email String @unique
+  emailVerified Boolean @default(false)
+  image String?
+  disabled Boolean @default(false)
+  authorizationVersion Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  sessions Session[]
+  accounts Account[]
+  @@map("auth_user")
+}
+model Session {
+  id String @id
+  token String @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+  @@map("auth_session")
+}
+model Account {
+  id String @id
+  accountId String
+  providerId String
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken String?
+  refreshToken String?
+  idToken String?
+  accessTokenExpiresAt DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope String?
+  password String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([userId])
+  @@map("auth_account")
+}
+model Verification {
+  id String @id
+  identifier String
+  value String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([identifier])
+  @@map("auth_verification")
+}
+model RateLimit {
+  id String @id
+  key String @unique
+  count Int
+  lastRequest BigInt
+  @@map("auth_rate_limit")
+}

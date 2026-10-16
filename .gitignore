@@ -10,3 +10,6 @@ test-results/
 playwright-report/
 .scratch/trade-review/download-probe-*.bin
 .scratch/trade-review/download-probe-*.json
+
+web/.next/
+src/generated/
