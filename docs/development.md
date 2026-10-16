@@ -58,7 +58,7 @@ ESLint 以正确性为主：沿用 JS/TypeScript 推荐规则与 Vue essential�
 
 运行目标统一为 `.nvmrc` 的 Node 24.22.0；继续使用 pnpm 11.7.0、单一 package 和锁文件。`pnpm build` 先生成 Prisma 客户端，再构建旧 Vite 和新 Next；构建不提供数据库连接、认证 Secret、委托私钥或用户 Key 解密主密钥。`pnpm typecheck` 同时检查旧入口和 Next，并先生成 Next 路由类型，支持干净检出。
 
-新模块：`web/` 是 Next 页面与认证入口，`src/identity/` 管理 Better Auth、数据库和委托，`src/business-main.ts` 启动独立业务服务。业务服务只提供当前产品用户资料读取，所有旧账户、账本及静态路径均不转发。旧共享密码 Cookie 与新 `workbench` Cookie 相互不认可；旧 SQLite、本单及无归属浏览器存储保持在原入口。Next 认证页和私有页采用完整动态渲染及每请求 nonce CSP，不启用与 nonce 静态壳不兼容的部分预渲染；公开页缓存策略在票据 02 实施。Next 与 Better Auth 遥测显式关闭。
+新模块：`web/` 是 Next 页面与认证入口，`src/identity/` 管理 Better Auth、数据库和委托，`src/business-main.ts` 启动独立业务服务。业务服务提供当前产品用户资料及票据 04 的 Binance 绑定入口，所有旧账户、账本及静态路径均不转发。旧共享密码 Cookie 与新 `workbench` Cookie 相互不认可；旧 SQLite、本单及无归属浏览器存储保持在原入口。Next 认证页和私有页采用完整动态渲染及每请求 nonce CSP，不启用与 nonce 静态壳不兼容的部分预渲染；公开页缓存策略在票据 02 实施。Next 与 Better Auth 遥测显式关闭。
 
 Prisma CLI、客户端及 pg adapter 锁定同一 7.10.1 patch；Next 16.4.2、React/React DOM 19.3.1、Better Auth 1.7.10。新增依赖承担已确认的框架、认证及 PostgreSQL 职责，现有 Vue/Vite 及计算模块保留。pnpm 仅放行 Prisma 与其 engines 的必要构建脚本，core-js 继续禁止。Better Auth 的跨运行时声明引用未安装的 `bun:sqlite`，因此 TypeScript 使用 `skipLibCheck` 跳过依赖声明检查；项目源码及 Vue/React 模板继续严格检查。
 
@@ -92,3 +92,24 @@ Prisma CLI、客户端及 pg adapter 锁定同一 7.10.1 patch；Next 16.4.2、R
 会话采用 7 天滚动有效期、24 小时续期检查；RSC 只读不续期，客户端必经的受保护 Route Handler 转发续期 Set-Cookie。委托有效期 60 秒，绑定原会话、产品用户、授权代次、签发方、接收服务及 `profile:read`。每次业务读取仍从数据库复核会话有效期、用户停用/邮箱验证、当前代次和资源归属。浏览器委托仅驻请求内存并经 Authorization 头发送，跨源只允许精确网页 origin，不开放跨主机 Cookie。登出、跨标签身份变化、页面隐藏/离开均清除可见资料并递增请求代次，迟到响应不能恢复旧内容。依赖不可用返回 503，不伪装成未登录或清除有效 Cookie。
 
 票据 01 的本地验收不代表公开注册、Binance 绑定、云端数据库、真实外部链路、实体手机或部署已完成。
+
+## Binance 只读绑定（票据 04）
+
+已验证用户可从工作台进入 `/dashboard/connections`。首次绑定和同 UID 换 Key 均由业务服务复用固定白名单 GET 核实完整只读权限与稳定 UID；任何写权限、缺失字段、身份不明或上游失败都保留原数据。已有活跃绑定时不同 UID 返回 409；解绑、归档浏览及换账户由票据 23 实施。此页面不迁移旧 SQLite 或模拟身份，也不代表资产等业务已接入新绑定。
+
+绑定读写分别使用 `binding:read`、`binding:write` 短期委托，资料仍只允许 `profile:read`。写入要求精确 Origin、有效数据库会话、已验证且未停用用户，以及 15 分钟内创建的密码登录会话；超时需重新登录。事务在用户和会话行锁下再次检查授权，唯一约束同时保证每用户最多一个活跃绑定及 UID 独占，归档 UID 也保留占位。同 UID 换 Key 保留绑定 ID，递增凭据、绑定授权及用户授权代次，旧委托失效。
+
+每次提交带用户作用域 `requestId`；相同标识与相同凭据重试返回原结果，不重复核验或轮换，同标识不同内容返回 409。摘要使用主密钥 HMAC，不保存可离线猜测的明文摘要。浏览器只在当前提交处理凭据，提交即清空字段，后台、离开、退出或跨标签身份变化时清除可见状态并拒绝迟到响应。
+
+业务服务写入绑定时另需两项独立配置，Next 不接收它们，构建也不要求配置：
+
+| 配置                            | 要求                                                                                                          |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `CREDENTIAL_MASTER_KEY`         | 独立保管的 32 字节随机密钥，以规范 base64 提供；仅业务服务解密，不放数据库、仓库或业务备份，不复用认证 Secret |
+| `CREDENTIAL_MASTER_KEY_VERSION` | 当前主密钥的正整数版本；AES-256-GCM 认证数据绑定产品用户、归属实例、用途、凭据版本及主密钥版本                |
+
+主密钥缺失或无效时绑定写入返回 503，资料与非敏感连接状态仍可读。轮换主密钥不能只替换环境变量后声称旧密文仍可用；密钥管理设施、受控重加密和恢复流程须在部署前单独落实。数据库保存密文及版本，响应仅含绑定元数据，不回显 Key、Secret 或密文；原子替换失败不删除旧凭据。
+
+`pnpm demo:auth` 可查看设置页，使用随机的合成主密钥且不会加载真实 Binance 凭据。真实 Binance 联调另需授权；仅提交专用只读凭据。`test/auth/binding-fixture.ts` 只用于自动测试，以替换 transport 提供合成 UID，生产入口没有切换到该 transport 的配置。
+
+定向验证（先 `pnpm build`）：`node --test test/auth/binding.test.ts test/auth/credential.test.ts`；浏览器运行 `pnpm test:browser:auth`。测试使用隔离 PostgreSQL 17，覆盖权限/UID 失败关闭、首次绑定、同 UID 轮换、不同 UID 拒绝、幂等、双用户争同 UID、单用户争两个 UID、归档占位、来源和越权拒绝、15 分钟确认及核验中退出。凭据公开封装边界验证错用户、用途、绑定、版本、主密钥和篡改拒绝。Chromium/WebKit 覆盖三种视口、字段清空、浏览器存储、焦点、跨用户退出与迟到响应。

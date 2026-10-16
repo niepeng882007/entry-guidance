@@ -6,4 +6,4 @@
 
 注销立即停止登录、凭据使用和新任务，清理交易、个人记录旧版本及冻结快照等在线副本；平台灾备最长 30 天到期，恢复依据独立记录重放删除/撤销，按原归属实例处理以免误伤同 UID 的后来绑定。改变模型 Key 时，未完成分析须由用户明确继续，不能静默改用新 Key 扣费。
 
-目标细节见[架构](../architecture-nextjs-vercel-neon.md#104-托管凭据边界)，实施顺序见[重构计划](../refactor-implementation-plan.md)；当前实现尚未支持多用户绑定或托管。
+目标细节见[架构](../architecture-nextjs-vercel-neon.md#104-托管凭据边界)，实施顺序见[重构计划](../refactor-implementation-plan.md)；票据 04 已增加本地只读绑定与同 UID 换 Key 的凭据托管实现，验证结果及未完成的生命周期范围以[项目现状](../status.md#binance-只读绑定票据-04)为准。

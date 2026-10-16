@@ -1,12 +1,17 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { businessRequest, BusinessRequestError } from './business-request.ts';
+import ConnectionsForm, { type BindingMetadata } from './connections-form.tsx';
+
 interface Profile {
   id: string;
   name: string;
   email: string;
 }
-export default function Workbench() {
+export default function Workbench({ connections = false }: { connections?: boolean }) {
+  const [binding, setBinding] = useState<BindingMetadata | null>(null);
+  const [busy, setBusy] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [error, setError] = useState('');
   const generation = useRef(0);
@@ -18,6 +23,8 @@ export default function Workbench() {
     pending.current?.abort();
     pending.current = null;
     setProfile(null);
+    setBinding(null);
+    setBusy(false);
   }, []);
   const load = useCallback(async () => {
     clear();
@@ -27,43 +34,22 @@ export default function Workbench() {
     const controller = new AbortController();
     pending.current = controller;
     try {
-      const grant = await fetch('/api/delegation', {
-        method: 'POST',
-        signal: controller.signal,
-        cache: 'no-store',
-      });
-      if (generation.current !== version) return;
-      if (grant.status === 401) {
-        signedOut.current = true;
-        window.location.replace('/login');
-        return;
-      }
-      if (!grant.ok) throw new Error('服务暂时不可用，请稍后刷新。');
-      // The delegation lives only in this request's memory; no browser persistence.
-      const delegation: { token: string; userId: string; businessOrigin: string } =
-        await grant.json();
-      const response = await fetch(
-        `${delegation.businessOrigin}/v1/users/${encodeURIComponent(delegation.userId)}/profile`,
-        {
-          headers: { Authorization: `Bearer ${delegation.token}` },
-          credentials: 'omit',
-          signal: controller.signal,
-          cache: 'no-store',
-          redirect: 'error',
-        },
-      );
-      if (generation.current !== version) return;
-      if (response.status === 401) {
-        signedOut.current = true;
-        window.location.replace('/login');
-        return;
-      }
-      if (!response.ok) throw new Error('资料服务暂时不可用，请稍后刷新。');
+      const response = await businessRequest('profile', controller.signal);
       const next: Profile = await response.json();
-      if (generation.current === version && !signedOut.current) setProfile(next);
+      if (generation.current !== version || signedOut.current) return;
+      const connectionResponse = await businessRequest('binding', controller.signal);
+      const connection: { binding: BindingMetadata | null } = await connectionResponse.json();
+      if (generation.current === version && !signedOut.current) {
+        setProfile(next);
+        setBinding(connection.binding);
+      }
     } catch (cause) {
-      if (generation.current === version && !controller.signal.aborted)
-        setError(cause instanceof Error ? cause.message : '服务暂时不可用。');
+      if (generation.current === version && !controller.signal.aborted) {
+        if (cause instanceof BusinessRequestError && cause.status === 401) {
+          signedOut.current = true;
+          window.location.replace('/login');
+        } else setError(cause instanceof Error ? cause.message : '服务暂时不可用。');
+      }
     }
   }, [clear]);
   useEffect(() => {
@@ -95,6 +81,28 @@ export default function Workbench() {
       window.removeEventListener('pageshow', show);
     };
   }, [clear, load]);
+  async function saveConnection(value: { apiKey: string; apiSecret: string; requestId: string }) {
+    if (busy || signedOut.current || !profile) return;
+    const version = generation.current;
+    const controller = new AbortController();
+    pending.current = controller;
+    setBusy(true);
+    setError('');
+    try {
+      await businessRequest('binding', controller.signal, value);
+      if (generation.current === version && !signedOut.current) await load();
+    } catch (cause) {
+      if (generation.current === version && !controller.signal.aborted) {
+        if (cause instanceof BusinessRequestError && cause.status === 401) {
+          clear();
+          signedOut.current = true;
+          window.location.replace('/login');
+        } else setError(cause instanceof Error ? cause.message : '连接失败，请稍后重试。');
+      }
+    } finally {
+      if (generation.current === version) setBusy(false);
+    }
+  }
   async function logout() {
     signedOut.current = true;
     clear();
@@ -115,22 +123,40 @@ export default function Workbench() {
   return (
     <main className="page">
       <header className="page-header">
-        <h1 className="page-title">我的工作台</h1>
+        <h1 className="page-title">{connections ? 'Binance 只读连接' : '我的工作台'}</h1>
         <button className="button button--secondary" onClick={() => void logout()}>
           退出登录
         </button>
       </header>
+      <nav aria-label="工作台导航">
+        <a
+          className="button button--text"
+          href={connections ? '/dashboard' : '/dashboard/connections'}
+        >
+          {connections ? '返回工作台' : '连接设置'}
+        </a>
+      </nav>
       <p className="eyebrow">个人资料</p>
       {profile ? (
         <section aria-label="个人资料">
           <h2>{profile.name}</h2>
           <p>{profile.email}</p>
-          <p className="muted">尚未绑定 Binance 账户。</p>
+          <p className="muted">
+            {binding ? `已绑定真实 Binance 账户：${binding.uid}` : '尚未绑定 Binance 账户。'}
+          </p>
         </section>
       ) : (
         <p role="status">{error || '正在确认身份并读取资料…'}</p>
       )}
-      {error && (
+      {connections && profile && (
+        <ConnectionsForm binding={binding} busy={busy} onSubmit={saveConnection} />
+      )}
+      {connections && error && (
+        <p role="alert">
+          {error} <a href="/login">重新登录</a>
+        </p>
+      )}
+      {error && !connections && (
         <button
           className="button"
           onClick={() => {

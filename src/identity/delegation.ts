@@ -5,7 +5,7 @@ export interface Delegation {
   sub: string;
   sid: string;
   version: number;
-  scope: 'profile:read';
+  scope: 'profile:read' | 'binding:read' | 'binding:write';
   iss: string;
   aud: string;
   iat: number;
@@ -15,13 +15,14 @@ export function issueDelegation(
   identity: { user: { id: string; authorizationVersion: number }; session: { id: string } },
   issuer: string,
   audience: string,
+  scope: Delegation['scope'] = 'profile:read',
 ) {
   const iat = Math.floor(Date.now() / 1000);
   const claims: Delegation = {
     sub: identity.user.id,
     sid: identity.session.id,
     version: identity.user.authorizationVersion,
-    scope: 'profile:read',
+    scope,
     iss: issuer,
     aud: audience,
     iat,
@@ -73,7 +74,7 @@ export function verifyDelegation(
       !claims.sid ||
       !Number.isSafeInteger(claims.version) ||
       (claims.version ?? -1) < 0 ||
-      claims.scope !== 'profile:read' ||
+      !['profile:read', 'binding:read', 'binding:write'].includes(claims.scope ?? '') ||
       claims.iss !== issuer ||
       claims.aud !== audience ||
       !Number.isSafeInteger(claims.iat) ||

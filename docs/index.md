@@ -56,6 +56,12 @@
 | [vite.config.ts](../vite.config.ts)                                                                                                                                                                                                              | 前端开发编译与生产构建；Node 服务发布构建资源                                                                                                                                                                                                                                                                          |
 | [test/](../test/)                                                                                                                                                                                                                                | Node 测试覆盖 HTTP 与业务入口；`test/browser/` 使用 Playwright 验证生产构建的交互                                                                                                                                                                                                                                      |
 
+## 新 Binance 绑定入口
+
+- 设置页面与隐私生命周期：`web/app/dashboard/connections/`、`web/app/dashboard/workbench.tsx`。
+- 归属事务及凭据封装：`src/bindings/binding.ts`、`src/bindings/credential.ts`；`src/business-server.ts` 独立授权，`prisma/migrations/202610160002_binance_binding/` 保证唯一约束。
+- 合成 PostgreSQL 与生产浏览器验收：`test/auth/binding.test.ts`、`test/auth/credential.test.ts`、`test/auth/browser/connections.spec.ts`。运行及独立主密钥配置见[开发与验证](development.md#binance-只读绑定票据-04)。
+
 ## 规则入口
 
 - [根 AGENTS.md](../AGENTS.md) 是共享入口；[CLAUDE.md](../CLAUDE.md) 导入它。

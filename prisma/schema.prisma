@@ -20,6 +20,8 @@ model User {
   updatedAt DateTime @updatedAt
   sessions Session[]
   accounts Account[]
+  binanceBindings BinanceBinding[]
+  bindingMutations BindingMutation[]
   @@map("auth_user")
 }
 model Session {
@@ -69,4 +71,32 @@ model RateLimit {
   count Int
   lastRequest BigInt
   @@map("auth_rate_limit")
+}
+
+model BinanceBinding {
+  id String @id
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  source String @default("binance-live")
+  uid String
+  state String @default("active")
+  authorizationVersion Int @default(1)
+  credentialVersion Int @default(1)
+  keyVersion Int
+  sealedCredential String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([source, uid])
+  @@index([userId])
+  @@map("binance_binding")
+}
+model BindingMutation {
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  requestId String
+  digest String
+  result Json
+  createdAt DateTime @default(now())
+  @@id([userId, requestId])
+  @@map("binding_mutation")
 }

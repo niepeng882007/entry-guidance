@@ -1,6 +1,9 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { generateKeyPairSync, randomUUID } from 'node:crypto';
+import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
+import type { Server } from 'node:http';
+import { createBusinessServer } from '../../src/business-server.ts';
+import type { Transport } from '../../src/account.ts';
 import { promisify } from 'node:util';
 import { setTimeout } from 'node:timers/promises';
 import { hashPassword } from 'better-auth/crypto';
@@ -40,13 +43,17 @@ async function stop(child: ChildProcess | undefined) {
   await exited;
   clearTimeout(timer);
 }
-export async function startAuthRuntime(ports: { web?: number; business?: number } = {}) {
+export async function startAuthRuntime(
+  ports: { web?: number; business?: number; transport?: Transport } = {},
+) {
   const container = `entry-auth-${randomUUID()}`;
   const webOrigin = `http://127.0.0.1:${ports.web ?? (await freePort())}`;
   const businessOrigin = `http://127.0.0.1:${ports.business ?? (await freePort())}`;
   const keys = generateKeyPairSync('ed25519');
   let web: ChildProcess | undefined;
   let business: ChildProcess | undefined;
+  let businessServer: Server | undefined;
+  const credentialMaster = { key: randomBytes(32), version: 1 };
   let database: ReturnType<typeof createIdentityDatabase> | undefined;
   let created = false;
   let serving = false;
@@ -66,6 +73,10 @@ export async function startAuthRuntime(ports: { web?: number; business?: number 
       try {
         await stop(web);
         await stop(business);
+        if (businessServer)
+          await new Promise<void>((resolve, reject) =>
+            businessServer!.close((error) => (error ? reject(error) : resolve())),
+          );
         await database?.$disconnect();
         // Also try the known name if Docker was interrupted just after creating it.
         if (created) await exec('docker', ['stop', '-t', '1', container]);
@@ -148,15 +159,30 @@ export async function startAuthRuntime(ports: { web?: number; business?: number 
       });
     }
     checkStartup();
-    business = spawn(process.execPath, ['src/business-main.ts'], {
-      env: {
-        ...common,
-        DELEGATION_PUBLIC_KEY: keys.publicKey
-          .export({ type: 'spki', format: 'der' })
-          .toString('base64'),
-      },
-      stdio: 'ignore',
-    });
+    if (ports.transport) {
+      businessServer = createBusinessServer({
+        database,
+        authOrigin: webOrigin,
+        businessOrigin,
+        publicKey: keys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
+        credentialMaster,
+        transport: ports.transport,
+      });
+      await new Promise<void>((resolve) =>
+        businessServer!.listen(Number(new URL(businessOrigin).port), '127.0.0.1', resolve),
+      );
+    } else
+      business = spawn(process.execPath, ['src/business-main.ts'], {
+        env: {
+          ...common,
+          CREDENTIAL_MASTER_KEY: credentialMaster.key.toString('base64'),
+          CREDENTIAL_MASTER_KEY_VERSION: String(credentialMaster.version),
+          DELEGATION_PUBLIC_KEY: keys.publicKey
+            .export({ type: 'spki', format: 'der' })
+            .toString('base64'),
+        },
+        stdio: 'ignore',
+      });
     web = spawn(
       process.execPath,
       [
@@ -182,7 +208,7 @@ export async function startAuthRuntime(ports: { web?: number; business?: number 
     ready = false;
     for (let attempt = 0; attempt < 120; attempt++) {
       checkStartup();
-      if (web.exitCode !== null || business.exitCode !== null)
+      if (web.exitCode !== null || (business && business.exitCode !== null))
         throw new Error('合成服务未能启动；请先完成生产构建。');
       try {
         const response = await fetch(`${webOrigin}/login`);
@@ -199,7 +225,7 @@ export async function startAuthRuntime(ports: { web?: number; business?: number 
     if (!ready) throw new Error('合成服务启动超时。');
     checkStartup();
     serving = true;
-    return { webOrigin, businessOrigin, database, keys, close, container };
+    return { webOrigin, businessOrigin, database, keys, credentialMaster, close, container };
   } catch (error) {
     await close();
     if (interrupted) process.exit(0);

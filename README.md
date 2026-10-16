@@ -35,9 +35,9 @@ APP_MODE=real pnpm start
 
 复盘账本默认按模式保存于 `.local/review/real.sqlite` 或 `demo.sqlite`；可用 `REVIEW_DATA_DIR` 指定目录。复盘外部取数与模型分析均需手动发起。手机 HTTPS、数据保存、备份和具体操作见[使用说明](docs/usage.md)。
 
-## 多用户兼容入口（票据 01）
+## 多用户兼容入口（票据 01、04）
 
-本地已增加独立的 Next / Better Auth / PostgreSQL 工作台，仅提供两个预置合成用户的登录、资料读取和退出；旧业务仍由上面的 Vue / Node 入口运行。公开注册、账户绑定和交易模块迁移按后续票据实施。
+本地已增加独立的 Next / Better Auth / PostgreSQL 工作台，提供两个预置合成用户的登录、资料读取和退出，以及 `/dashboard/connections` 的 Binance 只读绑定与同 UID 换 Key。绑定由业务服务核实只读权限和稳定 UID，凭据独立加密保存且不回显；独立主密钥配置与验收边界见[开发与验证](docs/development.md#binance-只读绑定票据-04)。旧业务仍由上面的 Vue / Node 入口运行；公开注册、解绑归档和交易模块迁移按后续票据实施。
 
 在 Node 24 和已启动的 Docker 下，运行 `pnpm build`，然后 `pnpm demo:auth`，打开 <http://127.0.0.1:3100/login>。合成用户及隔离数据库的使用方式见[开发与验证](docs/development.md#多用户兼容入口票据-01)。此命令不读取 `.env`，退出时删除本次临时数据库。
 
@@ -47,7 +47,7 @@ APP_MODE=real pnpm start
 
 全仓 lint 使用零警告门槛，格式检查覆盖代码和现行文档。安装依赖后，提交钩子自动修复并检查暂存文件；全量检查由本地 `pnpm check` 及 GitHub CI 执行，运行前需准备 Docker 和测试浏览器。规则、排除范围及钩子说明见[代码规范与提交](docs/development.md#代码规范与提交)。
 
-原版与票据 01 的检查结果分别记录于项目现状。实体 iOS、完整真实账户链路和真实模型仍有未完成验收；已有一次真实订单文件格式核查不代表完整同步通过。证据及限制统一见[项目现状与验收](docs/status.md)。
+原版与多用户票据的检查结果分别记录于项目现状。实体 iOS、完整真实账户链路和真实模型仍有未完成验收；已有一次真实订单文件格式核查不代表完整同步通过。证据及限制统一见[项目现状与验收](docs/status.md)。
 
 ## 文档入口
 
