@@ -28,6 +28,8 @@
 
 [ADR 0001](adr/0001-manual-execution.md) 已由 ADR 0003 取代，仅保留历史背景。[原始问答](archive/original-q-and-a.md) 是需求来源，其中示例参数与双层算法不能覆盖现行产品决策。现行规格维护产品约束，使用说明维护操作方式，项目现状集中维护实现与验收边界；发现代码与规则不一致时明确列出差异。历史档案只作追溯，不把旧任务或通过记录当成当前需求和验收。
 
+多用户完整交易浏览由 [PostgreSQL 账本](../src/postgres-review-ledger.ts)、[受保护读取](../src/bindings/review.ts) 和 [React 列表/详情](../web/app/review/review-browser.tsx) 承接；[可等待读取边界](../src/review-reader.ts) 同时兼容旧 SQLite。实施与验收见[票据 11 记录](status.md#完整交易账本与分页详情票据-11)，人工步骤见[开发说明](development.md#票据-11-人工验证)。
+
 ## 模块地图
 
 自备模型 Key 设置位于 `web/app/dashboard/ai/`、`web/app/dashboard/model-settings.tsx` 与 `src/model-key.ts`，通过用户级授权管理加密凭据、版本和失效记录；配置与合成人工验收见[开发文档](development.md#自备模型-key票据-19)。
