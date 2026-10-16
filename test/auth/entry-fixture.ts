@@ -114,8 +114,9 @@ export const entryTransport: Transport = async (url, headers, signal) => {
       status: 200,
       body: {
         ...body,
+        // Browser cases share this synthetic budget; egress.test.ts exercises real-sized limits.
         rateLimits: [
-          { rateLimitType: 'REQUEST_WEIGHT', interval: 'MINUTE', intervalNum: 1, limit: 2400 },
+          { rateLimitType: 'REQUEST_WEIGHT', interval: 'MINUTE', intervalNum: 1, limit: 24000 },
         ],
       },
     };
