@@ -16,6 +16,10 @@
 
 因其他任务同步更新主线及构建产物，本轮最后在固定 `160d7a2` 的独立 worktree 复验，保留已合入的公开注册与只读绑定功能。完整 `pnpm check` 退出 0：类型、零警告 lint、格式、双构建、Node 369 项、认证/注册/绑定 Node 26 项、旧浏览器 180 项及新入口浏览器 14 项全部通过，共 395 项 Node、194 项浏览器。日志位于本机 `/tmp/entry-standards-isolated-full-check.log`，仅使用合成账户和临时 PostgreSQL；此记录不扩展为实体手机、真实 Binance 或模型验收。
 
+`937c388` 的 Linux 检查旧浏览器为 178/180，剩余项涉及连续平滑滚动。补充动画回归稳定复现迟到 `scrollend` 误释放新目标锁，修复为到达当前目标后才释放；用户输入仍可接管。几何/键盘用例明确减弱动态效果与可见焦点前提，动画用例继续验证普通动效和迟到事件。修复后 40 项重复验证通过，未增加重试、跳过或超时；规则记录于开发文档，最终远端结果仍以工作流为准。
+
+经典滚动条夹具进一步使用两屏最小高度，避免仅高出视口 1px 的临界溢出；四种宽度在 Chromium/WebKit 各重复 5 次，共 40 项通过，宽度相等断言保持不变。
+
 公开仓库为 [entry-guidance](https://github.com/niepeng882007/entry-guidance)。新增的 [Code quality 工作流](https://github.com/niepeng882007/entry-guidance/actions/workflows/check.yml) 对 PR 与 `main` 推送运行同一入口；每次远端运行结果以 GitHub Actions 为准，本地通过不代替远端结果。规则与命令说明见[开发与验证](development.md#代码规范与提交)。
 
 ## 多用户兼容入口：票据 01

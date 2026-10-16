@@ -31,6 +31,8 @@
 
 Node 测试使用内置 `node:test` 和断言，以本机临时 HTTP 端口及替换的 Binance 响应验证行为。Playwright 启动固定模拟服务器（127.0.0.1:4179），不加载 `.env` 或真实凭据，覆盖 Chromium 和 WebKit；失败记录留在忽略的 `test-results/`。部分超时用例约需 10 秒。`test/development.test.ts` 还使用 Chromium 与临时项目副本运行真实 `pnpm dev`，验证并发实例的 Vue/CSS 热更新、页面不跳转及后端自动重启；运行 Node 测试前也需安装 Chromium。
 
+浏览器用例先确认成功登录的首页已就绪，再发起后续导航，避免取消尚未完成的登录 POST。几何与键盘用例显式使用减弱动态效果，动画用例固定普通动效并验证过程；模拟用户接管滚动时发送对应输入事件。强制经典滚动条等夹具条件须先断言真实生效，不只注入样式后假定成功。
+
 ### 代码规范与提交
 
 `pnpm lint` 检查全仓 JS、TypeScript、Vue 和 React/Next 代码，采用零警告门槛；`pnpm format` 与 `pnpm format:check` 使用同一范围，覆盖代码、测试、配置、HTML/CSS 和现行文档。排除目录以 ESLint 配置和 `.prettierignore` 为准：依赖、生成资源、测试报告、本地数据、历史档案、`.scratch` 调查/任务记录及安装的技能源文件不做批量重排。Prettier 保留现有单引号和 100 列设置，EditorConfig 统一 UTF-8、LF 与两空格缩进。Prisma schema 和 SQL migration 保持工具原格式。
