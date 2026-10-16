@@ -721,7 +721,8 @@ test.describe('review loading with classic scrollbars', () => {
         const response = await route.fetch();
         await route.fulfill({
           response,
-          body: `${await response.text()}\nhtml::-webkit-scrollbar { width: 16px; }`,
+          // Keep short pages scrollable too so every navigation exercises classic scrollbars.
+          body: `${await response.text()}\nhtml::-webkit-scrollbar { width: 16px; } body { min-height: calc(100vh + 1px); }`,
         });
       });
       await page.goto('/');

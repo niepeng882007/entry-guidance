@@ -616,7 +616,7 @@ test('asset errors show actionable summaries and keep technical details collapse
       true,
     );
     await page.screenshot({
-      path: `/private/tmp/entry-account-error-${testInfo.project.name}-${width}.png`,
+      path: testInfo.outputPath(`entry-account-error-${width}.png`),
       fullPage: true,
     });
     await page.keyboard.press('Enter');
@@ -684,7 +684,7 @@ test('asset amounts, unknown fields, disclosure and keyboard focus fit narrow an
       expect(item.scroll).toBeLessThanOrEqual(item.client + 1);
     }
     await page.screenshot({
-      path: `/private/tmp/entry-account-${testInfo.project.name}-${width}.png`,
+      path: testInfo.outputPath(`entry-account-${width}.png`),
       fullPage: true,
     });
   }

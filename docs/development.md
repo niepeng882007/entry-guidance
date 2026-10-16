@@ -43,7 +43,7 @@ ESLint 以正确性为主：沿用 JS/TypeScript 推荐规则与 Vue essential�
 
 ### GitHub CI
 
-`.github/workflows/check.yml` 对所有 PR 和 `main` 推送运行同一条 `pnpm check`；同一 PR/分支的新提交取消旧检查。Node 读取 `.nvmrc`，pnpm 读取 `package.json`，依赖用 `--frozen-lockfile` 安装；Linux runner 安装 Chromium/WebKit 及系统依赖，预取 `postgres:17`，认证测试继续自行创建并销毁临时数据库。工作流只有仓库只读权限，不提供生产 Secrets，不部署、不调用真实 Binance 或模型。CI 用 `HUSKY=0` 跳过本地钩子安装。
+`.github/workflows/check.yml` 对所有 PR 和 `main` 推送运行同一条 `pnpm check`；同一 PR/分支的新提交取消旧检查。Node 读取 `.nvmrc`，pnpm 读取 `package.json`，依赖用 `--frozen-lockfile` 安装；Linux runner 安装 Chromium/WebKit 及系统依赖，预取 `postgres:17`，认证测试继续自行创建并销毁临时数据库。工作流只有仓库只读权限，不提供生产 Secrets，不部署、不调用真实 Binance 或模型。CI 用 `HUSKY=0` 跳过本地钩子安装；失败时保留 `test-results/` 中的模拟浏览器证据 3 天，截图统一使用 `testInfo.outputPath()`，不依赖本机临时目录。
 
 新增开发依赖 Husky、lint-staged 用于可靠处理部分暂存及失败恢复；globals 提供运行环境的全局变量定义；React Hooks 和 Next lint 插件补齐双栈规则。依赖兼容现有 ESLint/TypeScript/Next，不为规范统一升级业务框架。若远端默认分支调整，同步修改工作流的 push 分支。工作流文件的本地验证不代表 GitHub 已实际运行通过。
 
