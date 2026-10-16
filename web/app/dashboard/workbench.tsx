@@ -193,6 +193,9 @@ export default function Workbench({
             连接设置
           </a>
         )}
+        <a className="button button--text" href="/review?view=cycles">
+          完整交易
+        </a>
         {!entry && (
           <a className="button button--text" href="/entry">
             开仓计划

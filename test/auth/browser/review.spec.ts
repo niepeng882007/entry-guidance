@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { login } from './login.ts';
+import { login, switchCookie } from './login.ts';
 
 async function connect(page: Page, name = 'alice') {
   await page.goto('/dashboard/connections');
@@ -141,12 +141,7 @@ test('late responses and a silent cookie identity switch cannot reveal the previ
   try {
     await page.getByRole('button', { name: '重新读取' }).click();
     await seen;
-    const { users } = await import('../runtime.ts');
-    const response = await context.request.post('/api/auth/sign-in/email', {
-      headers: { Origin: 'http://127.0.0.1:4180' },
-      data: { email: users[1]!.email, password: users[1]!.password },
-    });
-    expect(response.status()).toBe(200);
+    await switchCookie(context);
     release();
     await expect(page).toHaveURL('/login');
     await expect(page.locator('tbody tr')).toHaveCount(0);

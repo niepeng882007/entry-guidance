@@ -1,24 +1,6 @@
-import { test, expect, type Page, type BrowserContext } from '@playwright/test';
-import { login } from './login.ts';
+import { test, expect, type Page } from '@playwright/test';
+import { login, switchCookie } from './login.ts';
 import { users } from '../runtime.ts';
-
-async function switchCookie(context: BrowserContext) {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const response = await context.request.post('/api/auth/sign-in/email', {
-      headers: { Origin: 'http://127.0.0.1:4180' },
-      data: { email: users[1]!.email, password: users[1]!.password },
-    });
-    if (response.status() !== 429) {
-      expect(response.status()).toBe(200);
-      return;
-    }
-    const seconds = Number(response.headers()['retry-after']);
-    expect(seconds).toBeGreaterThan(0);
-    expect(seconds).toBeLessThanOrEqual(10);
-    await new Promise((resolve) => setTimeout(resolve, (seconds + 0.1) * 1000));
-  }
-  throw new Error('合成登录仍处于冷却。');
-}
 
 async function connect(page: Page, name = 'alice') {
   await page.goto('/dashboard/connections');
