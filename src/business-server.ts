@@ -1,4 +1,4 @@
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { PrismaClient } from './generated/prisma/client.ts';
 import { verifyDelegation } from './identity/delegation.ts';
 
@@ -8,7 +8,7 @@ export function createBusinessServer(options: {
   businessOrigin: string;
   publicKey: string;
 }) {
-  return createServer(async (request, response) => {
+  async function handle(request: IncomingMessage, response: ServerResponse) {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
@@ -72,5 +72,8 @@ export function createBusinessServer(options: {
     } catch {
       return reply(503, { error: '资料服务暂时不可用，请稍后重试。' });
     }
+  }
+  return createServer((request, response) => {
+    void handle(request, response).catch(() => response.destroy());
   });
 }

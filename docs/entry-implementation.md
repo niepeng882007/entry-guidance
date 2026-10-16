@@ -8,11 +8,11 @@
 
 账户读取使用以下 **GET** 签名请求，禁止重定向、任意地址、任意参数或交易请求：
 
-| 接口 | 用途 |
-| --- | --- |
-| `api.binance.com/sapi/v1/account/apiRestrictions` | 确认读取权限，拒绝交易、提现、划转等权限；关键权限字段缺失时停止。 |
-| `api.binance.com/sapi/v1/portfolio/account` | 排除统一/组合保证金账户，含 Pro；只有明确的 `-21001 USER_IS_NOT_UNIACCOUNT` 错误才继续。其他失败不当作普通账户证明。 |
-| `fapi.binance.com/fapi/v2/account` | 要求 `multiAssetsMargin=false`，读取唯一的 USDT 资产。 |
+| 接口                                              | 用途                                                                                                                 |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `api.binance.com/sapi/v1/account/apiRestrictions` | 确认读取权限，拒绝交易、提现、划转等权限；关键权限字段缺失时停止。                                                   |
+| `api.binance.com/sapi/v1/portfolio/account`       | 排除统一/组合保证金账户，含 Pro；只有明确的 `-21001 USER_IS_NOT_UNIACCOUNT` 错误才继续。其他失败不当作普通账户证明。 |
+| `fapi.binance.com/fapi/v2/account`                | 要求 `multiAssetsMargin=false`，读取唯一的 USDT 资产。                                                               |
 
 权益 = USDT 的 `walletBalance + unrealizedProfit`，并检查与 `marginBalance` 一致；可用余额直接采用该资产的 `availableBalance`，不减第二次已占保证金。不使用账户汇总值、`crossUnPnl` 或提现额度替代。金额以 8 位小数的 BigInt 计算；字段不合法、超出支持精度或口径不一致时停止展示新结果。
 
@@ -22,15 +22,15 @@
 
 选择币种后，同次查询还使用以下固定 **GET** 接口。公共行情请求不携带 Key 或签名；私有请求仅接受经过校验的币种参数，前端无代签入口。
 
-| 接口 | 用途 |
-| --- | --- |
-| `/fapi/v1/exchangeInfo`（公共） | 筛选交易中的 USDT 本位永续，读取 `PRICE_FILTER`、`LOT_SIZE`、`MARKET_LOT_SIZE`、`MIN_NOTIONAL` 及 `marketTakeBound`；限价另须确认 `LIMIT`、`GTC` 支持及 `PERCENT_PRICE`。不以显示精度替代步长。 |
-| `/fapi/v1/ticker/bookTicker`、`/fapi/v1/premiumIndex`（公共） | 买卖报价、标记价及各自数据时间。 |
-| `/fapi/v2/ticker/price`（公共） | 最新成交价，用于官方市价下单成本估值；保留最后成交时间。 |
-| `/fapi/v1/leverageBracket` | 读取该账户、该币种的杠杆上限、名义价值边界、维持保证金率和速算额。 |
-| `/fapi/v1/commissionRate` | 读取当前币种的账户 taker 费率，开平仓均采用该值；缺失或异常时阻断，不手填覆盖，不假定额外折扣。 |
-| `/fapi/v1/positionSide/dual` | 再确认账户单向持仓。 |
-| `/fapi/v1/openOrders`、`/fapi/v1/openAlgoOrders` | 分别查询目标币种普通与条件挂单；任一非空即要求用户处理，包括只减仓或整仓退出委托。 |
+| 接口                                                          | 用途                                                                                                                                                                                            |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/fapi/v1/exchangeInfo`（公共）                               | 筛选交易中的 USDT 本位永续，读取 `PRICE_FILTER`、`LOT_SIZE`、`MARKET_LOT_SIZE`、`MIN_NOTIONAL` 及 `marketTakeBound`；限价另须确认 `LIMIT`、`GTC` 支持及 `PERCENT_PRICE`。不以显示精度替代步长。 |
+| `/fapi/v1/ticker/bookTicker`、`/fapi/v1/premiumIndex`（公共） | 买卖报价、标记价及各自数据时间。                                                                                                                                                                |
+| `/fapi/v2/ticker/price`（公共）                               | 最新成交价，用于官方市价下单成本估值；保留最后成交时间。                                                                                                                                        |
+| `/fapi/v1/leverageBracket`                                    | 读取该账户、该币种的杠杆上限、名义价值边界、维持保证金率和速算额。                                                                                                                              |
+| `/fapi/v1/commissionRate`                                     | 读取当前币种的账户 taker 费率，开平仓均采用该值；缺失或异常时阻断，不手填覆盖，不假定额外折扣。                                                                                                 |
+| `/fapi/v1/positionSide/dual`                                  | 再确认账户单向持仓。                                                                                                                                                                            |
+| `/fapi/v1/openOrders`、`/fapi/v1/openAlgoOrders`              | 分别查询目标币种普通与条件挂单；任一非空即要求用户处理，包括只减仓或整仓退出委托。                                                                                                              |
 
 旧仓位、旧委托或模式不符合时撤销数量，保留输入和具体处理原因。工具不清仓、撤单或改变模式。模拟模式仅提供明确标注的 BTCUSDT / ETHUSDT 虚拟报价与规则；真实模式币种列表来自 Binance。
 
@@ -89,12 +89,12 @@
 
 返回后点击“返回后刷新核验”或页首刷新按钮，使用 `GET /api/verification?planId=…`。只读查询新增：
 
-| Binance GET 接口 | 用途 |
-| --- | --- |
-| `/fapi/v1/time`（公共） | 以交易所时间限定起点与查询区间，超过 30 秒时钟差则停止。 |
-| `/fapi/v2/positionRisk` | 读取实际均价、数量、逐仓模式、杠杆和当前强平价。 |
+| Binance GET 接口                            | 用途                                                                                                          |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `/fapi/v1/time`（公共）                     | 以交易所时间限定起点与查询区间，超过 30 秒时钟差则停止。                                                      |
+| `/fapi/v2/positionRisk`                     | 读取实际均价、数量、逐仓模式、杠杆和当前强平价。                                                              |
 | `/fapi/v1/userTrades`、`/fapi/v1/allOrders` | 将本单成交数量、方向、手续费与唯一市价/限价开仓订单对账；限价另比对当前挂单的价格、原数量、累计成交量和状态。 |
-| `/fapi/v1/income` | 查询本单区间内资金费支出，识别无法归属的其他收支。 |
+| `/fapi/v1/income`                           | 查询本单区间内资金费支出，识别无法归属的其他收支。                                                            |
 
 同时读取普通挂单、条件挂单、账户权限/模式、当前规则、账户退出费率和标记价。读取前后再次比较持仓与挂单；任一请求失败或两次状态不一致，本次不能通过。REST 读取不是交易所原子快照，只能排除已观察到的不一致，不宣称持续监测。完整查询共用 10 秒超时。
 

@@ -1,22 +1,30 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>个人登录 · 开仓前</title>
-  <link rel="stylesheet" href="/style.css">
-</head>
-<body>
-  <main class="page login">
-    <p class="eyebrow">开仓前 / ENTRY GUIDANCE</p>
-    <h1 class="page-title login__title">先看清账户。</h1>
-    <p class="muted">登录你的个人工作台，查询 USDT 合约账户状态。</p>
-    <form action="/login" method="post" class="login__form">
-      <label for="password" class="field-label">个人访问密码</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" required autofocus class="field-control">
-      <p class="error" role="alert">{{error}}</p>
-      <button type="submit" class="button button--block">进入账户</button>
-    </form>
-  </main>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>个人登录 · 开仓前</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="page login">
+      <p class="eyebrow">开仓前 / ENTRY GUIDANCE</p>
+      <h1 class="page-title login__title">先看清账户。</h1>
+      <p class="muted">登录你的个人工作台，查询 USDT 合约账户状态。</p>
+      <form action="/login" method="post" class="login__form">
+        <label for="password" class="field-label">个人访问密码</label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          autocomplete="current-password"
+          required
+          autofocus
+          class="field-control"
+        />
+        <p class="error" role="alert">{{error}}</p>
+        <button type="submit" class="button button--block">进入账户</button>
+      </form>
+    </main>
+  </body>
 </html>

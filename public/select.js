@@ -93,7 +93,8 @@ export function enhanceSelects(root = document, signal) {
       typed = '';
       if (search) search.value = '';
       if (closeCurrent === close) closeCurrent = undefined;
-      if (wasOpen && action?.focusTrigger && search && document.activeElement === search) trigger.focus({ preventScroll: true });
+      if (wasOpen && action?.focusTrigger && search && document.activeElement === search)
+        trigger.focus({ preventScroll: true });
     }
 
     function position() {
@@ -104,7 +105,10 @@ export function enhanceSelects(root = document, signal) {
       const left = viewport?.offsetLeft ?? 0;
       const height = viewport?.height ?? window.innerHeight;
       const width = viewport?.width ?? window.innerWidth;
-      if (!trigger.getClientRects().length || box.bottom < top || box.top > top + height) { close(); return; }
+      if (!trigger.getClientRects().length || box.bottom < top || box.top > top + height) {
+        close();
+        return;
+      }
       const below = top + height - box.bottom - 12;
       const above = box.top - top - 12;
       menu.style.width = `${Math.min(box.width, width - 24)}px`;
@@ -130,7 +134,8 @@ export function enhanceSelects(root = document, signal) {
       const scroller = searchable ? optionsHost : menu;
       // Scroll only the popup; scrollIntoView can move the entire planning form.
       if (item.offsetTop < scroller.scrollTop) scroller.scrollTop = item.offsetTop;
-      else if (item.offsetTop + item.offsetHeight > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = item.offsetTop + item.offsetHeight - scroller.clientHeight;
+      else if (item.offsetTop + item.offsetHeight > scroller.scrollTop + scroller.clientHeight)
+        scroller.scrollTop = item.offsetTop + item.offsetHeight - scroller.clientHeight;
     }
 
     /** @param {'default' | 'preserve'} mode */
@@ -144,10 +149,16 @@ export function enhanceSelects(root = document, signal) {
         return option.value !== '' && option.label.toLocaleLowerCase().includes(needle);
       });
       const retained = previous && options.includes(previous) ? options.indexOf(previous) : -1;
-      const fallback = !searchable || query === ''
-        ? options.findIndex((option) => option.selected && !option.disabled)
-        : -1;
-      const next = retained >= 0 ? retained : fallback >= 0 ? fallback : options.findIndex((option) => !option.disabled);
+      const fallback =
+        !searchable || query === ''
+          ? options.findIndex((option) => option.selected && !option.disabled)
+          : -1;
+      const next =
+        retained >= 0
+          ? retained
+          : fallback >= 0
+            ? fallback
+            : options.findIndex((option) => !option.disabled);
       if (searchable && options.length === 0) {
         optionsHost.replaceChildren(empty);
         active = -1;
@@ -155,17 +166,19 @@ export function enhanceSelects(root = document, signal) {
         search?.removeAttribute('aria-activedescendant');
         return;
       }
-      optionsHost.replaceChildren(...options.map((option, index) => {
-        const item = document.createElement('div');
-        item.id = `${optionsHost.id}-${index}`;
-        item.className = 'select-control__option';
-        item.setAttribute('role', 'option');
-        item.setAttribute('aria-selected', String(option.selected));
-        item.setAttribute('aria-disabled', String(option.disabled));
-        item.textContent = option.label;
-        item.addEventListener('click', () => commit(index));
-        return item;
-      }));
+      optionsHost.replaceChildren(
+        ...options.map((option, index) => {
+          const item = document.createElement('div');
+          item.id = `${optionsHost.id}-${index}`;
+          item.className = 'select-control__option';
+          item.setAttribute('role', 'option');
+          item.setAttribute('aria-selected', String(option.selected));
+          item.setAttribute('aria-disabled', String(option.disabled));
+          item.textContent = option.label;
+          item.addEventListener('click', () => commit(index));
+          return item;
+        }),
+      );
       if (next < 0) {
         active = -1;
         trigger.removeAttribute('aria-activedescendant');
@@ -215,7 +228,16 @@ export function enhanceSelects(root = document, signal) {
     /** @param {number} index */
     function commit(index) {
       const option = options[index];
-      if (select.disabled || !option || option.disabled || option.hidden || !select.contains(option)) { close(); return; }
+      if (
+        select.disabled ||
+        !option ||
+        option.disabled ||
+        option.hidden ||
+        !select.contains(option)
+      ) {
+        close();
+        return;
+      }
       const changed = select.selectedIndex !== option.index;
       select.selectedIndex = option.index;
       close();
@@ -227,18 +249,31 @@ export function enhanceSelects(root = document, signal) {
       }
     }
 
-    trigger.addEventListener('click', () => menu.hidden ? open() : close());
+    trigger.addEventListener('click', () => (menu.hidden ? open() : close()));
     trigger.addEventListener('keydown', (event) => {
       if (event.isComposing || event.ctrlKey || event.metaKey) return;
-      if (event.key === 'Tab') { close(); return; }
-      if (event.key === 'Escape') { if (!menu.hidden) event.preventDefault(); close(); return; }
-      if (event.altKey && event.key === 'ArrowUp') { event.preventDefault(); if (!menu.hidden) commit(active); return; }
+      if (event.key === 'Tab') {
+        close();
+        return;
+      }
+      if (event.key === 'Escape') {
+        if (!menu.hidden) event.preventDefault();
+        close();
+        return;
+      }
+      if (event.altKey && event.key === 'ArrowUp') {
+        event.preventDefault();
+        if (!menu.hidden) commit(active);
+        return;
+      }
       const navigation = ['ArrowDown', 'ArrowUp', 'Home', 'End'];
       if (navigation.includes(event.key)) {
         event.preventDefault();
         const wasOpen = !menu.hidden;
         if (!wasOpen) open();
-        const enabled = options.map((option, index) => option.disabled ? -1 : index).filter((index) => index >= 0);
+        const enabled = options
+          .map((option, index) => (option.disabled ? -1 : index))
+          .filter((index) => index >= 0);
         let next = enabled.indexOf(active);
         if (event.key === 'Home') next = 0;
         else if (event.key === 'End') next = enabled.length - 1;
@@ -271,22 +306,48 @@ export function enhanceSelects(root = document, signal) {
         for (let step = 0; step < options.length; step++) {
           const index = (Math.max(0, start) + step) % options.length;
           const option = options[index];
-          if (option && !option.disabled && option.label.toLocaleLowerCase().startsWith(prefix)) { activate(index); break; }
+          if (option && !option.disabled && option.label.toLocaleLowerCase().startsWith(prefix)) {
+            activate(index);
+            break;
+          }
         }
       }
     });
     search?.addEventListener('keydown', (event) => {
-      if (event.isComposing || event.key === 'Process' || event.ctrlKey || event.metaKey || event.altKey) return;
-      if (event.key === 'Tab') { close(); return; }
-      if (event.key === 'Escape') { event.preventDefault(); close({ focusTrigger: true }); return; }
+      if (
+        event.isComposing ||
+        event.key === 'Process' ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey
+      )
+        return;
+      if (event.key === 'Tab') {
+        close();
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close({ focusTrigger: true });
+        return;
+      }
       if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Enter') return;
       event.preventDefault();
-      if (event.key === 'Enter') { if (active >= 0) commit(active); return; }
-      const enabled = options.map((option, index) => option.disabled ? -1 : index).filter((index) => index >= 0);
+      if (event.key === 'Enter') {
+        if (active >= 0) commit(active);
+        return;
+      }
+      const enabled = options
+        .map((option, index) => (option.disabled ? -1 : index))
+        .filter((index) => index >= 0);
       if (!enabled.length) return;
       let next = enabled.indexOf(active);
       if (next < 0) next = event.key === 'ArrowDown' ? 0 : enabled.length - 1;
-      else next = Math.max(0, Math.min(next + (event.key === 'ArrowDown' ? 1 : -1), enabled.length - 1));
+      else
+        next = Math.max(
+          0,
+          Math.min(next + (event.key === 'ArrowDown' ? 1 : -1), enabled.length - 1),
+        );
       activate(enabled[next] ?? -1);
     });
     search?.addEventListener('input', () => {
@@ -300,18 +361,39 @@ export function enhanceSelects(root = document, signal) {
       suppressClose = true;
       if (event.pointerType === 'mouse') event.preventDefault();
     });
-    menu.addEventListener('pointerup', () => { suppressClose = false; });
-    menu.addEventListener('pointercancel', () => { suppressClose = false; });
-    document.addEventListener('pointerdown', (event) => {
-      if (!(event.target instanceof Node) || wrapper.contains(event.target)) return;
-      const takesFocus = event.target instanceof Element && Boolean(event.target.closest('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'));
-      close({ focusTrigger: Boolean(search) && !takesFocus });
-    }, { signal });
-    document.addEventListener('focusin', (event) => {
-      if (suppressClose) return;
-      if (event.target instanceof Node && !wrapper.contains(event.target)) close();
-    }, { signal });
-    const onResize = () => { if (searchable && !menu.hidden) position(); else close(); };
+    menu.addEventListener('pointerup', () => {
+      suppressClose = false;
+    });
+    menu.addEventListener('pointercancel', () => {
+      suppressClose = false;
+    });
+    document.addEventListener(
+      'pointerdown',
+      (event) => {
+        if (!(event.target instanceof Node) || wrapper.contains(event.target)) return;
+        const takesFocus =
+          event.target instanceof Element &&
+          Boolean(
+            event.target.closest(
+              'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])',
+            ),
+          );
+        close({ focusTrigger: Boolean(search) && !takesFocus });
+      },
+      { signal },
+    );
+    document.addEventListener(
+      'focusin',
+      (event) => {
+        if (suppressClose) return;
+        if (event.target instanceof Node && !wrapper.contains(event.target)) close();
+      },
+      { signal },
+    );
+    const onResize = () => {
+      if (searchable && !menu.hidden) position();
+      else close();
+    };
     window.addEventListener('resize', onResize, { signal });
     window.addEventListener('scroll', position, { capture: true, signal });
     window.visualViewport?.addEventListener('resize', onResize, { signal });
@@ -320,11 +402,35 @@ export function enhanceSelects(root = document, signal) {
     select.addEventListener('change', sync);
     // Dynamic options and disabled/error attributes stay owned by the native field.
     const observer = new MutationObserver(sync);
-    observer.observe(select, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'hidden', 'selected', 'label', 'aria-invalid', 'aria-describedby', 'aria-busy', 'required'] });
-    signal?.addEventListener('abort', () => { observer.disconnect(); close(); }, { once: true });
+    observer.observe(select, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: [
+        'disabled',
+        'hidden',
+        'selected',
+        'label',
+        'aria-invalid',
+        'aria-describedby',
+        'aria-busy',
+        'required',
+      ],
+    });
+    signal?.addEventListener(
+      'abort',
+      () => {
+        observer.disconnect();
+        close();
+      },
+      { once: true },
+    );
     updates.push(sync);
     sync();
   }
   // Programmatic .value assignments do not emit events or attribute mutations.
-  return () => { for (const update of updates) update(); };
+  return () => {
+    for (const update of updates) update();
+  };
 }

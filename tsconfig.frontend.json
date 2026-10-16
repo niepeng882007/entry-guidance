@@ -6,5 +6,12 @@
     "skipLibCheck": true,
     "types": ["vite/client", "node"]
   },
-  "include": ["frontend/**/*.ts", "frontend/**/*.vue", "public/*.js", "vite.config.ts", "playwright.config.ts", "test/browser/**/*.ts"]
+  "include": [
+    "frontend/**/*.ts",
+    "frontend/**/*.vue",
+    "public/*.js",
+    "vite.config.ts",
+    "playwright.config.ts",
+    "test/browser/**/*.ts"
+  ]
 }

@@ -9,20 +9,14 @@
     "noEmit": true,
     "allowJs": true,
     "checkJs": true,
-    "lib": [
-      "ES2023",
-      "DOM",
-      "DOM.Iterable"
-    ],
-    "types": [
-      "node"
-    ],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node"],
     "skipLibCheck": true
   },
   "include": [
     "src/**/*.ts",
     "public/*.js",
-    "test/*.test.ts",
+    "test/*.ts",
     "test/auth/**/*.ts",
     "scripts/**/*.ts",
     "prisma.config.ts",

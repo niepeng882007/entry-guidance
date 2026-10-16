@@ -3,7 +3,7 @@ import test from 'node:test';
 import { once } from 'node:events';
 import { startAuthRuntime, users } from './runtime.ts';
 
-test('two verified synthetic users read only their own profile through Next and Node', async (t) => {
+void test('two verified synthetic users read only their own profile through Next and Node', async (t) => {
   const runtime = await startAuthRuntime();
   t.after(() => runtime.close());
   for (const user of users.slice(0, 2)) {
@@ -24,7 +24,7 @@ test('two verified synthetic users read only their own profile through Next and 
   }
 });
 
-test('a disabled user cannot create a new login session', async (t) => {
+void test('a disabled user cannot create a new login session', async (t) => {
   const runtime = await startAuthRuntime();
   t.after(() => runtime.close());
   const user = users[1]!;
@@ -58,7 +58,7 @@ async function grant(runtime: Awaited<ReturnType<typeof startAuthRuntime>>, cook
   return ((await response.json()) as { token: string }).token;
 }
 
-test('unauthenticated, unverified, forged, expired and cross-user access are refused', async (t) => {
+void test('unauthenticated, unverified, forged, expired and cross-user access are refused', async (t) => {
   const runtime = await startAuthRuntime();
   t.after(() => runtime.close());
   assert.equal((await fetch(`${runtime.webOrigin}/api/profile`)).status, 401);
@@ -123,7 +123,7 @@ test('unauthenticated, unverified, forged, expired and cross-user access are ref
   }
 });
 
-test('logout, current user status, authorization generation and session expiry revoke existing delegation', async (t) => {
+void test('logout, current user status, authorization generation and session expiry revoke existing delegation', async (t) => {
   const runtime = await startAuthRuntime();
   t.after(() => runtime.close());
   const own = `${runtime.businessOrigin}/v1/users/${users[0]!.id}/profile`;
@@ -172,7 +172,7 @@ test('logout, current user status, authorization generation and session expiry r
   );
 });
 
-test('origin protection, private caching and dependency failure preserve the authorization boundary', async (t) => {
+void test('origin protection, private caching and dependency failure preserve the authorization boundary', async (t) => {
   const runtime = await startAuthRuntime();
   t.after(() => runtime.close());
   const cookie = await login(runtime);
@@ -234,7 +234,7 @@ test('origin protection, private caching and dependency failure preserve the aut
   );
 });
 
-test('legacy shared-password sessions and new identities cannot authenticate each other', async (t) => {
+void test('legacy shared-password sessions and new identities cannot authenticate each other', async (t) => {
   const runtime = await startAuthRuntime();
   t.after(() => runtime.close());
   const { createServer } = await import('../../src/server.ts');
@@ -283,7 +283,7 @@ test('legacy shared-password sessions and new identities cannot authenticate eac
   );
 });
 
-test('login cooldown uses database rate limiting and returns a standard retry interval', async (t) => {
+void test('login cooldown uses database rate limiting and returns a standard retry interval', async (t) => {
   const runtime = await startAuthRuntime();
   t.after(() => runtime.close());
   for (let attempt = 0; attempt < 3; attempt++) await login(runtime);
@@ -297,7 +297,7 @@ test('login cooldown uses database rate limiting and returns a standard retry in
   assert.ok(retryAfter > 0 && retryAfter <= 10);
 });
 
-test('the active session refresh reaches the browser cookie and RSC reads do not consume it', async (t) => {
+void test('the active session refresh reaches the browser cookie and RSC reads do not consume it', async (t) => {
   const runtime = await startAuthRuntime();
   t.after(() => runtime.close());
   const cookie = await login(runtime);
@@ -323,7 +323,7 @@ test('the active session refresh reaches the browser cookie and RSC reads do not
   assert.doesNotMatch(refreshed, /Domain=/i);
 });
 
-test(
+void test(
   'interrupting the demo while its database starts leaves no synthetic container',
   { timeout: 20000 },
   async (t) => {

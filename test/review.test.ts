@@ -16,25 +16,51 @@ async function start(t: TestContext, config: Partial<Parameters<typeof createSer
   const server = createServer({ password: 'review-test-only', ...config });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
-  t.after(() => { if (server.listening) { server.closeAllConnections(); server.close(); } });
+  t.after(() => {
+    if (server.listening) {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
   const base = `http://127.0.0.1:${address.port}`;
-  const response = await fetch(`${base}/login`, { method: 'POST', redirect: 'manual', headers: { Origin: base, 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'password=review-test-only' });
+  const response = await fetch(`${base}/login`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { Origin: base, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'password=review-test-only',
+  });
   const cookie = response.headers.get('set-cookie')!.split(';')[0]!;
-  const get = (path: string) => fetch(`${base}${path}`, { headers: { Cookie: cookie }, redirect: 'manual' });
-  const post = (path: string, data: unknown) => fetch(base + path, { method: 'POST', headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+  const get = (path: string) =>
+    fetch(`${base}${path}`, { headers: { Cookie: cookie }, redirect: 'manual' });
+  const post = (path: string, data: unknown) =>
+    fetch(base + path, {
+      method: 'POST',
+      headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
   return { server, base, cookie, get, post };
 }
 
-test('CSV downloads every matching trade with exact amounts, unknown labels, quoted text and formula protection', async (t) => {
+void test('CSV downloads every matching trade with exact amounts, unknown labels, quoted text and formula protection', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'review-export-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, 'demo.sqlite');
   seedReviewFilters(path);
   const ledger = new ReviewLedger(path, { source: 'demo', accountId: 'demo-account' });
   const trade = ledger.get('BTCUSDT-demo-fill-1')!;
-  ledger.saveNote(trade.id, { noteId: null, version: 0, basis: trade.noteBasis, entryReason: '=1+1', exitReason: '+SUM(1,2)', executionProblem: '@SUM(1)', improvement: '-危险文字', freeNote: '逗号,引号"与换行\n下一行', tagIds: [] });
+  ledger.saveNote(trade.id, {
+    noteId: null,
+    version: 0,
+    basis: trade.noteBasis,
+    entryReason: '=1+1',
+    exitReason: '+SUM(1,2)',
+    executionProblem: '@SUM(1)',
+    improvement: '-危险文字',
+    freeNote: '逗号,引号"与换行\n下一行',
+    tagIds: [],
+  });
   ledger.close();
   const app = await start(t, { mode: 'demo', reviewLedgerPath: path });
   const response = await app.post('/api/review/export', { query: 'symbol=BTCUSDT&page=2' });
@@ -57,53 +83,129 @@ test('CSV downloads every matching trade with exact amounts, unknown labels, quo
   assert.equal((await app.post('/api/review/export', { query: 'from=invalid' })).status, 400);
 });
 
-test('backup HTTP endpoints protect downloads and restoration, preview rejects unsafe files and restores missing records only on confirmation', async (t) => {
+void test('backup HTTP endpoints protect downloads and restoration, preview rejects unsafe files and restores missing records only on confirmation', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'review-backup-http-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const path = join(directory, 'source.sqlite'); seedReviewFilters(path);
+  const path = join(directory, 'source.sqlite');
+  seedReviewFilters(path);
   const app = await start(t, { mode: 'demo', reviewLedgerPath: path });
-  for (const endpoint of ['/api/review/export', '/api/review/backup', '/api/review/restore/preview', '/api/review/restore', '/api/review/restore/versions']) {
+  for (const endpoint of [
+    '/api/review/export',
+    '/api/review/backup',
+    '/api/review/restore/preview',
+    '/api/review/restore',
+    '/api/review/restore/versions',
+  ]) {
     assert.equal((await fetch(app.base + endpoint)).status, 401);
     assert.equal((await app.get(endpoint)).status, 405);
-    assert.equal((await fetch(app.base + endpoint, { method: 'POST', headers: { Cookie: app.cookie, Origin: 'http://foreign.invalid', 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
+    assert.equal(
+      (
+        await fetch(app.base + endpoint, {
+          method: 'POST',
+          headers: {
+            Cookie: app.cookie,
+            Origin: 'http://foreign.invalid',
+            'Content-Type': 'application/json',
+          },
+          body: '{}',
+        })
+      ).status,
+      403,
+    );
   }
   const download = await app.post('/api/review/backup', {});
   assert.equal(download.status, 200);
   assert.match(download.headers.get('content-disposition')!, /attachment.*\.json/);
   const backup = await download.json();
   const text = JSON.stringify(backup);
-  assert.ok(!text.includes('review-test-only') && !text.includes('other-account') && !text.includes('12345'));
-  const target = await start(t, { mode: 'demo', reviewLedgerPath: join(directory, 'target.sqlite') });
+  assert.ok(
+    !text.includes('review-test-only') &&
+      !text.includes('other-account') &&
+      !text.includes('12345'),
+  );
+  const target = await start(t, {
+    mode: 'demo',
+    reviewLedgerPath: join(directory, 'target.sqlite'),
+  });
   const preview = await (await target.post('/api/review/restore/preview', { backup })).json();
-  assert.equal(preview.rejected.length, 0); assert.ok(preview.added > 0);
+  assert.equal(preview.rejected.length, 0);
+  assert.ok(preview.added > 0);
   assert.equal((await (await target.get('/api/review/trades')).json()).total, 1);
-  const restored = await target.post('/api/review/restore', { backup, token: preview.token, overwrite: [] });
+  const restored = await target.post('/api/review/restore', {
+    backup,
+    token: preview.token,
+    overwrite: [],
+  });
   assert.equal(restored.status, 200);
   assert.equal((await (await target.get('/api/review/trades')).json()).total, 29);
   const repeated = await (await target.post('/api/review/restore/preview', { backup })).json();
-  assert.equal(repeated.added, 0); assert.equal(repeated.conflicts.length, 0);
-  for (const corrupt of [{ ...backup, version: 999 }, { ...backup, accountId: 'other' }, { ...backup, source: 'binance' }, { ...backup, records: [...backup.records, { table: 'config', data: { payload: {} } }] }]) {
-    const rejected = await (await target.post('/api/review/restore/preview', { backup: corrupt })).json();
+  assert.equal(repeated.added, 0);
+  assert.equal(repeated.conflicts.length, 0);
+  for (const corrupt of [
+    { ...backup, version: 999 },
+    { ...backup, accountId: 'other' },
+    { ...backup, source: 'binance' },
+    { ...backup, records: [...backup.records, { table: 'config', data: { payload: {} } }] },
+  ]) {
+    const rejected = await (
+      await target.post('/api/review/restore/preview', { backup: corrupt })
+    ).json();
     assert.ok(rejected.rejected.length > 0);
-    assert.equal((await target.post('/api/review/restore', { backup: corrupt, token: rejected.token, overwrite: [] })).status, 400);
+    assert.equal(
+      (
+        await target.post('/api/review/restore', {
+          backup: corrupt,
+          token: rejected.token,
+          overwrite: [],
+        })
+      ).status,
+      400,
+    );
   }
   assert.equal((await (await target.get('/api/review/trades')).json()).total, 29);
 });
 
-test('portable backups retain original plans and query-time verifications without credentials or local observation IDs', async (t) => {
+void test('portable backups retain original plans and query-time verifications without credentials or local observation IDs', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'review-plan-backup-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, 'source.sqlite');
-  const app = await start(t, { mode: 'demo', reviewLedgerPath: path, apiKey: 'backup-simulated-key', apiSecret: 'backup-simulated-secret' });
-  const plan = await (await app.post('/api/plan', { symbol: 'BTCUSDT', side: 'long', budgetMode: 'amount', budget: '10', stopMode: 'percent', stop: '2', slippage: '0.1', funding: '0', leverage: '5', minimumBuffer: '1', fundingCap: '' })).json();
-  const verification = await (await app.get('/api/verification?planId=' + plan.id + '&demo=protected')).json();
+  const app = await start(t, {
+    mode: 'demo',
+    reviewLedgerPath: path,
+    apiKey: 'backup-simulated-key',
+    apiSecret: 'backup-simulated-secret',
+  });
+  const plan = await (
+    await app.post('/api/plan', {
+      symbol: 'BTCUSDT',
+      side: 'long',
+      budgetMode: 'amount',
+      budget: '10',
+      stopMode: 'percent',
+      stop: '2',
+      slippage: '0.1',
+      funding: '0',
+      leverage: '5',
+      minimumBuffer: '1',
+      fundingCap: '',
+    })
+  ).json();
+  const verification = await (
+    await app.get('/api/verification?planId=' + plan.id + '&demo=protected')
+  ).json();
   assert.equal(verification.reviewRetention, 'saved');
   const source = new ReviewLedger(path, { source: 'demo', accountId: 'demo-account' });
   t.after(() => source.close());
   source.saveVerification(plan, verification);
   const backup = await (await app.post('/api/review/backup', {})).json();
-  assert.equal(backup.records.filter((row: { table: string }) => row.table === 'review_verifications').length, 1);
-  assert.equal(backup.records.filter((row: { table: string }) => row.table === 'review_plans').length, 1);
+  assert.equal(
+    backup.records.filter((row: { table: string }) => row.table === 'review_verifications').length,
+    1,
+  );
+  assert.equal(
+    backup.records.filter((row: { table: string }) => row.table === 'review_plans').length,
+    1,
+  );
   assert.ok(!JSON.stringify(backup).includes('backup-simulated'));
   assert.ok(!JSON.stringify(backup).includes(plan.recovery));
   const target = new ReviewLedger(':memory:', source.scope());
@@ -115,12 +217,21 @@ test('portable backups retain original plans and query-time verifications withou
   assert.equal(target.previewRestore(backup).added, 0);
 });
 
-test('review is protected and a demo archive survives logout and a server restart', async (t) => {
+void test('review is protected and a demo archive survives logout and a server restart', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'review-http-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const config = { mode: 'demo' as const, reviewLedgerPath: join(directory, 'demo.sqlite'), transport: async () => { throw new Error('demo must not query Binance'); } };
+  const config = {
+    mode: 'demo' as const,
+    reviewLedgerPath: join(directory, 'demo.sqlite'),
+    transport: async () => {
+      throw new Error('demo must not query Binance');
+    },
+  };
   let app = await start(t, config);
-  assert.equal((await fetch(`${app.base}/review`, { redirect: 'manual' })).headers.get('location'), '/login');
+  assert.equal(
+    (await fetch(`${app.base}/review`, { redirect: 'manual' })).headers.get('location'),
+    '/login',
+  );
   assert.equal((await fetch(`${app.base}/api/review/trades`)).status, 401);
   const page = await app.get('/review');
   assert.equal(page.status, 200);
@@ -128,29 +239,60 @@ test('review is protected and a demo archive survives logout and a server restar
   const requireAnt = createRequire(import.meta.resolve('ant-design-vue'));
   const iconStyle: string = requireAnt('@ant-design/icons-vue/lib/utils.js').iconStyles;
   const { resetIcon } = requireAnt('./style/index.js');
-  const { parseStyle, normalizeStyle } = requireAnt('./_util/cssinjs/hooks/useStyleRegister/index.js');
-  const providerStyle: string = normalizeStyle(parseStyle({ '.anticon': { ...resetIcon(), '.anticon .anticon-icon': { display: 'block' } } })[0]);
-  const hashes = [iconStyle, providerStyle, ''].map((style) => `'sha256-${createHash('sha256').update(style).digest('base64')}'`).join(' ');
-  assert.equal(page.headers.get('content-security-policy'), `default-src 'none'; script-src 'self'; style-src 'self' ${hashes}; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`);
+  const { parseStyle, normalizeStyle } = requireAnt(
+    './_util/cssinjs/hooks/useStyleRegister/index.js',
+  );
+  const providerStyle: string = normalizeStyle(
+    parseStyle({
+      '.anticon': { ...resetIcon(), '.anticon .anticon-icon': { display: 'block' } },
+    })[0],
+  );
+  const hashes = [iconStyle, providerStyle, '']
+    .map((style) => `'sha256-${createHash('sha256').update(style).digest('base64')}'`)
+    .join(' ');
+  assert.equal(
+    page.headers.get('content-security-policy'),
+    `default-src 'none'; script-src 'self'; style-src 'self' ${hashes}; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`,
+  );
   const list = await (await app.get('/api/review/trades')).json();
   assert.equal(list.source, 'demo');
   assert.equal(list.syncStatus, 'demo');
   assert.equal(list.trades.length, 1);
   const id = list.trades[0].id;
   for (const path of ['/review?symbol=BTCUSDT&page=2', `/review/trades/${id}?from=2026-10-01`]) {
-    assert.equal((await fetch(`${app.base}${path}`, { redirect: 'manual' })).headers.get('location'), '/login');
+    assert.equal(
+      (await fetch(`${app.base}${path}`, { redirect: 'manual' })).headers.get('location'),
+      '/login',
+    );
     const response = await app.get(path);
     assert.equal(response.status, 200);
     assert.match(await response.text(), /data-page="review"/);
   }
-  for (const path of ['/review/trades/invalid%2Fid', '/review/trades/a/extra']) assert.equal((await app.get(path)).status, 404);
+  for (const path of ['/review/trades/invalid%2Fid', '/review/trades/a/extra'])
+    assert.equal((await app.get(path)).status, 404);
   const detail = await (await app.get(`/api/review/trades/${id}`)).json();
   assert.equal(detail.netPnl, '12.4735');
   assert.equal(detail.evidence.fills.length, 4);
-  assert.equal((await fetch(`${app.base}/logout`, { method: 'POST', headers: { Cookie: app.cookie, Origin: 'http://other.invalid' }, redirect: 'manual' })).status, 403);
-  await fetch(`${app.base}/logout`, { method: 'POST', headers: { Cookie: app.cookie, Origin: app.base }, redirect: 'manual' });
+  assert.equal(
+    (
+      await fetch(`${app.base}/logout`, {
+        method: 'POST',
+        headers: { Cookie: app.cookie, Origin: 'http://other.invalid' },
+        redirect: 'manual',
+      })
+    ).status,
+    403,
+  );
+  await fetch(`${app.base}/logout`, {
+    method: 'POST',
+    headers: { Cookie: app.cookie, Origin: app.base },
+    redirect: 'manual',
+  });
   assert.equal((await app.get('/api/review/trades')).status, 401);
-  await new Promise<void>((resolve) => { app.server.closeAllConnections(); app.server.close(() => resolve()); });
+  await new Promise<void>((resolve) => {
+    app.server.closeAllConnections();
+    app.server.close(() => resolve());
+  });
   app = await start(t, config);
   const reopened = await (await app.get('/api/review/trades')).json();
   assert.equal(reopened.trades.length, 1);
@@ -159,10 +301,13 @@ test('review is protected and a demo archive survives logout and a server restar
   assert.equal((await app.get('/.local/review/demo.sqlite')).status, 404);
 });
 
-test('real review explicitly remains unsynced and never opens a demo ledger or calls Binance', async (t) => {
+void test('real review explicitly remains unsynced and never opens a demo ledger or calls Binance', async (t) => {
   const app = await start(t, {
-    mode: 'real', reviewLedgerPath: '/not-a-ledger-directory/real.sqlite',
-    transport: async () => { throw new Error('review must not query real history yet'); },
+    mode: 'real',
+    reviewLedgerPath: '/not-a-ledger-directory/real.sqlite',
+    transport: async () => {
+      throw new Error('review must not query real history yet');
+    },
   });
   const page = await app.get('/review');
   assert.equal(page.status, 200);
@@ -174,17 +319,39 @@ test('real review explicitly remains unsynced and never opens a demo ledger or c
   assert.equal(statistics.pnl.netPnl, null);
   assert.equal(statistics.accountId, null);
   assert.deepEqual(emptyList, {
-    source: 'binance', accountId: null, syncStatus: 'not-synced', trades: [],
-    filters: defaultReviewFilters(), total: 0, page: 1, pageSize: 20, nextPage: null, options: { symbols: [], tags: [] },
+    source: 'binance',
+    accountId: null,
+    syncStatus: 'not-synced',
+    trades: [],
+    filters: defaultReviewFilters(),
+    total: 0,
+    page: 1,
+    pageSize: 20,
+    nextPage: null,
+    options: { symbols: [], tags: [] },
   });
   assert.equal((await app.get('/api/review/trades/BTCUSDT-demo-fill-1')).status, 404);
-  assert.equal((await fetch(`${app.base}/api/review/trades`, { method: 'POST', headers: { Cookie: app.cookie, Origin: app.base } })).status, 405);
+  assert.equal(
+    (
+      await fetch(`${app.base}/api/review/trades`, {
+        method: 'POST',
+        headers: { Cookie: app.cookie, Origin: app.base },
+      })
+    ).status,
+    405,
+  );
 });
 
-test('market evidence is protected, source-labelled and persists across restart', async (t) => {
+void test('market evidence is protected, source-labelled and persists across restart', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'review-market-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const config = { mode: 'demo' as const, reviewLedgerPath: join(directory, 'demo.sqlite'), transport: async () => { throw new Error('demo must not query Binance'); } };
+  const config = {
+    mode: 'demo' as const,
+    reviewLedgerPath: join(directory, 'demo.sqlite'),
+    transport: async () => {
+      throw new Error('demo must not query Binance');
+    },
+  };
   let app = await start(t, config);
   const path = '/api/review/trades/BTCUSDT-demo-fill-1/market?interval=15m&refresh=1';
   assert.equal((await fetch(`${app.base}${path}`)).status, 401);
@@ -201,7 +368,10 @@ test('market evidence is protected, source-labelled and persists across restart'
   assert.equal(chart.events[3].event, 'exit');
   assert.equal(chart.series.contract.candles.length, 69);
   assert.notEqual(chart.series.contract.candles[0].close, chart.series.mark.candles[0].close);
-  await new Promise<void>((resolve) => { app.server.closeAllConnections(); app.server.close(() => resolve()); });
+  await new Promise<void>((resolve) => {
+    app.server.closeAllConnections();
+    app.server.close(() => resolve());
+  });
   app = await start(t, config);
   const reopened = await (await app.get(path)).json();
   assert.equal(reopened.snapshotId, chart.snapshotId);
@@ -211,7 +381,7 @@ test('market evidence is protected, source-labelled and persists across restart'
   assert.equal((await app.get(path.replace('BTCUSDT-demo-fill-1', 'missing'))).status, 404);
 });
 
-test('a filesystem write failure gives a bounded error without disclosing paths or credentials', async (t) => {
+void test('a filesystem write failure gives a bounded error without disclosing paths or credentials', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'review-failure-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   // An existing directory cannot be opened as a SQLite database file.
@@ -222,64 +392,126 @@ test('a filesystem write failure gives a bounded error without disclosing paths 
   assert.equal((await app.get('/review')).status, 200);
 });
 
-
-test('review addition preserves existing demo recovery.v1 signatures with configured credentials', async (t) => {
-  const app = await start(t, { mode: 'demo', apiKey: 'legacy-demo-test-key', apiSecret: 'legacy-demo-test-secret' });
-  const post = (path: string, value: unknown) => fetch(`${app.base}${path}`, {
-    method: 'POST', headers: { Cookie: app.cookie, Origin: app.base, 'Content-Type': 'application/json' }, body: JSON.stringify(value),
+void test('review addition preserves existing demo recovery.v1 signatures with configured credentials', async (t) => {
+  const app = await start(t, {
+    mode: 'demo',
+    apiKey: 'legacy-demo-test-key',
+    apiSecret: 'legacy-demo-test-secret',
   });
+  const post = (path: string, value: unknown) =>
+    fetch(`${app.base}${path}`, {
+      method: 'POST',
+      headers: { Cookie: app.cookie, Origin: app.base, 'Content-Type': 'application/json' },
+      body: JSON.stringify(value),
+    });
   const response = await post('/api/plan', {
-    symbol: 'BTCUSDT', side: 'long', budgetMode: 'amount', budget: '10',
-    stopMode: 'percent', stop: '2', slippage: '0.1', funding: '0', leverage: '5', minimumBuffer: '1', fundingCap: '',
+    symbol: 'BTCUSDT',
+    side: 'long',
+    budgetMode: 'amount',
+    budget: '10',
+    stopMode: 'percent',
+    stop: '2',
+    slippage: '0.1',
+    funding: '0',
+    leverage: '5',
+    minimumBuffer: '1',
+    fundingCap: '',
   });
   assert.equal(response.status, 200);
   const plan = await response.json();
   const payload = plan.recovery.split('.')[0];
   // This is the published v1 contract before the review ledger was introduced.
-  const key = scryptSync('review-test-only', JSON.stringify(['entry-guidance.recovery.v1', 'demo', 'legacy-demo-test-key', 'legacy-demo-test-secret']), 32);
+  const key = scryptSync(
+    'review-test-only',
+    JSON.stringify([
+      'entry-guidance.recovery.v1',
+      'demo',
+      'legacy-demo-test-key',
+      'legacy-demo-test-secret',
+    ]),
+    32,
+  );
   const recovery = `${payload}.${createHmac('sha256', key).update(payload).digest('base64url')}`;
   assert.equal((await post('/api/plan/recover', { recovery })).status, 200);
 });
 
-
-test('legacy signed recovery remains usable but cannot retroactively claim an account or saved review evidence', async (t) => {
+void test('legacy signed recovery remains usable but cannot retroactively claim an account or saved review evidence', async (t) => {
   const app = await start(t, { mode: 'demo' });
-  const post = (path: string, value: unknown) => fetch(`${app.base}${path}`, {
-    method: 'POST', headers: { Cookie: app.cookie, Origin: app.base, 'Content-Type': 'application/json' }, body: JSON.stringify(value),
-  });
-  const plan = await (await post('/api/plan', {
-    symbol: 'BTCUSDT', side: 'long', budgetMode: 'amount', budget: '10', stopMode: 'percent', stop: '2', slippage: '0.1', funding: '0', leverage: '5', minimumBuffer: '1', fundingCap: '',
-  })).json();
+  const post = (path: string, value: unknown) =>
+    fetch(`${app.base}${path}`, {
+      method: 'POST',
+      headers: { Cookie: app.cookie, Origin: app.base, 'Content-Type': 'application/json' },
+      body: JSON.stringify(value),
+    });
+  const plan = await (
+    await post('/api/plan', {
+      symbol: 'BTCUSDT',
+      side: 'long',
+      budgetMode: 'amount',
+      budget: '10',
+      stopMode: 'percent',
+      stop: '2',
+      slippage: '0.1',
+      funding: '0',
+      leverage: '5',
+      minimumBuffer: '1',
+      fundingCap: '',
+    })
+  ).json();
   const record = JSON.parse(Buffer.from(plan.recovery.split('.')[0], 'base64url').toString('utf8'));
   delete record.plan.reviewAccountId;
   delete record.plan.takerRate;
   record.plan.id = 'legacy-plan-without-identity';
   const payload = Buffer.from(JSON.stringify(record)).toString('base64url');
-  const key = scryptSync('review-test-only', JSON.stringify(['entry-guidance.recovery.v1', 'demo', '', '']), 32);
+  const key = scryptSync(
+    'review-test-only',
+    JSON.stringify(['entry-guidance.recovery.v1', 'demo', '', '']),
+    32,
+  );
   const recovery = `${payload}.${createHmac('sha256', key).update(payload).digest('base64url')}`;
   const response = await post('/api/plan/recover', { recovery });
   assert.equal(response.status, 200);
   assert.equal((await response.json()).reviewAccountId, undefined);
-  const check = await (await app.get(`/api/verification?planId=${record.plan.id}&demo=protected`)).json();
+  const check = await (
+    await app.get(`/api/verification?planId=${record.plan.id}&demo=protected`)
+  ).json();
   assert.equal(check.status, 'verified');
   assert.equal(check.reviewRetention, 'legacy-unbound');
 });
 
-test('personal notes and confirmed tags survive relogin and restart without changing exchange facts', async (t) => {
+void test('personal notes and confirmed tags survive relogin and restart without changing exchange facts', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'review-notes-http-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const config = { mode: 'demo' as const, reviewLedgerPath: join(directory, 'demo.sqlite') };
   let app = await start(t, config);
-  const post = (path: string, input: unknown) => fetch(`${app.base}${path}`, {
-    method: 'POST', headers: { Cookie: app.cookie, Origin: app.base, 'Content-Type': 'application/json' }, body: JSON.stringify(input),
-  });
+  const post = (path: string, input: unknown) =>
+    fetch(`${app.base}${path}`, {
+      method: 'POST',
+      headers: { Cookie: app.cookie, Origin: app.base, 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
   const list = await (await app.get('/api/review/trades')).json();
   const id = list.trades[0].id;
   const detail = await (await app.get(`/api/review/trades/${id}`)).json();
-  const created = await post('/api/review/tags', { name: '顺势', id: null, version: 0, active: true });
+  const created = await post('/api/review/tags', {
+    name: '顺势',
+    id: null,
+    version: 0,
+    active: true,
+  });
   assert.equal(created.status, 200);
   const tag = (await created.json()).tags[0];
-  const input = { noteId: null, version: 0, basis: detail.noteBasis, entryReason: '趋势突破', exitReason: '按计划退出', executionProblem: '', improvement: '', freeNote: '<script>alert(1)</script>', tagIds: [tag.id] };
+  const input = {
+    noteId: null,
+    version: 0,
+    basis: detail.noteBasis,
+    entryReason: '趋势突破',
+    exitReason: '按计划退出',
+    executionProblem: '',
+    improvement: '',
+    freeNote: '<script>alert(1)</script>',
+    tagIds: [tag.id],
+  };
   const saved = await post(`/api/review/trades/${id}/note`, input);
   assert.equal(saved.status, 200);
   const note = (await saved.json()).notes[0];
@@ -288,12 +520,31 @@ test('personal notes and confirmed tags survive relogin and restart without chan
   assert.equal(note.version, 1);
   assert.ok(Number.isFinite(Date.parse(note.updatedAt)));
   assert.equal(note.trade.evidence.fills.length, 4);
-  const updated = await post(`/api/review/trades/${id}/note`, { ...input, noteId: note.id, version: 1, freeNote: '复盘更新' });
+  const updated = await post(`/api/review/trades/${id}/note`, {
+    ...input,
+    noteId: note.id,
+    version: 1,
+    freeNote: '复盘更新',
+  });
   assert.equal(updated.status, 200);
-  assert.equal((await post(`/api/review/trades/${id}/note`, { ...input, noteId: note.id, version: 1 })).status, 409);
-  assert.equal((await post('/api/review/tags', { id: tag.id, version: 1, name: '顺势交易', active: false })).status, 200);
-  assert.equal((await post('/api/review/tags', { id: tag.id, version: 1, name: '旧设备覆盖', active: true })).status, 409);
-  await new Promise<void>((resolve) => { app.server.closeAllConnections(); app.server.close(() => resolve()); });
+  assert.equal(
+    (await post(`/api/review/trades/${id}/note`, { ...input, noteId: note.id, version: 1 })).status,
+    409,
+  );
+  assert.equal(
+    (await post('/api/review/tags', { id: tag.id, version: 1, name: '顺势交易', active: false }))
+      .status,
+    200,
+  );
+  assert.equal(
+    (await post('/api/review/tags', { id: tag.id, version: 1, name: '旧设备覆盖', active: true }))
+      .status,
+    409,
+  );
+  await new Promise<void>((resolve) => {
+    app.server.closeAllConnections();
+    app.server.close(() => resolve());
+  });
   app = await start(t, config);
   const journal = await (await app.get('/api/review/journal')).json();
   assert.equal(journal.notes[0].freeNote, '复盘更新');
@@ -306,17 +557,48 @@ test('personal notes and confirmed tags survive relogin and restart without chan
   assert.equal(facts.exitReason, undefined);
 });
 
-test('personal writes reject unauthenticated, foreign-origin, malformed and oversized input', async (t) => {
+void test('personal writes reject unauthenticated, foreign-origin, malformed and oversized input', async (t) => {
   const app = await start(t, { mode: 'demo' });
   const list = await (await app.get('/api/review/trades')).json();
   const detail = await (await app.get(`/api/review/trades/${list.trades[0].id}`)).json();
   const path = `/api/review/trades/${detail.id}/note`;
-  const input = { noteId: null, version: 0, basis: detail.noteBasis, entryReason: '', exitReason: '', executionProblem: '', improvement: '', freeNote: '', tagIds: [] };
-  const post = (value: unknown, headers: Record<string, string> = {}) => fetch(`${app.base}${path}`, { method: 'POST', headers: { Cookie: app.cookie, Origin: app.base, 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(value) });
+  const input = {
+    noteId: null,
+    version: 0,
+    basis: detail.noteBasis,
+    entryReason: '',
+    exitReason: '',
+    executionProblem: '',
+    improvement: '',
+    freeNote: '',
+    tagIds: [],
+  };
+  const post = (value: unknown, headers: Record<string, string> = {}) =>
+    fetch(`${app.base}${path}`, {
+      method: 'POST',
+      headers: {
+        Cookie: app.cookie,
+        Origin: app.base,
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      body: JSON.stringify(value),
+    });
   assert.equal((await post(input, { Cookie: '' })).status, 401);
   assert.equal((await post(input, { Origin: 'http://other.invalid' })).status, 403);
   assert.equal((await post(input, { 'Content-Type': 'text/plain' })).status, 415);
-  for (const invalid of [null, [], { ...input, freeNote: 12 }, { ...input, freeNote: '\u0000' }, { ...input, entryReason: 'x'.repeat(2001) }, { ...input, freeNote: 'x'.repeat(10001) }, { ...input, version: 0.5 }, { ...input, tagIds: ['missing'] }, { ...input, source: 'binance' }]) assert.equal((await post(invalid)).status, 400);
+  for (const invalid of [
+    null,
+    [],
+    { ...input, freeNote: 12 },
+    { ...input, freeNote: '\u0000' },
+    { ...input, entryReason: 'x'.repeat(2001) },
+    { ...input, freeNote: 'x'.repeat(10001) },
+    { ...input, version: 0.5 },
+    { ...input, tagIds: ['missing'] },
+    { ...input, source: 'binance' },
+  ])
+    assert.equal((await post(invalid)).status, 400);
   assert.equal((await post({ ...input, freeNote: 'x'.repeat(100001) })).status, 413);
   assert.equal((await post({ ...input, basis: '0'.repeat(64) })).status, 409);
   assert.equal((await post(input)).status, 200);
@@ -326,15 +608,23 @@ test('personal writes reject unauthenticated, foreign-origin, malformed and over
   const directory = mkdtempSync(join(tmpdir(), 'review-write-failure-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const broken = await start(t, { mode: 'demo', reviewLedgerPath: directory });
-  const failed = await fetch(`${broken.base}/api/review/tags`, { method: 'POST', headers: { Cookie: broken.cookie, Origin: broken.base, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: null, version: 0, name: '顺势', active: true }) });
+  const failed = await fetch(`${broken.base}/api/review/tags`, {
+    method: 'POST',
+    headers: { Cookie: broken.cookie, Origin: broken.base, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: null, version: 0, name: '顺势', active: true }),
+  });
   assert.equal(failed.status, 503);
-  assert.doesNotMatch(JSON.stringify(await failed.json()), /review-write-failure|sqlite|browser-test/);
+  assert.doesNotMatch(
+    JSON.stringify(await failed.json()),
+    /review-write-failure|sqlite|browser-test/,
+  );
 });
 
-
-test('trade filters compose on the HTTP boundary with Shanghai calendar dates', async (t) => {
+void test('trade filters compose on the HTTP boundary with Shanghai calendar dates', async (t) => {
   const app = await start(t, { mode: 'demo' });
-  const response = await app.get('/api/review/trades?from=2026-10-10&to=2026-10-10&symbol=BTCUSDT&side=long&pnl=win&status=closed&entryType=LIMIT&plan=unconfirmed');
+  const response = await app.get(
+    '/api/review/trades?from=2026-10-10&to=2026-10-10&symbol=BTCUSDT&side=long&pnl=win&status=closed&entryType=LIMIT&plan=unconfirmed',
+  );
   assert.equal(response.status, 200);
   const list = await response.json();
   assert.equal(list.total, 1);
@@ -350,8 +640,7 @@ test('trade filters compose on the HTTP boundary with Shanghai calendar dates', 
   assert.deepEqual(empty.trades, []);
 });
 
-
-test('filtered pagination preserves the whole range, boundaries, unknowns and saved tags', async (t) => {
+void test('filtered pagination preserves the whole range, boundaries, unknowns and saved tags', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'review-filters-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, 'demo.sqlite');
@@ -377,11 +666,24 @@ test('filtered pagination preserves the whole range, boundaries, unknowns and sa
   assert.equal(btc.total, 22);
   assert.equal(btc.trades[0]!.id, 'BTCUSDT-demo-fill-1');
   assert.equal(btc.trades.at(-1)!.id, 'BTCUSDT-demo-fill-1-page-19');
-  assert.deepEqual((await read('symbol=BTCUSDT&page=2')).trades.map((trade) => trade.id), ['BTCUSDT-demo-fill-1-page-20', 'BTCUSDT-demo-fill-1-page-21']);
-  assert.deepEqual((await read('symbol=ETHUSDT&from=2026-10-10&to=2026-10-10')).trades.map((trade) => trade.id), [seeded.start]);
-  assert.deepEqual((await read('symbol=ETHUSDT&dateField=closedAt&from=2026-10-10&to=2026-10-10')).trades.map((trade) => trade.id), [seeded.start, seeded.before]);
+  assert.deepEqual(
+    (await read('symbol=BTCUSDT&page=2')).trades.map((trade) => trade.id),
+    ['BTCUSDT-demo-fill-1-page-20', 'BTCUSDT-demo-fill-1-page-21'],
+  );
+  assert.deepEqual(
+    (await read('symbol=ETHUSDT&from=2026-10-10&to=2026-10-10')).trades.map((trade) => trade.id),
+    [seeded.start],
+  );
+  assert.deepEqual(
+    (await read('symbol=ETHUSDT&dateField=closedAt&from=2026-10-10&to=2026-10-10')).trades.map(
+      (trade) => trade.id,
+    ),
+    [seeded.start, seeded.before],
+  );
   const tags = seeded.tags.map((id) => `tag=${id}`).join('&');
-  const combined = await read(`symbol=ETHUSDT&side=short&pnl=loss&status=closed&entryType=mixed&plan=unconfirmed&${tags}`);
+  const combined = await read(
+    `symbol=ETHUSDT&side=short&pnl=loss&status=closed&entryType=mixed&plan=unconfirmed&${tags}`,
+  );
   assert.equal(combined.total, 1);
   assert.equal(combined.trades[0]!.id, seeded.start);
   assert.equal(combined.options.tags.find((tag) => tag.id === seeded.tags[0])!.active, false);
@@ -397,14 +699,31 @@ test('filtered pagination preserves the whole range, boundaries, unknowns and sa
   assert.equal((await fetch(`${app.base}/api/review/trades?${tags}`)).status, 401);
 });
 
-test('invalid filter parameters fail before querying an archive', async (t) => {
+void test('invalid filter parameters fail before querying an archive', async (t) => {
   const app = await start(t, { mode: 'demo' });
   for (const query of [
-    'from=2026-02-30', 'to=2026-13-01', 'from=2026-10-11&to=2026-10-10', 'from=',
-    'dateField=time', 'timeZone=UTC', 'symbol=btc', 'side=BUY', 'pnl=positive', 'status=complete',
-    'entryType=FAKE', 'plan=ambiguous', 'tag=foreign', 'page=0', 'page=1.5', 'page=1000000',
-    'side=long&side=short', 'page=1&page=2', 'tag=00000000-0000-0000-0000-000000000000&tag=00000000-0000-0000-0000-000000000000',
-    'source=binance', 'accountId=other-account', 'limit=9999',
+    'from=2026-02-30',
+    'to=2026-13-01',
+    'from=2026-10-11&to=2026-10-10',
+    'from=',
+    'dateField=time',
+    'timeZone=UTC',
+    'symbol=btc',
+    'side=BUY',
+    'pnl=positive',
+    'status=complete',
+    'entryType=FAKE',
+    'plan=ambiguous',
+    'tag=foreign',
+    'page=0',
+    'page=1.5',
+    'page=1000000',
+    'side=long&side=short',
+    'page=1&page=2',
+    'tag=00000000-0000-0000-0000-000000000000&tag=00000000-0000-0000-0000-000000000000',
+    'source=binance',
+    'accountId=other-account',
+    'limit=9999',
   ]) {
     const response = await app.get(`/api/review/trades?${query}`);
     assert.equal(response.status, 400, query);
@@ -412,13 +731,14 @@ test('invalid filter parameters fail before querying an archive', async (t) => {
   }
 });
 
-test('statistics use the entire filtered archive and retain the same evidence across pages', async (t) => {
+void test('statistics use the entire filtered archive and retain the same evidence across pages', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'statistics-http-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, 'demo.sqlite');
   const seeded = seedReviewFilters(path);
   const app = await start(t, { mode: 'demo', reviewLedgerPath: path });
-  const read = async (query = '') => (await (await app.get(`/api/review/trades${query}`)).json()) as ReviewList;
+  const read = async (query = '') =>
+    (await (await app.get(`/api/review/trades${query}`)).json()) as ReviewList;
   const first = await read();
   assert.equal(first.trades.length, 20);
   assert.equal(first.statistics.total, 29);
@@ -445,5 +765,11 @@ test('statistics use the entire filtered archive and retain the same evidence ac
   assert.equal(empty.statistics.pnl.winRate, null);
   assert.equal(empty.statistics.pnl.netPnl, null);
   const { queriedAt: _time, evidenceId, ...snapshot } = first.statistics;
-  assert.equal(evidenceId, (await import('node:crypto')).createHash('sha256').update(JSON.stringify(snapshot)).digest('hex'));
+  assert.equal(
+    evidenceId,
+    (await import('node:crypto'))
+      .createHash('sha256')
+      .update(JSON.stringify(snapshot))
+      .digest('hex'),
+  );
 });

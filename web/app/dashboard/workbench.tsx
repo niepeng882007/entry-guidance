@@ -116,7 +116,7 @@ export default function Workbench() {
     <main className="page">
       <header className="page-header">
         <h1 className="page-title">我的工作台</h1>
-        <button className="button button--secondary" onClick={logout}>
+        <button className="button button--secondary" onClick={() => void logout()}>
           退出登录
         </button>
       </header>

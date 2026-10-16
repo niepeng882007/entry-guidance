@@ -41,15 +41,15 @@
 
 ### 1.4 等价迁移的业务契约
 
-| 范围 | 必须承接的行为与依据 |
-|---|---|
-| 开仓与核验 | 保留草稿、正式方案、查询时点核验的区别；固定原预算和绝对止损，沿用共享 BigInt、精度与交易步长；覆盖迁移前生成、迁移后恢复的本单。见[产品决策](product-spec.md)与[实现说明](entry-implementation.md) |
-| 账户资产与读取 | 开仓摘要 3 秒、资产页每轮完成后 30 秒；保留查询时点、前台优先、共享限流与冷却，正式生成及核验继续按严格读取边界执行。见[账户规格](account-snapshot-spec.md) |
-| 交易记录与复盘 | 保留订单与完整交易两种记录、筛选统计、笔记、行情、分析、CSV 与备份恢复；北京时间及手动外部取数语义不变。见[复盘规格](trade-review-spec.md) |
-| 后台任务 | 已存在的归档和单笔/批量 AI 分析须支持离开页面后继续、取消及明确中断；用户主动继续/重试的语义不变。部署方案要处理跨实例执行权、重复执行与取消，不能仅迁移任务状态表 |
-| 数据迁移 | 列明所有 SQLite 业务记录、来源与稳定 UID、方案关联、笔记版本及恢复事务；保留旧库并做结果对账。现有 JSON v1 恢复会重置部分同步/任务状态，不能直接称为状态无损迁移 |
-| 浏览器身份隔离 | 保留原有功能与恢复体验，并增加产品用户与 Binance 账户作用域；当前本单、偏好、模板、草稿、请求和缓存不得被下一位登录用户读取，旧无归属本地数据不能默认归给下一位用户 |
-| 验收 | 以现有业务测试和手机交互为回归基线，补充多用户越权、多实例任务、PostgreSQL 并发与数据迁移验收；新官网与认证通过不能替代旧功能验收。见[开发与验证](development.md) |
+| 范围           | 必须承接的行为与依据                                                                                                                                                                                |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 开仓与核验     | 保留草稿、正式方案、查询时点核验的区别；固定原预算和绝对止损，沿用共享 BigInt、精度与交易步长；覆盖迁移前生成、迁移后恢复的本单。见[产品决策](product-spec.md)与[实现说明](entry-implementation.md) |
+| 账户资产与读取 | 开仓摘要 3 秒、资产页每轮完成后 30 秒；保留查询时点、前台优先、共享限流与冷却，正式生成及核验继续按严格读取边界执行。见[账户规格](account-snapshot-spec.md)                                         |
+| 交易记录与复盘 | 保留订单与完整交易两种记录、筛选统计、笔记、行情、分析、CSV 与备份恢复；北京时间及手动外部取数语义不变。见[复盘规格](trade-review-spec.md)                                                          |
+| 后台任务       | 已存在的归档和单笔/批量 AI 分析须支持离开页面后继续、取消及明确中断；用户主动继续/重试的语义不变。部署方案要处理跨实例执行权、重复执行与取消，不能仅迁移任务状态表                                  |
+| 数据迁移       | 列明所有 SQLite 业务记录、来源与稳定 UID、方案关联、笔记版本及恢复事务；保留旧库并做结果对账。现有 JSON v1 恢复会重置部分同步/任务状态，不能直接称为状态无损迁移                                    |
+| 浏览器身份隔离 | 保留原有功能与恢复体验，并增加产品用户与 Binance 账户作用域；当前本单、偏好、模板、草稿、请求和缓存不得被下一位登录用户读取，旧无归属本地数据不能默认归给下一位用户                                 |
+| 验收           | 以现有业务测试和手机交互为回归基线，补充多用户越权、多实例任务、PostgreSQL 并发与数据迁移验收；新官网与认证通过不能替代旧功能验收。见[开发与验证](development.md)                                   |
 
 现行生产 CSP 已强制执行，迁移不能把 Report-Only 当成同等保护；首版仅用平台/服务端最小日志。64 MiB 恢复及可能较大的 AI、统计和证据响应通过受保护业务数据通道传输，不能静默缩减范围以满足 Vercel 普通函数体积限制。[^R32]
 
@@ -63,20 +63,20 @@
 
 ## 2. 架构决策摘要
 
-| 编号 | 决策 | 理由与边界 |
-|---|---|---|
-| ADR-01 | 一个代码库，Next.js 业务入口及必要常驻服务 | 减少交付边界；任务和读取协调按实际运行需求部署 |
-| ADR-02 | 官网、认证、后台同源，按路径区分 | 不引入跨子域会话和跨域凭据请求 |
-| ADR-03 | 官网静态优先，登录状态独立加载 | SEO 正文不依赖浏览器请求，也不依赖用户会话 |
-| ADR-04 | Next.js 网页入口部署 Vercel，单个常驻 Node 业务服务 | 业务服务承接交易规则、任务及数据传输，具体主机上线前确定 |
-| ADR-05 | Better Auth 自托管库 + 数据库 Session | 认证数据在自己的 Neon 数据库中；不再叠加另一套认证产品 |
-| ADR-06 | PostgreSQL + Prisma ORM 7 工作流 + `@prisma/adapter-pg` | 本地 PostgreSQL 与 Neon 共用标准 TCP 驱动 |
-| ADR-07 | 服务端统一授权，浏览器只拿 DTO | 页面、API 和现有后台任务均受产品用户及 Binance 账户作用域约束 |
-| ADR-08 | 生产与非生产分开 Vercel Project、Neon Project | 隔离密钥、数据库与预览部署权限，不是拆两套业务代码 |
-| ADR-09 | GitHub Actions 是部署和迁移的唯一编排入口 | 不与 Git 自动发布、构建期迁移形成多个写入者 |
-| ADR-10 | Serverless 实例不保存持久业务状态 | Session、限流计数和业务数据落数据库 |
-| ADR-11 | 用户数据不进入公共共享缓存 | 第一版优先正确性，不做跨请求的个性化服务端缓存 |
-| ADR-12 | 数据库变更采用向后兼容的扩展—迁移—收缩 | 保留应用回滚窗口，避免把数据库恢复当普通回滚 |
+| 编号   | 决策                                                    | 理由与边界                                                    |
+| ------ | ------------------------------------------------------- | ------------------------------------------------------------- |
+| ADR-01 | 一个代码库，Next.js 业务入口及必要常驻服务              | 减少交付边界；任务和读取协调按实际运行需求部署                |
+| ADR-02 | 官网、认证、后台同源，按路径区分                        | 不引入跨子域会话和跨域凭据请求                                |
+| ADR-03 | 官网静态优先，登录状态独立加载                          | SEO 正文不依赖浏览器请求，也不依赖用户会话                    |
+| ADR-04 | Next.js 网页入口部署 Vercel，单个常驻 Node 业务服务     | 业务服务承接交易规则、任务及数据传输，具体主机上线前确定      |
+| ADR-05 | Better Auth 自托管库 + 数据库 Session                   | 认证数据在自己的 Neon 数据库中；不再叠加另一套认证产品        |
+| ADR-06 | PostgreSQL + Prisma ORM 7 工作流 + `@prisma/adapter-pg` | 本地 PostgreSQL 与 Neon 共用标准 TCP 驱动                     |
+| ADR-07 | 服务端统一授权，浏览器只拿 DTO                          | 页面、API 和现有后台任务均受产品用户及 Binance 账户作用域约束 |
+| ADR-08 | 生产与非生产分开 Vercel Project、Neon Project           | 隔离密钥、数据库与预览部署权限，不是拆两套业务代码            |
+| ADR-09 | GitHub Actions 是部署和迁移的唯一编排入口               | 不与 Git 自动发布、构建期迁移形成多个写入者                   |
+| ADR-10 | Serverless 实例不保存持久业务状态                       | Session、限流计数和业务数据落数据库                           |
+| ADR-11 | 用户数据不进入公共共享缓存                              | 第一版优先正确性，不做跨请求的个性化服务端缓存                |
+| ADR-12 | 数据库变更采用向后兼容的扩展—迁移—收缩                  | 保留应用回滚窗口，避免把数据库恢复当普通回滚                  |
 
 ---
 
@@ -136,24 +136,24 @@ Binance USDT 合约官方说明将请求权重和相关封禁按 IP 统计；具
 
 ## 4. 技术栈与版本策略
 
-| 类别 | 选型 | 使用约定 |
-|---|---|---|
-| 语言 | TypeScript | `strict`，运行时校验不能由类型声明替代 |
-| 运行时 | Node.js 24 LTS 主线 | 本地、CI、Vercel 使用同一主版本 |
-| Web 框架 | Next.js 16.4 主线 + App Router | 实施时锁定已修补稳定 patch；不采用 canary |
-| React | 与 Next.js 基线匹配的 React 19 系列 | `react` 与 `react-dom` 版本一致，验证 Ant Design 兼容性 |
-| 缓存模型 | Cache Components | 只显式缓存公开数据；不混用旧版本路由缓存配置 |
-| 包管理 | pnpm | 锁定 packageManager，提交 lockfile，CI frozen install |
-| UI | Ant Design + CSS Modules | 官网品牌化样式；后台组件库按路由隔离 |
-| 表单 | Ant Design Form + 服务端 Zod | 不额外叠加另一套表单状态库 |
-| 客户端服务端状态 | TanStack Query | 列表、筛选、分页、mutation 和失效刷新 |
-| 认证 | Better Auth + Prisma Adapter | 只启用当前需要的认证能力 |
-| 数据库 | Neon PostgreSQL；本地 PostgreSQL 同一主版本 | 建议以 PostgreSQL 17 作为一致性基线，不表示它是最新主版本 |
-| ORM | Prisma ORM 7 工作流 + `@prisma/adapter-pg` | 本文的 schema、generate、migrate 命令均按 7.x 文档，不混用新主版本命令 |
-| 邮件 | Resend | 仅服务端调用；开发测试使用 fake adapter 或收件人白名单 |
-| 测试 | 现有 node:test + Playwright，补 PostgreSQL 集成测试 | 复用已有业务断言，组件工具仅按实际需要增加 |
-| 监控 | 平台 / 服务端最小日志，无 Sentry | 统一 requestId 和 release 标识，禁止凭据和交易内容采集 |
-| CI/CD | GitHub Actions + Vercel CLI/API | 单一编排入口，生产受保护环境审批 |
+| 类别             | 选型                                                | 使用约定                                                               |
+| ---------------- | --------------------------------------------------- | ---------------------------------------------------------------------- |
+| 语言             | TypeScript                                          | `strict`，运行时校验不能由类型声明替代                                 |
+| 运行时           | Node.js 24 LTS 主线                                 | 本地、CI、Vercel 使用同一主版本                                        |
+| Web 框架         | Next.js 16.4 主线 + App Router                      | 实施时锁定已修补稳定 patch；不采用 canary                              |
+| React            | 与 Next.js 基线匹配的 React 19 系列                 | `react` 与 `react-dom` 版本一致，验证 Ant Design 兼容性                |
+| 缓存模型         | Cache Components                                    | 只显式缓存公开数据；不混用旧版本路由缓存配置                           |
+| 包管理           | pnpm                                                | 锁定 packageManager，提交 lockfile，CI frozen install                  |
+| UI               | Ant Design + CSS Modules                            | 官网品牌化样式；后台组件库按路由隔离                                   |
+| 表单             | Ant Design Form + 服务端 Zod                        | 不额外叠加另一套表单状态库                                             |
+| 客户端服务端状态 | TanStack Query                                      | 列表、筛选、分页、mutation 和失效刷新                                  |
+| 认证             | Better Auth + Prisma Adapter                        | 只启用当前需要的认证能力                                               |
+| 数据库           | Neon PostgreSQL；本地 PostgreSQL 同一主版本         | 建议以 PostgreSQL 17 作为一致性基线，不表示它是最新主版本              |
+| ORM              | Prisma ORM 7 工作流 + `@prisma/adapter-pg`          | 本文的 schema、generate、migrate 命令均按 7.x 文档，不混用新主版本命令 |
+| 邮件             | Resend                                              | 仅服务端调用；开发测试使用 fake adapter 或收件人白名单                 |
+| 测试             | 现有 node:test + Playwright，补 PostgreSQL 集成测试 | 复用已有业务断言，组件工具仅按实际需要增加                             |
+| 监控             | 平台 / 服务端最小日志，无 Sentry                    | 统一 requestId 和 release 标识，禁止凭据和交易内容采集                 |
+| CI/CD            | GitHub Actions + Vercel CLI/API                     | 单一编排入口，生产受保护环境审批                                       |
 
 截至文档日期，官方已发布 Next.js 16.4，并为新项目推荐 Cache Components；Vercel 当前支持 Node.js 24。以上是本方案的版本基线，不代表已经运行过这组依赖的集成测试。实施第一步必须完成认证、Prisma、Ant Design 首屏样式和构建兼容性验证。[^R02]
 
@@ -165,26 +165,26 @@ Binance USDT 合约官方说明将请求权重和相关封禁按 IP 统计；具
 
 ### 5.1 路由设计
 
-| 路径 | 访问者 | 渲染与索引规则 |
-|---|---|---|
-| `/` | 任何人 | 完整公开正文静态生成，允许索引 |
-| `/privacy`、`/terms` | 任何人 | 静态生成，是否索引按内容策略配置 |
-| `/login` | 未登录或会话失效用户 | 静态表单壳 + 客户端交互，noindex |
-| `/register` | 新用户 | 静态表单壳 + 客户端交互，noindex |
-| `/verify-email` | 验证流程用户 | 无第三方追踪，noindex，不暴露 token 到日志 |
-| `/forgot-password`、`/reset-password` | 找回密码用户 | noindex，敏感链接不缓存 |
-| `/dashboard` | 已登录、邮箱已验证且未禁用用户 | 服务端授权 + 后台交互；不公共缓存 |
-| `/dashboard/profile` | 当前用户 | 仅访问自己的资料 |
-| `/dashboard/security` | 当前用户 | 密码、会话与退出其他设备 |
-| `/dashboard/connections` | 当前用户 | Binance 只读绑定、凭据更新及连接状态；无密钥回显 |
-| `/dashboard/ai` | 当前用户 | 自备模型密钥与可用状态；费用由用户向模型服务商承担 |
-| `/entry` | 已授权用户 | 现有开仓、方案恢复与只读核验；生成前验证绑定 |
-| `/account` | 已授权用户 | 现有资产快照与刷新行为 |
-| `/review` | 已授权用户 | 现有订单、完整交易、笔记、统计、行情、AI 和备份恢复；保留详情/筛选 URL 契约 |
-| `/api/auth/*` | 按 Better Auth 协议 | 库原生响应，禁止公共缓存 |
-| `/api/v1/*` | 已授权用户 | 业务 JSON 接口；私有响应 no-store |
-| `/api/health` | 监测系统 | 最小存活信息，不泄露配置 |
-| `/api/ready` | 受保护监测入口 | 轻量数据库可用性探测 |
+| 路径                                  | 访问者                         | 渲染与索引规则                                                              |
+| ------------------------------------- | ------------------------------ | --------------------------------------------------------------------------- |
+| `/`                                   | 任何人                         | 完整公开正文静态生成，允许索引                                              |
+| `/privacy`、`/terms`                  | 任何人                         | 静态生成，是否索引按内容策略配置                                            |
+| `/login`                              | 未登录或会话失效用户           | 静态表单壳 + 客户端交互，noindex                                            |
+| `/register`                           | 新用户                         | 静态表单壳 + 客户端交互，noindex                                            |
+| `/verify-email`                       | 验证流程用户                   | 无第三方追踪，noindex，不暴露 token 到日志                                  |
+| `/forgot-password`、`/reset-password` | 找回密码用户                   | noindex，敏感链接不缓存                                                     |
+| `/dashboard`                          | 已登录、邮箱已验证且未禁用用户 | 服务端授权 + 后台交互；不公共缓存                                           |
+| `/dashboard/profile`                  | 当前用户                       | 仅访问自己的资料                                                            |
+| `/dashboard/security`                 | 当前用户                       | 密码、会话与退出其他设备                                                    |
+| `/dashboard/connections`              | 当前用户                       | Binance 只读绑定、凭据更新及连接状态；无密钥回显                            |
+| `/dashboard/ai`                       | 当前用户                       | 自备模型密钥与可用状态；费用由用户向模型服务商承担                          |
+| `/entry`                              | 已授权用户                     | 现有开仓、方案恢复与只读核验；生成前验证绑定                                |
+| `/account`                            | 已授权用户                     | 现有资产快照与刷新行为                                                      |
+| `/review`                             | 已授权用户                     | 现有订单、完整交易、笔记、统计、行情、AI 和备份恢复；保留详情/筛选 URL 契约 |
+| `/api/auth/*`                         | 按 Better Auth 协议            | 库原生响应，禁止公共缓存                                                    |
+| `/api/v1/*`                           | 已授权用户                     | 业务 JSON 接口；私有响应 no-store                                           |
+| `/api/health`                         | 监测系统                       | 最小存活信息，不泄露配置                                                    |
+| `/api/ready`                          | 受保护监测入口                 | 轻量数据库可用性探测                                                        |
 
 价格页、产品页、文章页只在真实内容存在时增加，不先制造大量空的 SEO 页面。运营后台 `/admin` 不属于默认交付范围。
 
@@ -364,15 +364,15 @@ Actor 从可信 Session 解析，至少包含 userId 与账户状态。客户端
 
 ### 8.3 新增认证与设置接口提案
 
-| 方法与路径 | 职责 | 访问条件 |
-|---|---|---|
-| `GET /api/v1/me` | 当前用户公开资料 DTO | 有效用户 |
-| `PATCH /api/v1/me` | 修改允许的昵称等资料 | 有效用户 + CSRF 检查 |
-| `GET /api/v1/me/settings` | 获取自己的设置 | 有效用户 |
+| 方法与路径                  | 职责                                         | 访问条件             |
+| --------------------------- | -------------------------------------------- | -------------------- |
+| `GET /api/v1/me`            | 当前用户公开资料 DTO                         | 有效用户             |
+| `PATCH /api/v1/me`          | 修改允许的昵称等资料                         | 有效用户 + CSRF 检查 |
+| `GET /api/v1/me/settings`   | 获取自己的设置                               | 有效用户             |
 | `PATCH /api/v1/me/settings` | 修改已明确的非敏感偏好白名单；不修改业务时区 | 有效用户 + CSRF 检查 |
-| `/api/auth/*` | 注册、登录、验证、找回密码、会话管理 | Better Auth 原生协议 |
-| `GET /api/health` | 存活检查 | 无敏感信息 |
-| `GET /api/ready` | 数据库依赖探测 | 监测系统授权 |
+| `/api/auth/*`               | 注册、登录、验证、找回密码、会话管理         | Better Auth 原生协议 |
+| `GET /api/health`           | 存活检查                                     | 无敏感信息           |
+| `GET /api/ready`            | 数据库依赖探测                               | 监测系统授权         |
 
 认证端点不包装成自定义统一 JSON，以免破坏 Better Auth 客户端协议。业务接口使用约定的成功与错误结构：
 
@@ -400,13 +400,13 @@ Actor 从可信 Session 解析，至少包含 userId 与账户状态。客户端
 
 ### 8.4 现有业务接口迁移清单
 
-| 现有入口 / 能力 | 迁移契约 |
-|---|---|
-| `/api/symbols`、`/api/market`、`/api/plan`、`/api/plan/recover`、`/api/verification` | 保留精度、输入校验、冻结预算/止损、严格读取、可信本单恢复与查询时点语义 |
-| `/api/account` 及其资产、持仓、普通/条件订单读取 | 维持后端能力和分项错误边界，资产页面仍只展示现行范围 |
-| `/api/review/*` 的订单、周期、证据、归档、笔记、标签、统计、行情、分析 | 保留列表/详情契约、账户作用域、手动触发、分页、笔记版本及冻结分析证据 |
-| `/api/review/export`、`backup`、`restore/preview`、`restore`、`restore/versions` | 保留 CSV、64 MiB 恢复、预览确认与冲突旧版本；新备份增加归属证明，旧 JSON v1 通过受控迁移转换，见 10.7；传输通道遵循 3.1 |
-| 新增 Binance 绑定与自备模型密钥管理 | 元数据读取与凭据写入分开；重新认证、来源校验、当前用户授权；按已确认生命周期定义新接口 |
+| 现有入口 / 能力                                                                      | 迁移契约                                                                                                                |
+| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `/api/symbols`、`/api/market`、`/api/plan`、`/api/plan/recover`、`/api/verification` | 保留精度、输入校验、冻结预算/止损、严格读取、可信本单恢复与查询时点语义                                                 |
+| `/api/account` 及其资产、持仓、普通/条件订单读取                                     | 维持后端能力和分项错误边界，资产页面仍只展示现行范围                                                                    |
+| `/api/review/*` 的订单、周期、证据、归档、笔记、标签、统计、行情、分析               | 保留列表/详情契约、账户作用域、手动触发、分页、笔记版本及冻结分析证据                                                   |
+| `/api/review/export`、`backup`、`restore/preview`、`restore`、`restore/versions`     | 保留 CSV、64 MiB 恢复、预览确认与冲突旧版本；新备份增加归属证明，旧 JSON v1 通过受控迁移转换，见 10.7；传输通道遵循 3.1 |
+| 新增 Binance 绑定与自备模型密钥管理                                                  | 元数据读取与凭据写入分开；重新认证、来源校验、当前用户授权；按已确认生命周期定义新接口                                  |
 
 现有入口以 `src/server.ts` 和测试为清单来源；实现时逐项映射，不为目录统一而无理由更改公开接口。新接口可采用 8.3 的协议；旧接口响应与错误语义的变动须有明确兼容映射及回归测试。
 
@@ -446,16 +446,16 @@ Better Auth 负责凭证校验、密码哈希、邮箱验证、重置密码、Se
 
 ### 9.4 会话建议
 
-| 配置 | 本方案初值 |
-|---|---|
-| 存储 | PostgreSQL 数据库 Session |
-| Cookie | HttpOnly、生产 Secure、SameSite=Lax、Host-only、Path=/ |
-| 普通会话有效期 | 7 天滚动有效期 |
-| 续期检查间隔 | 24 小时 |
-| Session Cookie Cache | 第一版关闭，便于撤销及时生效 |
-| 高风险操作 | 最近重新认证；建议 15 分钟内完成的密码确认 |
-| 密码重置 | 显式配置撤销其他 / 全部旧会话 |
-| 修改权限或停用账号 | 服务端即时检查账户状态，并撤销会话 |
+| 配置                 | 本方案初值                                             |
+| -------------------- | ------------------------------------------------------ |
+| 存储                 | PostgreSQL 数据库 Session                              |
+| Cookie               | HttpOnly、生产 Secure、SameSite=Lax、Host-only、Path=/ |
+| 普通会话有效期       | 7 天滚动有效期                                         |
+| 续期检查间隔         | 24 小时                                                |
+| Session Cookie Cache | 第一版关闭，便于撤销及时生效                           |
+| 高风险操作           | 最近重新认证；建议 15 分钟内完成的密码确认             |
+| 密码重置             | 显式配置撤销其他 / 全部旧会话                          |
+| 修改权限或停用账号   | 服务端即时检查账户状态，并撤销会话                     |
 
 这些是建议配置，不是库的所有默认行为。Better Auth 支持会话有效期、续期和撤销；纯 RSC 读取不能承担 Cookie 刷新，客户端会话请求或相应 Route Handler 需按官方集成完成续期。[^R13]
 
@@ -467,31 +467,31 @@ Better Auth 负责凭证校验、密码哈希、邮箱验证、重置密码、Se
 
 ### 10.1 授权矩阵
 
-| 身份 | 公开页面 | 本人资料 / 设置 | 其他用户数据 | 运营管理 |
-|---|---:|---:|---:|---:|
-| 游客 | 允许 | 不允许 | 不允许 | 不允许 |
-| 未验证账号 | 允许 | 不允许进入业务后台 | 不允许 | 不允许 |
-| 正常用户 | 允许 | 允许 | 不允许 | 不允许 |
-| 已停用用户 | 允许 | 不允许 | 不允许 | 不允许 |
-| 运营人员（未来扩展） | 允许 | 按策略 | 显式授权 | 专属权限 |
+| 身份                 | 公开页面 |    本人资料 / 设置 | 其他用户数据 | 运营管理 |
+| -------------------- | -------: | -----------------: | -----------: | -------: |
+| 游客                 |     允许 |             不允许 |       不允许 |   不允许 |
+| 未验证账号           |     允许 | 不允许进入业务后台 |       不允许 |   不允许 |
+| 正常用户             |     允许 |               允许 |       不允许 |   不允许 |
+| 已停用用户           |     允许 |             不允许 |       不允许 |   不允许 |
+| 运营人员（未来扩展） |     允许 |             按策略 |     显式授权 | 专属权限 |
 
 “登录成功”只完成认证；资源所有权与操作权限必须独立判断。默认拒绝，没有声明权限的操作不能因为已有登录态而放行。
 
 ### 10.2 认证表与业务表
 
-| 表 / 模型 | 职责 | 设计约束 |
-|---|---|---|
-| User | 认证主体、基础资料 | 核心字段由认证库约定；邮箱唯一性按库支持方式实现 |
-| Session | 可撤销登录会话 | 用户关联、过期时间、库要求的唯一约束 |
-| Account（认证库） | 密码凭证或外部登录身份关联 | 哈希与凭证由库管理；不是 Binance 账户，不保存 Binance Key |
-| Verification | 验证 / 重置流程记录 | 按库协议设置有效期；定期清理过期记录 |
-| RateLimit | 数据库限流状态 | 按当前库版本生成需要的结构 |
-| UserSettings | 已明确的非敏感用户偏好 | userId 唯一；交易业务时区固定北京时间 |
-| AuditLog | 关键安全与管理操作记录 | 事件类型、actorId、对象、时间、requestId、最小必要详情 |
-| BinanceBinding（目标概念） | 产品用户与服务端确认 UID 的关联 | 不可复用的归属实例；每用户最多一个活跃绑定，归档也保留 UID 占位；状态、授权代次及注销释放遵循 10.5 |
-| CredentialMetadata（目标概念） | 凭据类型、所属用户/绑定、版本及可用状态 | 保存密文和必要版本信息，主密钥独立保管；不与认证库 Account 混用 |
-| TaskExecution（目标概念） | 归档 / AI 执行权、排队、取消与检查点 | 关联可信所有者、账户及凭据版本，原子领取、租约和执行版本，不在任务载荷中复制密钥 |
-| 删除 / 撤销控制记录 | 用户、归属实例、凭据版本及失效代次 | 持久副本不随业务库恢复点回退，不包含密钥或交易内容；用于恢复时重放已确认决定 |
+| 表 / 模型                      | 职责                                    | 设计约束                                                                                           |
+| ------------------------------ | --------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| User                           | 认证主体、基础资料                      | 核心字段由认证库约定；邮箱唯一性按库支持方式实现                                                   |
+| Session                        | 可撤销登录会话                          | 用户关联、过期时间、库要求的唯一约束                                                               |
+| Account（认证库）              | 密码凭证或外部登录身份关联              | 哈希与凭证由库管理；不是 Binance 账户，不保存 Binance Key                                          |
+| Verification                   | 验证 / 重置流程记录                     | 按库协议设置有效期；定期清理过期记录                                                               |
+| RateLimit                      | 数据库限流状态                          | 按当前库版本生成需要的结构                                                                         |
+| UserSettings                   | 已明确的非敏感用户偏好                  | userId 唯一；交易业务时区固定北京时间                                                              |
+| AuditLog                       | 关键安全与管理操作记录                  | 事件类型、actorId、对象、时间、requestId、最小必要详情                                             |
+| BinanceBinding（目标概念）     | 产品用户与服务端确认 UID 的关联         | 不可复用的归属实例；每用户最多一个活跃绑定，归档也保留 UID 占位；状态、授权代次及注销释放遵循 10.5 |
+| CredentialMetadata（目标概念） | 凭据类型、所属用户/绑定、版本及可用状态 | 保存密文和必要版本信息，主密钥独立保管；不与认证库 Account 混用                                    |
+| TaskExecution（目标概念）      | 归档 / AI 执行权、排队、取消与检查点    | 关联可信所有者、账户及凭据版本，原子领取、租约和执行版本，不在任务载荷中复制密钥                   |
+| 删除 / 撤销控制记录            | 用户、归属实例、凭据版本及失效代次      | 持久副本不随业务库恢复点回退，不包含密钥或交易内容；用于恢复时重放已确认决定                       |
 
 现有交易领域继续覆盖 `trades`、`evidence`、`review_plans`、`review_verifications`、`history_raw`、`history_sync`、`account_archive`、`style_tags`、`review_notes`、`review_market`、`review_analysis`、`review_versions` 十二类记录，来源见 `src/review-backup.ts`；各自保存所属产品用户与原 Binance UID/来源，不能用网站 userId 替换交易所身份。目标概念表尚未生成 Prisma schema。
 
@@ -521,12 +521,12 @@ Better Auth 负责凭证校验、密码哈希、邮箱验证、重置密码、Se
 
 注销要求最近重新认证，先提供导出机会，确认后立即停用登录、凭据和新任务，后台完成在线数据清理后才释放 UID 占位，新绑定不得继承旧数据。清理范围包括交易、笔记旧版本、AI 冻结快照/报告、临时文件与私有缓存；后台删除重试是维护任务，不触发 Binance 或模型调用。灾备最长 30 天到期并在恢复时重放删除/撤销决定，用户自行下载的备份不在平台可删除范围内。该上限已确认，所选资源的实际保留与清理仍须在上线前验证。
 
-| 账户状态 | 允许行为 |
-|---|---|
-| 活跃绑定，凭据有效 | 按现行规格使用全部功能，外部取数和 AI 仍仅主动触发 |
-| 活跃绑定，Binance Key 失效 | 停止对应 Binance 调用，原本地记录、笔记、统计及有独立有效模型 Key 的 AI 能力保留 |
-| 已解绑归档 | 原用户可查看历史、笔记、既有报告、统计并导出；不新增笔记、启动 AI、同步或恢复写入，重绑后恢复 |
-| 注销清理中 / 已注销 | 拒绝用户数据访问和新业务任务，仅执行受控清理；不能凭相同 UID 复活旧数据 |
+| 账户状态                   | 允许行为                                                                                      |
+| -------------------------- | --------------------------------------------------------------------------------------------- |
+| 活跃绑定，凭据有效         | 按现行规格使用全部功能，外部取数和 AI 仍仅主动触发                                            |
+| 活跃绑定，Binance Key 失效 | 停止对应 Binance 调用，原本地记录、笔记、统计及有独立有效模型 Key 的 AI 能力保留              |
+| 已解绑归档                 | 原用户可查看历史、笔记、既有报告、统计并导出；不新增笔记、启动 AI、同步或恢复写入，重绑后恢复 |
+| 注销清理中 / 已注销        | 拒绝用户数据访问和新业务任务，仅执行受控清理；不能凭相同 UID 复活旧数据                       |
 
 完整功能等价验收针对活跃绑定；解绑后的只读限制来自本次已确认的生命周期选择，不能把 Key 临时失效等同于用户主动解绑。
 
@@ -550,12 +550,12 @@ AI Key 长期加密托管，沿用 Binance 凭据的不回显、业务备份排�
 
 选择标准 TCP 驱动 `pg` 与 Prisma 的 `@prisma/adapter-pg`。本地连接 Docker PostgreSQL，生产连接 Neon pooled endpoint，确保环境差异主要在配置而不是业务代码。Neon 针对 Vercel Fluid compute 的文档推荐标准 Postgres TCP 驱动与连接池。[^R14]
 
-| 用途 | 连接与凭据 |
-|---|---|
-| 应用运行时 | pooled endpoint + 最小权限 app role |
-| CI 迁移 | direct / unpooled endpoint + 独立 migration role |
-| 开发与测试 | 本地或专用非生产数据库；不访问生产 |
-| 运维恢复 | 独立受控管理员凭据，不放应用环境 |
+| 用途       | 连接与凭据                                       |
+| ---------- | ------------------------------------------------ |
+| 应用运行时 | pooled endpoint + 最小权限 app role              |
+| CI 迁移    | direct / unpooled endpoint + 独立 migration role |
+| 开发与测试 | 本地或专用非生产数据库；不访问生产               |
+| 运维恢复   | 独立受控管理员凭据，不放应用环境                 |
 
 运行时仅有业务所需 DML 权限及必要序列权限，不拥有 DDL 或 schema owner 权限。Migration role 的凭据仅注入受保护迁移任务。表的现有授权与未来表的 default privileges 都要验证。
 
@@ -577,17 +577,17 @@ AI Key 长期加密托管，沿用 Binance 凭据的不回显、业务备份排�
 
 ### 12.1 缓存矩阵
 
-| 内容 | 本方案缓存规则 |
-|---|---|
-| 内容随发布变化的官网页面 | 静态输出，随部署版本更新 |
-| 将来接入 CMS 的公开内容 | 显式公共缓存 + 按内容标签失效 |
-| 用户菜单和会话结果 | 独立请求，私有响应 no-store |
-| 认证 API | no-store，不进入公共 CDN 缓存 |
-| 私有业务 JSON | `Cache-Control: private, no-store` |
-| 后台个性化 HTML / RSC | 不配置 public 或 s-maxage；核验平台实际响应 |
-| 后台通用静态外壳 | 可作为无用户信息的静态部分输出 |
-| hash 命名静态资源 | 交给框架与平台版本化缓存 |
-| 浏览器 Query 数据 | 仅当前身份上下文，登出清空，不持久化敏感数据 |
+| 内容                     | 本方案缓存规则                               |
+| ------------------------ | -------------------------------------------- |
+| 内容随发布变化的官网页面 | 静态输出，随部署版本更新                     |
+| 将来接入 CMS 的公开内容  | 显式公共缓存 + 按内容标签失效                |
+| 用户菜单和会话结果       | 独立请求，私有响应 no-store                  |
+| 认证 API                 | no-store，不进入公共 CDN 缓存                |
+| 私有业务 JSON            | `Cache-Control: private, no-store`           |
+| 后台个性化 HTML / RSC    | 不配置 public 或 s-maxage；核验平台实际响应  |
+| 后台通用静态外壳         | 可作为无用户信息的静态部分输出               |
+| hash 命名静态资源        | 交给框架与平台版本化缓存                     |
+| 浏览器 Query 数据        | 仅当前身份上下文，登出清空，不持久化敏感数据 |
 
 不要把全站 `/api/*` 配成公共缓存；也不要把“同域名”当成缓存可以混用的理由。用户授权检查不能因为某个页面已有缓存而跳过。
 
@@ -603,14 +603,14 @@ AI Key 长期加密托管，沿用 Binance 凭据的不回显、业务备份排�
 
 ### 12.3 性能目标
 
-| 指标 | 初始目标与测量条件 |
-|---|---|
-| 官网真实用户 LCP | P75 ≤ 2.5 秒 |
-| 官网真实用户 INP | P75 ≤ 200 毫秒 |
-| 官网真实用户 CLS | P75 ≤ 0.1 |
-| 普通后台 API | 目标地区、约定负载下，端到端 P95 ≤ 800 毫秒 |
-| 登录请求 | P95 ≤ 2 秒；计入密码校验，不把邮件最终投递计入 |
-| 后台常见交互 | 有即时状态反馈，不因数据获取冻结界面 |
+| 指标             | 初始目标与测量条件                             |
+| ---------------- | ---------------------------------------------- |
+| 官网真实用户 LCP | P75 ≤ 2.5 秒                                   |
+| 官网真实用户 INP | P75 ≤ 200 毫秒                                 |
+| 官网真实用户 CLS | P75 ≤ 0.1                                      |
+| 普通后台 API     | 目标地区、约定负载下，端到端 P95 ≤ 800 毫秒    |
+| 登录请求         | P95 ≤ 2 秒；计入密码校验，不把邮件最终投递计入 |
+| 后台常见交互     | 有即时状态反馈，不因数据获取冻结界面           |
 
 前三项采用 Web Vitals 的良好体验阈值，其余为本方案目标。冷启动应单独标识并计入总体体验，不通过剔除慢请求制造达标。实际结果需在目标设备与网络条件下验证。[^R17]
 
@@ -659,12 +659,12 @@ Better Auth 的认证入口保留库原生来源与 CSRF 保护，不能将关�
 
 ### 14.1 两个 Vercel Project、两个 Neon Project
 
-| 环境 | Vercel | 数据库 | 数据来源 |
-|---|---|---|---|
-| Local | 本地 Next.js | Docker PostgreSQL | 合成 seed |
-| PR Preview | `product-nonprod` 的临时部署 | 非生产项目的独立 PR branch | 合成基线数据 |
-| Staging | `product-nonprod` 的稳定域名 | 非生产项目的 staging/root branch | 合成集成测试数据 |
-| Production | `product-prod` | 独立生产 Neon Project 的主分支 | 真实生产数据 |
+| 环境       | Vercel                       | 数据库                           | 数据来源         |
+| ---------- | ---------------------------- | -------------------------------- | ---------------- |
+| Local      | 本地 Next.js                 | Docker PostgreSQL                | 合成 seed        |
+| PR Preview | `product-nonprod` 的临时部署 | 非生产项目的独立 PR branch       | 合成基线数据     |
+| Staging    | `product-nonprod` 的稳定域名 | 非生产项目的 staging/root branch | 合成集成测试数据 |
+| Production | `product-prod`               | 独立生产 Neon Project 的主分支   | 真实生产数据     |
 
 两套 Project 运行同一份代码，不是两套架构。生产 Project 禁止普通 PR 自动部署；非生产 Project 无生产数据库、生产邮件权限与生产认证 Secret。
 
@@ -674,20 +674,20 @@ PR 关闭或分支删除后清理临时部署和数据库分支，同时设置�
 
 ### 14.2 环境变量
 
-| 变量 | 用途 | 注入范围 |
-|---|---|---|
-| `APP_ENV` | local / preview / staging / production | 构建与运行时 |
-| `APP_URL` | 当前环境规范来源和基础地址 | 构建与运行时 |
-| `DATABASE_URL` | 应用 pooled 连接、最小权限角色 | 服务端运行时 |
-| `DATABASE_URL_UNPOOLED` | migration role 的 direct 连接 | 受保护迁移任务 |
-| `BETTER_AUTH_SECRET` | 认证库 Secret | 服务端，环境隔离 |
-| `BETTER_AUTH_URL` | 认证 Base URL | 服务端，精确来源 |
-| `RESEND_API_KEY` | 事务邮件 | 服务端；生产与测试分开 |
-| `EMAIL_FROM` | 已验证域名的发信地址 | 服务端 |
-| `EMAIL_MODE` | real / fake / allowlist | 服务端；生产强制 real |
-| `VERCEL_TOKEN` 等部署凭据 | 发布 | GitHub Actions 受保护 Secrets |
-| `NEON_API_KEY` 等管理凭据 | 非生产分支管理 / 生产管理 | 按项目权限与工作流隔离 |
-| 部署保护 bypass secret | CI 端到端访问受保护部署 | 仅 CI，不写入网页或公开日志 |
+| 变量                      | 用途                                   | 注入范围                      |
+| ------------------------- | -------------------------------------- | ----------------------------- |
+| `APP_ENV`                 | local / preview / staging / production | 构建与运行时                  |
+| `APP_URL`                 | 当前环境规范来源和基础地址             | 构建与运行时                  |
+| `DATABASE_URL`            | 应用 pooled 连接、最小权限角色         | 服务端运行时                  |
+| `DATABASE_URL_UNPOOLED`   | migration role 的 direct 连接          | 受保护迁移任务                |
+| `BETTER_AUTH_SECRET`      | 认证库 Secret                          | 服务端，环境隔离              |
+| `BETTER_AUTH_URL`         | 认证 Base URL                          | 服务端，精确来源              |
+| `RESEND_API_KEY`          | 事务邮件                               | 服务端；生产与测试分开        |
+| `EMAIL_FROM`              | 已验证域名的发信地址                   | 服务端                        |
+| `EMAIL_MODE`              | real / fake / allowlist                | 服务端；生产强制 real         |
+| `VERCEL_TOKEN` 等部署凭据 | 发布                                   | GitHub Actions 受保护 Secrets |
+| `NEON_API_KEY` 等管理凭据 | 非生产分支管理 / 生产管理              | 按项目权限与工作流隔离        |
+| 部署保护 bypass secret    | CI 端到端访问受保护部署                | 仅 CI，不写入网页或公开日志   |
 
 `NODE_ENV=production` 也会出现在预览构建；非生产 Project 的稳定部署在平台层也可能属于 Production 环境。因此索引、邮件、回调与业务开关必须以显式 `APP_ENV` 为准，而不能仅凭 NODE_ENV 或平台环境名。
 
@@ -703,18 +703,18 @@ PR 关闭或分支删除后清理临时部署和数据库分支，同时设置�
 
 计划提供这些脚本约定：
 
-| 脚本 | 目标 |
-|---|---|
-| `dev` | 本地应用开发 |
-| `lint`、`typecheck` | 静态检查 |
-| `test` | 单元与组件测试 |
-| `test:integration` | 真实 PostgreSQL 的接口 / 数据层测试 |
-| `test:e2e` | Playwright 关键流程 |
-| `db:generate` | 生成 Prisma Client |
-| `db:migrate:dev` | 本地生成与验证迁移 |
-| `db:migrate:deploy` | CI 应用已提交迁移 |
-| `db:seed` | 仅允许显式非生产环境的合成数据 |
-| `build` | 生产构建，不执行数据库结构修改 |
+| 脚本                | 目标                                |
+| ------------------- | ----------------------------------- |
+| `dev`               | 本地应用开发                        |
+| `lint`、`typecheck` | 静态检查                            |
+| `test`              | 单元与组件测试                      |
+| `test:integration`  | 真实 PostgreSQL 的接口 / 数据层测试 |
+| `test:e2e`          | Playwright 关键流程                 |
+| `db:generate`       | 生成 Prisma Client                  |
+| `db:migrate:dev`    | 本地生成与验证迁移                  |
+| `db:migrate:deploy` | CI 应用已提交迁移                   |
+| `db:seed`           | 仅允许显式非生产环境的合成数据      |
+| `build`             | 生产构建，不执行数据库结构修改      |
 
 脚本名称属于实施约定，文档没有实际创建或运行这些命令。
 
@@ -818,15 +818,15 @@ PR 关闭或分支删除后清理临时部署和数据库分支，同时设置�
 
 ### 18.1 观测数据
 
-| 维度 | 采集内容 |
-|---|---|
-| 应用错误 | 浏览器异常、SSR 异常、API 未处理异常 |
-| 请求 | requestId、route、method、status、duration、release |
-| 认证 | 注册 / 登录成功率、失败原因分类、429 比例、邮件失败 |
-| 数据库 | 连接等待、查询耗时、事务失败、存储和计算使用 |
-| SEO | 页面状态、公开 HTML、站点地图、误 noindex、抓取反馈 |
-| 用户体验 | Web Vitals、后台接口与关键操作时延 |
-| 费用 | 计算、带宽、图片处理、数据库、历史存储、邮件 |
+| 维度     | 采集内容                                            |
+| -------- | --------------------------------------------------- |
+| 应用错误 | 浏览器异常、SSR 异常、API 未处理异常                |
+| 请求     | requestId、route、method、status、duration、release |
+| 认证     | 注册 / 登录成功率、失败原因分类、429 比例、邮件失败 |
+| 数据库   | 连接等待、查询耗时、事务失败、存储和计算使用        |
+| SEO      | 页面状态、公开 HTML、站点地图、误 noindex、抓取反馈 |
+| 用户体验 | Web Vitals、后台接口与关键操作时延                  |
+| 费用     | 计算、带宽、图片处理、数据库、历史存储、邮件        |
 
 试运行只使用平台和服务端最小日志，不安装或配置 Sentry。凭据表单、交易内容、笔记、模型输入及会话录制均不采集；日志保留错误类型、时延、requestId 和版本等必要字段。以后新增第三方监控须单独明确范围，原稿 Sentry 资料只保留为参考，不构成首版依赖。[^R29]
 
@@ -863,15 +863,15 @@ Neon 套餐与休眠设置须按选定恢复窗口、实际负载和预算决定
 
 ## 20. 可选扩展及引入条件
 
-| 需求出现时 | 新增模块 | 不改变的边界 |
-|---|---|---|
-| 运营人员管理全体用户 | `/admin`、明确运营权限、MFA、审计 | 普通用户仍不能跨用户访问 |
-| 团队 / 组织协作 | Organization、Membership、邀请与租户授权 | 从服务端 Actor 推导租户，不能信任客户端 orgId |
-| 现有备份恢复之外的通用附件上传 | 按实际需求增加对象存储等设施 | 当前 64 MiB 恢复已属一期；所有文件传输仍需授权 |
-| 既有归档 / AI 任务之外的定时导出与可靠通知 | 在一期任务执行方案上扩展 | 幂等、超时、失败与任务状态；现有用户主动重试语义保持 |
-| 运营编辑公开内容 | CMS、签名发布 webhook、缓存失效 | 公开内容缓存与用户数据仍分开 |
-| 移动端 / 对外 API | OpenAPI、独立鉴权策略，必要时 NestJS | 业务规则复用，避免两个后端同时拥有同一数据的写入规则 |
-| 后端需要独立扩容和发布 | NestJS 或其他独立业务服务 | Next.js 成为页面 / BFF，不继续绕过业务服务直写同一业务表 |
+| 需求出现时                                 | 新增模块                                 | 不改变的边界                                             |
+| ------------------------------------------ | ---------------------------------------- | -------------------------------------------------------- |
+| 运营人员管理全体用户                       | `/admin`、明确运营权限、MFA、审计        | 普通用户仍不能跨用户访问                                 |
+| 团队 / 组织协作                            | Organization、Membership、邀请与租户授权 | 从服务端 Actor 推导租户，不能信任客户端 orgId            |
+| 现有备份恢复之外的通用附件上传             | 按实际需求增加对象存储等设施             | 当前 64 MiB 恢复已属一期；所有文件传输仍需授权           |
+| 既有归档 / AI 任务之外的定时导出与可靠通知 | 在一期任务执行方案上扩展                 | 幂等、超时、失败与任务状态；现有用户主动重试语义保持     |
+| 运营编辑公开内容                           | CMS、签名发布 webhook、缓存失效          | 公开内容缓存与用户数据仍分开                             |
+| 移动端 / 对外 API                          | OpenAPI、独立鉴权策略，必要时 NestJS     | 业务规则复用，避免两个后端同时拥有同一数据的写入规则     |
+| 后端需要独立扩容和发布                     | NestJS 或其他独立业务服务                | Next.js 成为页面 / BFF，不继续绕过业务服务直写同一业务表 |
 
 扩展以真实需求为触发条件，不以“以后可能用得到”为由提前堆叠依赖。当前函数运行环境的时长、持久存储与连接限制需要按平台文档评估；不能把普通请求处理器当常驻 Worker。[^R09]
 
@@ -879,34 +879,34 @@ Neon 套餐与休眠设置须按选定恢复窗口、实际负载和预算决定
 
 ## 21. 发布验收矩阵
 
-| 类别 | 必须通过的验收 |
-|---|---|
-| 官网 | 原始 HTML 有正文和元数据，正确 canonical，首页允许索引，404 正确 |
-| 认证 | 注册、验证、登录、找回密码、重置、登出、撤销会话完整闭环 |
-| 账户状态 | 未验证 / 已停用账号不能读取后台数据；修改状态后访问即时受限 |
-| 越权 | A 用户不能读写 B 用户资料、绑定、方案、账本、笔记、报告或文件；相同资源 ID 与伪造 UID 不能跨账户访问 |
-| 客户端伪造 | role、status、emailVerified、ownerUserId 等输入不能提权 |
-| CSRF | 跨站来源、缺少约定头、不合规内容类型的业务写请求被拒绝 |
-| 缓存 | A 登出 B 登录、浏览器返回、并行 SSR 请求均不泄露前一用户数据 |
-| Cookie | HTTPS、HttpOnly、Secure、SameSite、来源与生命周期符合配置 |
-| 邮件异常 | 邮件服务不可用时可恢复重发，不因重复注册生成异常状态 |
-| 依赖故障 | 数据库故障返回可观测错误，不绕过鉴权、不错误清除会话 |
-| 环境 | Preview 无生产数据 / Secret，不可向任意真实收件人发邮件 |
-| 构建 | 官网没有加载后台核心依赖；样式无闪烁；没有 hydration mismatch |
-| 数据库 | 真实 Neon 连接、事务、唯一约束、迁移与权限均验证 |
-| 发布 | 迁移先验证，生产候选使用生产配置，域名切换受控 |
-| 恢复 | 上一版本应用回滚、隔离数据库恢复、旧凭据检查至少各演练一次 |
-| 日志 | requestId 可追踪，错误可定位，敏感数据不出现在日志 / 监控 |
-| 性能 | 按明确设备、地区、负载条件测量，不以开发环境响应替代 |
-| 绑定与密钥 | 同 UID 并发绑定只有一个成功；同 UID 换 Key 保留历史、不同 UID 不改挂历史；明文/密文不从 DTO 或业务备份泄露 |
-| 私有读取协调 | 两用户并发读取同一接口不共享签名、响应或权限错误；同出口的额度与冷却协调有效 |
-| 任务 | 排队公平、取消及实例交接不会重复收费调用；密钥变更不静默改用新 Key；登出不丢失已授权任务 |
-| 业务回归 | 开仓计算与恢复、资产刷新、订单/周期、笔记、统计、行情、单笔/批量 AI、CSV / JSON 恢复均按现行测试验收 |
-| 文件与恢复 | 64 MiB 通道、跨用户文件拒绝、过期预览拒绝、在线任务写入互斥、失败回滚和旧版本保留 |
-| 迁移 | 旧库归属明确、金额与统计可对账、旧本单可信恢复；模拟/真实隔离，跨域浏览器状态迁移可验证 |
-| 大 JSON | 超过普通函数体积限制的合成 AI / 统计 / 证据可完整获取；摘要、分页和直连不改变分析或统计范围 |
-| 注销与再绑定 | 归档只读、Key 失效与解绑有别；注销清理含旧版本/冻结快照，释放 UID 后不继承原数据，旧归属备份不得复活 |
-| 灾备控制 | 恢复点之外的删除/撤销记录可重放；控制记录缺失时拒绝上线，恢复不误伤同 UID 的后来绑定；全部副本到期清理 |
+| 类别         | 必须通过的验收                                                                                             |
+| ------------ | ---------------------------------------------------------------------------------------------------------- |
+| 官网         | 原始 HTML 有正文和元数据，正确 canonical，首页允许索引，404 正确                                           |
+| 认证         | 注册、验证、登录、找回密码、重置、登出、撤销会话完整闭环                                                   |
+| 账户状态     | 未验证 / 已停用账号不能读取后台数据；修改状态后访问即时受限                                                |
+| 越权         | A 用户不能读写 B 用户资料、绑定、方案、账本、笔记、报告或文件；相同资源 ID 与伪造 UID 不能跨账户访问       |
+| 客户端伪造   | role、status、emailVerified、ownerUserId 等输入不能提权                                                    |
+| CSRF         | 跨站来源、缺少约定头、不合规内容类型的业务写请求被拒绝                                                     |
+| 缓存         | A 登出 B 登录、浏览器返回、并行 SSR 请求均不泄露前一用户数据                                               |
+| Cookie       | HTTPS、HttpOnly、Secure、SameSite、来源与生命周期符合配置                                                  |
+| 邮件异常     | 邮件服务不可用时可恢复重发，不因重复注册生成异常状态                                                       |
+| 依赖故障     | 数据库故障返回可观测错误，不绕过鉴权、不错误清除会话                                                       |
+| 环境         | Preview 无生产数据 / Secret，不可向任意真实收件人发邮件                                                    |
+| 构建         | 官网没有加载后台核心依赖；样式无闪烁；没有 hydration mismatch                                              |
+| 数据库       | 真实 Neon 连接、事务、唯一约束、迁移与权限均验证                                                           |
+| 发布         | 迁移先验证，生产候选使用生产配置，域名切换受控                                                             |
+| 恢复         | 上一版本应用回滚、隔离数据库恢复、旧凭据检查至少各演练一次                                                 |
+| 日志         | requestId 可追踪，错误可定位，敏感数据不出现在日志 / 监控                                                  |
+| 性能         | 按明确设备、地区、负载条件测量，不以开发环境响应替代                                                       |
+| 绑定与密钥   | 同 UID 并发绑定只有一个成功；同 UID 换 Key 保留历史、不同 UID 不改挂历史；明文/密文不从 DTO 或业务备份泄露 |
+| 私有读取协调 | 两用户并发读取同一接口不共享签名、响应或权限错误；同出口的额度与冷却协调有效                               |
+| 任务         | 排队公平、取消及实例交接不会重复收费调用；密钥变更不静默改用新 Key；登出不丢失已授权任务                   |
+| 业务回归     | 开仓计算与恢复、资产刷新、订单/周期、笔记、统计、行情、单笔/批量 AI、CSV / JSON 恢复均按现行测试验收       |
+| 文件与恢复   | 64 MiB 通道、跨用户文件拒绝、过期预览拒绝、在线任务写入互斥、失败回滚和旧版本保留                          |
+| 迁移         | 旧库归属明确、金额与统计可对账、旧本单可信恢复；模拟/真实隔离，跨域浏览器状态迁移可验证                    |
+| 大 JSON      | 超过普通函数体积限制的合成 AI / 统计 / 证据可完整获取；摘要、分页和直连不改变分析或统计范围                |
+| 注销与再绑定 | 归档只读、Key 失效与解绑有别；注销清理含旧版本/冻结快照，释放 UID 后不继承原数据，旧归属备份不得复活       |
+| 灾备控制     | 恢复点之外的删除/撤销记录可重放；控制记录缺失时拒绝上线，恢复不误伤同 UID 的后来绑定；全部副本到期清理     |
 
 ---
 
@@ -923,36 +923,69 @@ Neon 套餐与休眠设置须按选定恢复窗口、实际负载和预算决定
 原稿记录以下资料核验日期为 2026-10-16。本轮直接复核了 Next.js 16.4 发布与 BFF 限制、Vercel 函数限制/区域/出口能力、OWASP 加密存储和 Binance IP 额度；其余保留为实施参考，未宣称全部重新核验。引用与设计目标不等于依赖集成或真实链路通过，实施时按所锁定版本重新核对官方文档和安全公告。
 
 [^R01]: Vercel 函数区域与网络区域；Neon 区域。`https://vercel.com/docs/functions/configuring-functions/region`；`https://vercel.com/docs/regions`；`https://neon.com/docs/introduction/regions`
+
 [^R02]: Next.js 16.4 发布说明；Vercel Node.js 版本。`https://nextjs.org/blog/next-16-4`；`https://vercel.com/docs/functions/runtimes/node-js/node-js-versions`
+
 [^R03]: Prisma ORM 7 数据库驱动与配置；Neon Prisma 指南。`https://www.prisma.io/docs/orm/v7/core-concepts/supported-databases/database-drivers`；`https://neon.com/docs/guides/prisma`
+
 [^R04]: Next.js 认证与数据访问层。`https://nextjs.org/docs/app/guides/authentication`
+
 [^R05]: Next.js 缓存及 Cache Components 认证。`https://nextjs.org/docs/app/getting-started/caching`；`https://nextjs.org/docs/app/guides/authentication-with-cache-components`
+
 [^R06]: Next.js 数据安全。`https://nextjs.org/docs/app/guides/data-security`
+
 [^R07]: Ant Design 与 Next.js 集成。`https://ant.design/docs/react/use-with-next/`
+
 [^R08]: TanStack Query Advanced Server Rendering。`https://tanstack.com/query/latest/docs/framework/react/guides/advanced-ssr`
+
 [^R09]: Next.js Backend for Frontend。`https://nextjs.org/docs/app/guides/backend-for-frontend`
+
 [^R10]: Better Auth Next.js 集成与 Prisma Adapter。`https://better-auth.com/docs/integrations/next`；`https://better-auth.com/docs/adapters/prisma`
+
 [^R11]: Better Auth 邮箱密码认证。`https://better-auth.com/docs/authentication/email-password`
+
 [^R12]: Resend Next.js 与幂等发送。`https://resend.com/docs/send-with-nextjs`；`https://resend.com/docs/dashboard/emails/idempotency-keys`
+
 [^R13]: Better Auth 会话管理与 Cookie。`https://better-auth.com/docs/concepts/session-management`；`https://better-auth.com/docs/concepts/cookies`；`https://better-auth.com/docs/integrations/next`
+
 [^R14]: Neon 与 Vercel 连接方式；Prisma ORM 7 PostgreSQL。`https://neon.com/docs/guides/vercel-connection-methods`；`https://www.prisma.io/docs/orm/v7/core-concepts/supported-databases/postgresql`
+
 [^R15]: Neon 连接池。`https://neon.com/docs/connect/connection-pooling`
+
 [^R16]: Google JavaScript SEO 与 robots.txt 说明。`https://developers.google.com/search/docs/crawling-indexing/javascript/javascript-seo-basics`；`https://developers.google.com/search/docs/crawling-indexing/robots/intro`
+
 [^R17]: Google Web Vitals。`https://web.dev/articles/vitals`
+
 [^R18]: Better Auth 安全与配置。`https://better-auth.com/docs/reference/security`；`https://better-auth.com/docs/reference/options`
+
 [^R19]: OWASP CSRF Prevention Cheat Sheet。`https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html`
+
 [^R20]: Better Auth Rate Limit。`https://better-auth.com/docs/concepts/rate-limit`
+
 [^R21]: Next.js CSP。`https://nextjs.org/docs/app/guides/content-security-policy`
+
 [^R22]: Neon 分支与 Vercel 集成。`https://neon.com/docs/guides/neon-managed-vercel-integration`；`https://neon.com/docs/guides/vercel-overview`
+
 [^R23]: Vercel 环境变量与部署保护。`https://vercel.com/docs/environment-variables`；`https://vercel.com/docs/deployment-protection/methods-to-bypass-deployment-protection/protection-bypass-automation`
+
 [^R24]: Vercel 提升部署与生产候选。`https://vercel.com/docs/deployments/promoting-a-deployment`
+
 [^R25]: Prisma ORM 7 CI 数据库变更。`https://www.prisma.io/docs/orm/v7/prisma-client/deployment/deploy-database-changes-with-prisma-migrate`
+
 [^R26]: Vercel Instant Rollback。`https://vercel.com/docs/instant-rollback`
+
 [^R27]: Neon 恢复历史窗口。`https://neon.com/docs/postgres/backup-restore/history-window`
+
 [^R28]: Neon 高可用边界。`https://neon.com/docs/introduction/high-availability`
+
 [^R29]: Sentry Next.js 数据采集与 source maps。`https://docs.sentry.io/platforms/javascript/guides/nextjs/data-management/data-collected/`；`https://docs.sentry.io/platforms/javascript/sourcemaps/`
+
 [^R30]: Vercel Hobby 与商业使用限制。`https://vercel.com/docs/plans/hobby`；`https://vercel.com/docs/limits/fair-use-guidelines`
+
 [^R31]: Neon 计算休眠与套餐。`https://neon.com/docs/guides/scale-to-zero-guide`；`https://neon.com/pricing`
+
 [^R32]: Vercel 函数请求 / 响应体限制，2026-10-16 审查时核对。`https://vercel.com/docs/functions/limitations#request-body-size`
+
 [^R33]: OWASP 凭据加密、认证加密及密钥/数据分离，2026-10-16 审查时核对。`https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html`
+
 [^R34]: Binance USDT 合约请求权重及 IP 冷却，2026-10-16 审查时核对。`https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info#ip-limits`

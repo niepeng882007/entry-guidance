@@ -38,7 +38,12 @@ export default function Login() {
     }
   }
   return (
-    <form className="login__form" method="post" action="/api/auth/sign-in/email" onSubmit={submit}>
+    <form
+      className="login__form"
+      method="post"
+      action="/api/auth/sign-in/email"
+      onSubmit={(event) => void submit(event)}
+    >
       <p className="field">
         <label className="field-label" htmlFor="email">
           邮箱

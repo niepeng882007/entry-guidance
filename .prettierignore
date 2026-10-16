@@ -1,3 +1,19 @@
 web/next-env.d.ts
 web/.next/
 src/generated/
+dist/
+node_modules/
+.pnpm-store/
+.local/
+.env
+.env.*
+test-results/
+playwright-report/
+*.tsbuildinfo
+.husky/_/
+# Historical records, frozen investigation inputs, and installed skill sources.
+docs/archive/
+.scratch/
+.agents/skills/
+.hallmark/
+pnpm-lock.yaml

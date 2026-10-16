@@ -18,20 +18,34 @@
 
 代码修改先运行 `pnpm typecheck`，再做相关定向检查。HTTP 测试读取生产入口，运行前先 `pnpm build`；纯计算定向测试不需要构建。仅修改文档时检查相对链接与锚点、已迁移路径、规则作用域和 `git diff --check`；无需为文档调整运行全量应用测试。
 
-| 修改内容 | 定向检查 |
-| --- | --- |
-| 账户读取、登录与访问控制 | `node --test test/account.test.ts` |
-| 共享计算、精度、资金约束或模板 | `node --test test/draft.test.ts` |
-| 方案起点、恢复、成交对账或止损核验 | `node --test test/verification.test.ts` |
-| 历史同步、周期归并与手动归档 | `node --test test/history-sync.test.ts test/account-archive.test.ts` |
-| 订单文件与列表 | `node --test test/order-file.test.ts test/review-orders.test.ts` |
-| 复盘账本、列表与统计 | `node --test test/review-ledger.test.ts test/review.test.ts test/review-statistics.test.ts` |
-| 模型任务或备份恢复 | `node --test test/trade-analysis.test.ts test/review-backup.test.ts` |
-| 前端交互及组件 | `pnpm test:browser`（先构建）；可用 `pnpm exec playwright test test/browser/account-page.spec.ts` 定向验证对应文件 |
+| 修改内容                           | 定向检查                                                                                                           |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| 账户读取、登录与访问控制           | `node --test test/account.test.ts`                                                                                 |
+| 共享计算、精度、资金约束或模板     | `node --test test/draft.test.ts`                                                                                   |
+| 方案起点、恢复、成交对账或止损核验 | `node --test test/verification.test.ts`                                                                            |
+| 历史同步、周期归并与手动归档       | `node --test test/history-sync.test.ts test/account-archive.test.ts`                                               |
+| 订单文件与列表                     | `node --test test/order-file.test.ts test/review-orders.test.ts`                                                   |
+| 复盘账本、列表与统计               | `node --test test/review-ledger.test.ts test/review.test.ts test/review-statistics.test.ts`                        |
+| 模型任务或备份恢复                 | `node --test test/trade-analysis.test.ts test/review-backup.test.ts`                                               |
+| 前端交互及组件                     | `pnpm test:browser`（先构建）；可用 `pnpm exec playwright test test/browser/account-page.spec.ts` 定向验证对应文件 |
 
 Node 测试使用内置 `node:test` 和断言，以本机临时 HTTP 端口及替换的 Binance 响应验证行为。Playwright 启动固定模拟服务器（127.0.0.1:4179），不加载 `.env` 或真实凭据，覆盖 Chromium 和 WebKit；失败记录留在忽略的 `test-results/`。部分超时用例约需 10 秒。`test/development.test.ts` 还使用 Chromium 与临时项目副本运行真实 `pnpm dev`，验证并发实例的 Vue/CSS 热更新、页面不跳转及后端自动重启；运行 Node 测试前也需安装 Chromium。
 
-`pnpm lint`、`pnpm format` 和 `pnpm format:check` 仅作用于脚本列出的前端、新身份模块、工具配置及浏览器测试；已有交易后端、共享计算和 CSS 保持原风格，避免无关格式 diff。CI 尚未引入。
+### 代码规范与提交
+
+`pnpm lint` 检查全仓 JS、TypeScript、Vue 和 React/Next 代码，采用零警告门槛；`pnpm format` 与 `pnpm format:check` 使用同一范围，覆盖代码、测试、配置、HTML/CSS 和现行文档。排除目录以 ESLint 配置和 `.prettierignore` 为准：依赖、生成资源、测试报告、本地数据、历史档案、`.scratch` 调查/任务记录及安装的技能源文件不做批量重排。Prettier 保留现有单引号和 100 列设置，EditorConfig 统一 UTF-8、LF 与两空格缩进。Prisma schema 和 SQL migration 保持工具原格式。
+
+ESLint 以正确性为主：沿用 JS/TypeScript 推荐规则与 Vue essential，增加有类型信息的 Promise 检查、React Hooks 调用/依赖规则及 Next 推荐规则。业务代码继续使用严格类型检查；有意不等待的异步操作显式表达交接，并由调用方或被调用方处理失败。必要的 lint 例外仅放在具体位置并说明原因，避免整文件或整目录关闭有效规则。
+
+安装开发依赖时，`prepare` 自动安装 Husky 钩子。提交钩子只对暂存文件运行 lint-staged：安全 lint 修复、Prettier 格式化、再次 lint；剩余错误或警告阻止提交。不同任务使用不重叠的文件匹配，保留 lint-staged 默认备份、部分暂存隐藏与失败恢复，不在钩子中运行全量类型检查、构建或测试。自动修复后的内容会进入本次提交，提交前用 `git diff --cached` 复核；未暂存改动不会被顺带提交。不强制提交信息格式。
+
+`node --test test/tooling.test.ts` 在临时仓库验证实际提交钩子，包括带空格路径、部分暂存、错误阻断及失败恢复；不改动当前仓库的暂存区。
+
+### GitHub CI
+
+`.github/workflows/check.yml` 对所有 PR 和 `main` 推送运行同一条 `pnpm check`；同一 PR/分支的新提交取消旧检查。Node 读取 `.nvmrc`，pnpm 读取 `package.json`，依赖用 `--frozen-lockfile` 安装；Linux runner 安装 Chromium/WebKit 及系统依赖，预取 `postgres:17`，认证测试继续自行创建并销毁临时数据库。工作流只有仓库只读权限，不提供生产 Secrets，不部署、不调用真实 Binance 或模型。CI 用 `HUSKY=0` 跳过本地钩子安装。
+
+新增开发依赖 Husky、lint-staged 用于可靠处理部分暂存及失败恢复；globals 提供运行环境的全局变量定义；React Hooks 和 Next lint 插件补齐双栈规则。依赖兼容现有 ESLint/TypeScript/Next，不为规范统一升级业务框架。若远端默认分支调整，同步修改工作流的 push 分支。工作流文件的本地验证不代表 GitHub 已实际运行通过。
 
 ## 浏览器与外部验收
 
@@ -65,15 +79,15 @@ Prisma CLI、客户端及 pg adapter 锁定同一 7.10.1 patch；Next 16.4.2、R
 
 独立运行脚本为 `pnpm start:web`（默认 127.0.0.1:3100）、`pnpm dev:web` 和 `pnpm start:business`。它们不自动加载旧 `.env`，须由调用环境提供以下配置；本票演示/测试脚本自动生成全部配置，无需手动设值。
 
-| 配置 | 使用者 | 要求 |
-| --- | --- | --- |
-| `DATABASE_URL` | Next、业务服务 | PostgreSQL 连接；分别按服务授予权限，迁移 DDL 凭据不用于构建 |
-| `AUTH_ORIGIN` | 两个服务 | 网页精确 origin，本地 HTTP 只允许 loopback |
-| `BUSINESS_ORIGIN` | 两个服务 | 业务精确 origin，必须与实际监听或受信 TLS 入口一致 |
-| `AUTH_SECRET` | 仅 Next | 至少 32 字符，与委托及凭据加密密钥分开 |
-| `DELEGATION_PRIVATE_KEY` | 仅 Next | Ed25519 PKCS8 DER 的 base64，只签发短期受限业务委托 |
-| `DELEGATION_PUBLIC_KEY` | 仅业务服务 | 对应 SPKI DER 的 base64，用于验签 |
-| `BUSINESS_HOST` | 仅业务服务，可选 | 默认 `127.0.0.1`，外部运行方式在获授权部署阶段确定 |
+| 配置                     | 使用者           | 要求                                                         |
+| ------------------------ | ---------------- | ------------------------------------------------------------ |
+| `DATABASE_URL`           | Next、业务服务   | PostgreSQL 连接；分别按服务授予权限，迁移 DDL 凭据不用于构建 |
+| `AUTH_ORIGIN`            | 两个服务         | 网页精确 origin，本地 HTTP 只允许 loopback                   |
+| `BUSINESS_ORIGIN`        | 两个服务         | 业务精确 origin，必须与实际监听或受信 TLS 入口一致           |
+| `AUTH_SECRET`            | 仅 Next          | 至少 32 字符，与委托及凭据加密密钥分开                       |
+| `DELEGATION_PRIVATE_KEY` | 仅 Next          | Ed25519 PKCS8 DER 的 base64，只签发短期受限业务委托          |
+| `DELEGATION_PUBLIC_KEY`  | 仅业务服务       | 对应 SPKI DER 的 base64，用于验签                            |
+| `BUSINESS_HOST`          | 仅业务服务，可选 | 默认 `127.0.0.1`，外部运行方式在获授权部署阶段确定           |
 
 会话采用 7 天滚动有效期、24 小时续期检查；RSC 只读不续期，客户端必经的受保护 Route Handler 转发续期 Set-Cookie。委托有效期 60 秒，绑定原会话、产品用户、授权代次、签发方、接收服务及 `profile:read`。每次业务读取仍从数据库复核会话有效期、用户停用/邮箱验证、当前代次和资源归属。浏览器委托仅驻请求内存并经 Authorization 头发送，跨源只允许精确网页 origin，不开放跨主机 Cookie。登出、跨标签身份变化、页面隐藏/离开均清除可见资料并递增请求代次，迟到响应不能恢复旧内容。依赖不可用返回 503，不伪装成未登录或清除有效 Cookie。
 

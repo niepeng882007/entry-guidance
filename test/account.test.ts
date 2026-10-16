@@ -6,25 +6,44 @@ import { test, type TestContext } from 'node:test';
 import { createServer } from '../src/server.ts';
 
 const permissions = {
-  enableReading: true, enableWithdrawals: false, enableInternalTransfer: false,
-  enableMargin: false, enableFutures: false, permitsUniversalTransfer: false,
-  enableVanillaOptions: false, enableFixApiTrade: false,
-  enableSpotAndMarginTrading: false, enablePortfolioMarginTrading: false,
+  enableReading: true,
+  enableWithdrawals: false,
+  enableInternalTransfer: false,
+  enableMargin: false,
+  enableFutures: false,
+  permitsUniversalTransfer: false,
+  enableVanillaOptions: false,
+  enableFixApiTrade: false,
+  enableSpotAndMarginTrading: false,
+  enablePortfolioMarginTrading: false,
 };
 const accountResponse = {
   multiAssetsMargin: false,
   // These deliberately differ from the USDT asset and must not be used.
-  totalWalletBalance: '9000.00000000', availableBalance: '8000.00000000',
-  assets: [{ asset: 'USDT', walletBalance: '1000.10000001', unrealizedProfit: '-25.00000002',
-    marginBalance: '975.09999999', availableBalance: '700.03000000', initialMargin: '275.06999999',
-    crossUnPnl: '99.00000000', updateTime: 0 }],
+  totalWalletBalance: '9000.00000000',
+  availableBalance: '8000.00000000',
+  assets: [
+    {
+      asset: 'USDT',
+      walletBalance: '1000.10000001',
+      unrealizedProfit: '-25.00000002',
+      marginBalance: '975.09999999',
+      availableBalance: '700.03000000',
+      initialMargin: '275.06999999',
+      crossUnPnl: '99.00000000',
+      updateTime: 0,
+    },
+  ],
 };
 
 async function start(t: TestContext, config: Partial<Parameters<typeof createServer>[0]> = {}) {
   const server = createServer({ password: 'test-password-only', ...config });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
   return `http://127.0.0.1:${address.port}`;
@@ -32,13 +51,14 @@ async function start(t: TestContext, config: Partial<Parameters<typeof createSer
 
 async function login(base: string, password = 'test-password-only') {
   return fetch(`${base}/login`, {
-    method: 'POST', redirect: 'manual',
+    method: 'POST',
+    redirect: 'manual',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: base },
     body: new URLSearchParams({ password }),
   });
 }
 
-test('anonymous visitors cannot open the account page or read account data', async (t) => {
+void test('anonymous visitors cannot open the account page or read account data', async (t) => {
   const base = await start(t);
 
   const page = await fetch(base, { redirect: 'manual' });
@@ -58,7 +78,7 @@ test('anonymous visitors cannot open the account page or read account data', asy
   }
 });
 
-test('built frontend assets require login and only explicit build filenames are served', async (t) => {
+void test('built frontend assets require login and only explicit build filenames are served', async (t) => {
   const base = await start(t, { mode: 'demo' });
   const signedIn = await login(base);
   const cookie = signedIn.headers.get('set-cookie')!.split(';')[0]!;
@@ -67,14 +87,20 @@ test('built frontend assets require login and only explicit build filenames are 
   assert.match(page, /模拟数据/);
   assert.match(page, /data-page="home"/);
   assert.match(page, /首页 · 开仓前/);
-  for (const [path, kind, title] of [['/entry', 'entry', '开仓卡'], ['/review', 'review', '交易记录分析']]) {
+  for (const [path, kind, title] of [
+    ['/entry', 'entry', '开仓卡'],
+    ['/review', 'review', '交易记录分析'],
+  ]) {
     const response = await fetch(`${base}${path}`, { headers: { Cookie: cookie } });
     assert.equal(response.status, 200);
     const content = await response.text();
     assert.ok(content.includes(`data-page="${kind}"`));
     assert.ok(content.includes(`<title>${title} · 开仓前</title>`));
   }
-  const assets = Array.from(page.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g), (match) => match[1]!);
+  const assets = Array.from(
+    page.matchAll(/(?:src|href)="(\/assets\/[^" ]+)"/g),
+    (match) => match[1]!,
+  );
   assert.ok(assets.some((path) => path.endsWith('.js')));
   assert.ok(assets.some((path) => path.endsWith('.css')));
   const detailsPage = await fetch(`${base}/account`, { headers: { Cookie: cookie } });
@@ -89,15 +115,31 @@ test('built frontend assets require login and only explicit build filenames are 
     const asset = await fetch(`${base}${path}`, { headers: { Cookie: cookie } });
     assert.equal(asset.status, 200);
     assert.equal(asset.headers.get('cache-control'), 'no-store');
-    assert.match(asset.headers.get('content-type')!, path.endsWith('.js') ? /text\/javascript/ : /text\/css/);
-    assert.equal(asset.headers.get('content-security-policy'), "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    assert.match(
+      asset.headers.get('content-type')!,
+      path.endsWith('.js') ? /text\/javascript/ : /text\/css/,
+    );
+    assert.equal(
+      asset.headers.get('content-security-policy'),
+      "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    );
   }
-  for (const path of ['/assets/missing.js', '/assets/index.js.map', '/assets/%2e%2e%2fsrc%2fserver.ts', '/.env', '/src/server.ts', '/@vite/client', '/app.js', '/draft.js', '/select.js']) {
+  for (const path of [
+    '/assets/missing.js',
+    '/assets/index.js.map',
+    '/assets/%2e%2e%2fsrc%2fserver.ts',
+    '/.env',
+    '/src/server.ts',
+    '/@vite/client',
+    '/app.js',
+    '/draft.js',
+    '/select.js',
+  ]) {
     assert.equal((await fetch(`${base}${path}`, { headers: { Cookie: cookie } })).status, 404);
   }
 });
 
-test('personal login rejects wrong passwords and allows access until logout', async (t) => {
+void test('personal login rejects wrong passwords and allows access until logout', async (t) => {
   const base = await start(t);
   const loginPage = await fetch(`${base}/login`);
   // Native form POSTs need a non-null same-origin Origin for CSRF validation.
@@ -117,20 +159,25 @@ test('personal login rejects wrong passwords and allows access until logout', as
   assert.equal(account.status, 503);
   assert.equal((await account.json()).code, 'missing_credentials');
   const logout = await fetch(`${base}/logout`, {
-    method: 'POST', headers: { Cookie: cookie, Origin: base }, redirect: 'manual',
+    method: 'POST',
+    headers: { Cookie: cookie, Origin: base },
+    redirect: 'manual',
   });
   assert.equal(logout.status, 303);
   assert.equal((await fetch(`${base}/api/account`, { headers: { Cookie: cookie } })).status, 401);
 });
 
-test('authenticated account reads use USDT equity and available balance with exact decimals', async (t) => {
+void test('authenticated account reads use USDT equity and available balance with exact decimals', async (t) => {
   const requests: { url: URL; headers: Record<string, string> }[] = [];
   const base = await start(t, {
-    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
     transport: async (url, headers) => {
       requests.push({ url, headers });
-      if (url.pathname === '/sapi/v1/account/apiRestrictions') return { status: 200, body: permissions };
-      if (url.pathname === '/sapi/v1/portfolio/account') return { status: 400, body: { code: -21001 } };
+      if (url.pathname === '/sapi/v1/account/apiRestrictions')
+        return { status: 200, body: permissions };
+      if (url.pathname === '/sapi/v1/portfolio/account')
+        return { status: 400, body: { code: -21001 } };
       return { status: 200, body: accountResponse };
     },
   });
@@ -146,11 +193,14 @@ test('authenticated account reads use USDT equity and available balance with exa
   assert.equal(body.unrealizedProfit, '-25.00000002');
   assert.ok(Date.parse(body.queriedAt) >= before);
   assert.ok(Date.parse(body.queriedAt) <= Date.now());
-  assert.deepEqual(requests.map(({ url }) => `${url.origin}${url.pathname}`), [
-    'https://api.binance.com/sapi/v1/account/apiRestrictions',
-    'https://api.binance.com/sapi/v1/portfolio/account',
-    'https://fapi.binance.com/fapi/v2/account',
-  ]);
+  assert.deepEqual(
+    requests.map(({ url }) => `${url.origin}${url.pathname}`),
+    [
+      'https://api.binance.com/sapi/v1/account/apiRestrictions',
+      'https://api.binance.com/sapi/v1/portfolio/account',
+      'https://fapi.binance.com/fapi/v2/account',
+    ],
+  );
   for (const { url, headers } of requests) {
     assert.equal(headers['X-MBX-APIKEY'], 'controlled-test-key');
     assert.match(url.searchParams.get('signature')!, /^[a-f0-9]{64}$/);
@@ -158,25 +208,44 @@ test('authenticated account reads use USDT equity and available balance with exa
     const signed = new URLSearchParams(url.search);
     const signature = signed.get('signature');
     signed.delete('signature');
-    assert.equal(signature, createHmac('sha256', 'controlled-test-secret').update(signed.toString()).digest('hex'));
+    assert.equal(
+      signature,
+      createHmac('sha256', 'controlled-test-secret').update(signed.toString()).digest('hex'),
+    );
   }
   assert.doesNotMatch(JSON.stringify(body), /controlled-test|signature|crossUnPnl|initialMargin/);
 });
 
-test('independent assets read uses exact USDT amounts even with cross and hedge positions', async (t) => {
+void test('independent assets read uses exact USDT amounts even with cross and hedge positions', async (t) => {
   const paths: string[] = [];
   const base = await start(t, {
-    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
     transport: async (url) => {
       paths.push(url.pathname);
       if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
-      if (url.pathname === '/sapi/v1/portfolio/account') return { status: 400, body: { code: -21001 } };
-      return { status: 200, body: { ...accountResponse, canTrade: false,
-        positions: [{ symbol: 'BTCUSDT', positionSide: 'LONG', isolated: false, positionAmt: '1' },
-          { symbol: 'BTCUSDT', positionSide: 'SHORT', isolated: false, positionAmt: '-2' }],
-        assets: [{ ...accountResponse.assets[0], positionInitialMargin: '200.00000001',
-          openOrderInitialMargin: '75.06999998', maintMargin: '3.12345678', maxWithdrawAmount: '690.00000001' }],
-      } };
+      if (url.pathname === '/sapi/v1/portfolio/account')
+        return { status: 400, body: { code: -21001 } };
+      return {
+        status: 200,
+        body: {
+          ...accountResponse,
+          canTrade: false,
+          positions: [
+            { symbol: 'BTCUSDT', positionSide: 'LONG', isolated: false, positionAmt: '1' },
+            { symbol: 'BTCUSDT', positionSide: 'SHORT', isolated: false, positionAmt: '-2' },
+          ],
+          assets: [
+            {
+              ...accountResponse.assets[0],
+              positionInitialMargin: '200.00000001',
+              openOrderInitialMargin: '75.06999998',
+              maintMargin: '3.12345678',
+              maxWithdrawAmount: '690.00000001',
+            },
+          ],
+        },
+      };
     },
   });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
@@ -192,25 +261,45 @@ test('independent assets read uses exact USDT amounts even with cross and hedge 
   assert.equal(body.maxWithdrawAmount, '690.00000001');
   assert.equal(body.source, 'binance');
   assert.ok(Number.isFinite(Date.parse(body.queriedAt)));
-  assert.deepEqual(paths, ['/sapi/v1/account/apiRestrictions', '/sapi/v1/portfolio/account', '/fapi/v2/account']);
-  assert.doesNotMatch(JSON.stringify(body), /controlled-test|signature|positions|totalWalletBalance/);
+  assert.deepEqual(paths, [
+    '/sapi/v1/account/apiRestrictions',
+    '/sapi/v1/portfolio/account',
+    '/fapi/v2/account',
+  ]);
+  assert.doesNotMatch(
+    JSON.stringify(body),
+    /controlled-test|signature|positions|totalWalletBalance/,
+  );
 });
 
-test('asset details distinguish absent amounts from malformed amounts without changing the summary', async (t) => {
+void test('asset details distinguish absent amounts from malformed amounts without changing the summary', async (t) => {
   t.mock.timers.enable({ apis: ['Date'] });
   let fields: Record<string, unknown> = {};
   const base = await start(t, {
-    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
     transport: async (url) => {
       if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
-      if (url.pathname === '/sapi/v1/portfolio/account') return { status: 400, body: { code: -21001 } };
-      return { status: 200, body: { ...accountResponse, assets: [{ ...accountResponse.assets[0], ...fields }] } };
+      if (url.pathname === '/sapi/v1/portfolio/account')
+        return { status: 400, body: { code: -21001 } };
+      return {
+        status: 200,
+        body: { ...accountResponse, assets: [{ ...accountResponse.assets[0], ...fields }] },
+      };
     },
   });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-  const read = (path: string) => { t.mock.timers.setTime(Date.now() + 65_000); return fetch(base + path, { headers: { Cookie: cookie } }); };
+  const read = (path: string) => {
+    t.mock.timers.setTime(Date.now() + 65_000);
+    return fetch(base + path, { headers: { Cookie: cookie } });
+  };
   const missing = await (await read('/api/account/assets')).json();
-  for (const field of ['positionInitialMargin', 'openOrderInitialMargin', 'maintMargin', 'maxWithdrawAmount']) {
+  for (const field of [
+    'positionInitialMargin',
+    'openOrderInitialMargin',
+    'maintMargin',
+    'maxWithdrawAmount',
+  ]) {
     assert.equal(missing[field], null);
     for (const invalid of ['NaN', '0.000000001', 1, null]) {
       fields = { [field]: invalid };
@@ -226,32 +315,43 @@ test('asset details distinguish absent amounts from malformed amounts without ch
   assert.equal(summary.status, 200);
   assert.equal((await summary.json()).maintMargin, undefined);
   fields = { positionInitialMargin: '0' };
-  assert.equal((await (await read('/api/account/assets')).json()).positionInitialMargin, '0.00000000');
+  assert.equal(
+    (await (await read('/api/account/assets')).json()).positionInitialMargin,
+    '0.00000000',
+  );
 });
 
-test('logout during a pending asset read prevents the response from exposing account data', async (t) => {
+void test('logout during a pending asset read prevents the response from exposing account data', async (t) => {
   let release!: () => void;
   const entered = new Promise<void>((resolve) => {
     release = resolve;
   });
   let started!: () => void;
-  const reading = new Promise<void>((resolve) => { started = resolve; });
+  const reading = new Promise<void>((resolve) => {
+    started = resolve;
+  });
   const base = await start(t, {
-    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
     transport: async (url) => {
       if (url.pathname.endsWith('apiRestrictions')) {
         started();
         await entered;
         return { status: 200, body: permissions };
       }
-      if (url.pathname === '/sapi/v1/portfolio/account') return { status: 400, body: { code: -21001 } };
+      if (url.pathname === '/sapi/v1/portfolio/account')
+        return { status: 400, body: { code: -21001 } };
       return { status: 200, body: accountResponse };
     },
   });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
   const pending = fetch(`${base}/api/account/assets`, { headers: { Cookie: cookie } });
   await reading;
-  const logout = await fetch(`${base}/logout`, { method: 'POST', redirect: 'manual', headers: { Cookie: cookie, Origin: base } });
+  const logout = await fetch(`${base}/logout`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { Cookie: cookie, Origin: base },
+  });
   assert.equal(logout.status, 303);
   release();
   const response = await pending;
@@ -259,92 +359,204 @@ test('logout during a pending asset read prevents the response from exposing acc
   assert.equal((await response.json()).equity, undefined);
 });
 
-test('read-only failures are explicit and never expose a balance or upstream secrets', async (t) => {
-  const cases: { name: string; permission?: unknown; account?: unknown; status?: number; error?: string; expected: string }[] = [
-    ...Object.keys(permissions).filter((field) => field !== 'enableReading').map((field) => ({
-      name: `reject writable permission ${field}`, permission: { ...permissions, [field]: true }, expected: 'unsafe_permissions',
-    })),
-    { name: 'reading disabled', permission: { ...permissions, enableReading: false }, expected: 'reading_disabled' },
-    { name: 'incomplete permission report', permission: { enableReading: true }, expected: 'unverified_permissions' },
-    { name: 'multi-asset', account: { ...accountResponse, multiAssetsMargin: true }, expected: 'unsupported_account' },
-    { name: 'unknown mode', account: { ...accountResponse, multiAssetsMargin: undefined }, expected: 'unsupported_account' },
-    { name: 'no USDT asset', account: { ...accountResponse, assets: [] }, expected: 'unsupported_account' },
-    { name: 'duplicate USDT asset', account: { ...accountResponse, assets: [accountResponse.assets[0], accountResponse.assets[0]] }, expected: 'unsupported_account' },
-    { name: 'invalid amount', account: { ...accountResponse, assets: [{ ...accountResponse.assets[0], walletBalance: 'NaN' }] }, expected: 'invalid_response' },
-    { name: 'unexpected precision', account: { ...accountResponse, assets: [{ ...accountResponse.assets[0], walletBalance: '0.000000001' }] }, expected: 'invalid_response' },
-    { name: 'inconsistent equity', account: { ...accountResponse, assets: [{ ...accountResponse.assets[0], marginBalance: '999' }] }, expected: 'invalid_response' },
+void test('read-only failures are explicit and never expose a balance or upstream secrets', async (t) => {
+  const cases: {
+    name: string;
+    permission?: unknown;
+    account?: unknown;
+    status?: number;
+    error?: string;
+    expected: string;
+  }[] = [
+    ...Object.keys(permissions)
+      .filter((field) => field !== 'enableReading')
+      .map((field) => ({
+        name: `reject writable permission ${field}`,
+        permission: { ...permissions, [field]: true },
+        expected: 'unsafe_permissions',
+      })),
+    {
+      name: 'reading disabled',
+      permission: { ...permissions, enableReading: false },
+      expected: 'reading_disabled',
+    },
+    {
+      name: 'incomplete permission report',
+      permission: { enableReading: true },
+      expected: 'unverified_permissions',
+    },
+    {
+      name: 'multi-asset',
+      account: { ...accountResponse, multiAssetsMargin: true },
+      expected: 'unsupported_account',
+    },
+    {
+      name: 'unknown mode',
+      account: { ...accountResponse, multiAssetsMargin: undefined },
+      expected: 'unsupported_account',
+    },
+    {
+      name: 'no USDT asset',
+      account: { ...accountResponse, assets: [] },
+      expected: 'unsupported_account',
+    },
+    {
+      name: 'duplicate USDT asset',
+      account: {
+        ...accountResponse,
+        assets: [accountResponse.assets[0], accountResponse.assets[0]],
+      },
+      expected: 'unsupported_account',
+    },
+    {
+      name: 'invalid amount',
+      account: {
+        ...accountResponse,
+        assets: [{ ...accountResponse.assets[0], walletBalance: 'NaN' }],
+      },
+      expected: 'invalid_response',
+    },
+    {
+      name: 'unexpected precision',
+      account: {
+        ...accountResponse,
+        assets: [{ ...accountResponse.assets[0], walletBalance: '0.000000001' }],
+      },
+      expected: 'invalid_response',
+    },
+    {
+      name: 'inconsistent equity',
+      account: {
+        ...accountResponse,
+        assets: [{ ...accountResponse.assets[0], marginBalance: '999' }],
+      },
+      expected: 'invalid_response',
+    },
     { name: 'malformed response', account: null, expected: 'invalid_response' },
     { name: 'exchange limit', status: 429, expected: 'rate_limited' },
     { name: 'exchange failure', status: 500, expected: 'upstream_error' },
     { name: 'redirect is not followed', status: 302, expected: 'upstream_error' },
-    { name: 'network failure with a secret in the exception', error: 'controlled-test-key?signature=private', expected: 'connection_failed' },
+    {
+      name: 'network failure with a secret in the exception',
+      error: 'controlled-test-key?signature=private',
+      expected: 'connection_failed',
+    },
   ];
-  for (const scenario of cases) await t.test(scenario.name, async (t) => {
-    const base = await start(t, {
-      apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
-      transport: async (url) => {
-        if (scenario.error) throw new Error(scenario.error);
-        if (scenario.status) return { status: scenario.status, body: { msg: 'controlled-test-secret signature=private' } };
-        if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: scenario.permission ?? permissions };
-        if (url.pathname === '/sapi/v1/portfolio/account') return { status: 400, body: { code: -21001 } };
-        return { status: 200, body: 'account' in scenario ? scenario.account : accountResponse };
-      },
+  for (const scenario of cases)
+    await t.test(scenario.name, async (t) => {
+      const base = await start(t, {
+        apiKey: 'controlled-test-key',
+        apiSecret: 'controlled-test-secret',
+        transport: async (url) => {
+          if (scenario.error) throw new Error(scenario.error);
+          if (scenario.status)
+            return {
+              status: scenario.status,
+              body: { msg: 'controlled-test-secret signature=private' },
+            };
+          if (url.pathname.endsWith('apiRestrictions'))
+            return { status: 200, body: scenario.permission ?? permissions };
+          if (url.pathname === '/sapi/v1/portfolio/account')
+            return { status: 400, body: { code: -21001 } };
+          return { status: 200, body: 'account' in scenario ? scenario.account : accountResponse };
+        },
+      });
+      const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+      for (const path of [
+        '/api/account',
+        '/api/account/assets',
+        '/api/account/positions',
+        '/api/account/orders',
+        '/api/account/conditional-orders',
+      ]) {
+        const result = await fetch(base + path, { headers: { Cookie: cookie } });
+        assert.equal(result.status, scenario.status === 429 ? 429 : 502);
+        const body = await result.json();
+        assert.equal(body.code, scenario.expected);
+        assert.equal(body.equity, undefined);
+        assert.equal(body.queriedAt, undefined);
+        assert.equal(body.source, 'binance');
+        assert.doesNotMatch(JSON.stringify(body), /controlled-test|signature=|private/);
+      }
     });
-    const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-    for (const path of ['/api/account', '/api/account/assets', '/api/account/positions', '/api/account/orders', '/api/account/conditional-orders']) {
-      const result = await fetch(base + path, { headers: { Cookie: cookie } });
-      assert.equal(result.status, scenario.status === 429 ? 429 : 502);
-      const body = await result.json();
-      assert.equal(body.code, scenario.expected);
-      assert.equal(body.equity, undefined);
-      assert.equal(body.queriedAt, undefined);
-      assert.equal(body.source, 'binance');
-      assert.doesNotMatch(JSON.stringify(body), /controlled-test|signature=|private/);
-    }
-  });
 });
 
-test('unknown routes, methods and URLs never become signed requests', async (t) => {
+void test('unknown routes, methods and URLs never become signed requests', async (t) => {
   let requests = 0;
   const base = await start(t, {
-    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
-    transport: async () => { requests++; throw new Error('must not reach Binance'); },
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
+    transport: async () => {
+      requests++;
+      throw new Error('must not reach Binance');
+    },
   });
   assert.equal((await fetch(`${base}/api/account`)).status, 401);
   assert.equal((await fetch(`${base}/app.js`)).status, 401);
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-  for (const path of ['/api/account?url=https://example.com', '/api/account?symbol=BTCUSDT', '/api/account/assets?symbol=BTCUSDT', '/api/account/assets?url=https://example.com', '/api/order', '/.env', '/src/account.ts', '/%2e%2e/.env']) {
+  for (const path of [
+    '/api/account?url=https://example.com',
+    '/api/account?symbol=BTCUSDT',
+    '/api/account/assets?symbol=BTCUSDT',
+    '/api/account/assets?url=https://example.com',
+    '/api/order',
+    '/.env',
+    '/src/account.ts',
+    '/%2e%2e/.env',
+  ]) {
     assert.equal((await fetch(base + path, { headers: { Cookie: cookie } })).status, 404);
   }
   for (const method of ['POST', 'PUT', 'DELETE']) {
-    for (const path of ['/api/account', '/api/account/assets', '/api/account/positions', '/api/account/orders', '/api/account/conditional-orders', '/account']) {
-      assert.equal((await fetch(base + path, { method, headers: { Cookie: cookie, Origin: base } })).status, 405);
+    for (const path of [
+      '/api/account',
+      '/api/account/assets',
+      '/api/account/positions',
+      '/api/account/orders',
+      '/api/account/conditional-orders',
+      '/account',
+    ]) {
+      assert.equal(
+        (await fetch(base + path, { method, headers: { Cookie: cookie, Origin: base } })).status,
+        405,
+      );
     }
   }
   assert.equal(requests, 0);
 });
 
-test('login blocks cross-origin requests, oversized input, forged sessions and brute force', async (t) => {
+void test('login blocks cross-origin requests, oversized input, forged sessions and brute force', async (t) => {
   const base = await start(t);
-  assert.equal((await fetch(`${base}/login`, { method: 'POST', headers: { Origin: 'https://example.com' } })).status, 403);
+  assert.equal(
+    (await fetch(`${base}/login`, { method: 'POST', headers: { Origin: 'https://example.com' } }))
+      .status,
+    403,
+  );
   const wrongHost = await new Promise((resolve, reject) => {
-    get(base, { headers: { Host: 'attacker.example' } }, (res) => { res.resume(); resolve(res.statusCode); }).on('error', reject);
+    get(base, { headers: { Host: 'attacker.example' } }, (res) => {
+      res.resume();
+      resolve(res.statusCode);
+    }).on('error', reject);
   });
   assert.equal(wrongHost, 403);
   assert.equal((await login(base, 'x'.repeat(3000))).status, 413);
-  assert.equal((await fetch(`${base}/api/account`, { headers: { Cookie: 'session=forged' } })).status, 401);
+  assert.equal(
+    (await fetch(`${base}/api/account`, { headers: { Cookie: 'session=forged' } })).status,
+    401,
+  );
   for (let i = 0; i < 9; i++) assert.equal((await login(base, 'wrong')).status, 401);
   const limited = await login(base);
   assert.equal(limited.status, 429);
   assert.ok(Number(limited.headers.get('retry-after')) > 0);
 });
 
-test('whole account query has a bounded timeout and no fallback', async (t) => {
+void test('whole account query has a bounded timeout and no fallback', async (t) => {
   const base = await start(t, {
-    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
-    transport: async (_url, _headers, signal) => new Promise((_resolve, reject) => {
-      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-    }),
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
+    transport: async (_url, _headers, signal) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      }),
   });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
   const result = await fetch(`${base}/api/account`, { headers: { Cookie: cookie } });
@@ -356,10 +568,14 @@ test('whole account query has a bounded timeout and no fallback', async (t) => {
   assert.equal(body.equity, undefined);
 });
 
-test('upstream refusal is sanitized and does not turn into demo data', async (t) => {
+void test('upstream refusal is sanitized and does not turn into demo data', async (t) => {
   const base = await start(t, {
-    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
-    transport: async () => ({ status: 401, body: { code: -2015, msg: 'controlled-test-key signature=private' } }),
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
+    transport: async () => ({
+      status: 401,
+      body: { code: -2015, msg: 'controlled-test-key signature=private' },
+    }),
   });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
   const result = await fetch(`${base}/api/account`, { headers: { Cookie: cookie } });
@@ -373,8 +589,13 @@ test('upstream refusal is sanitized and does not turn into demo data', async (t)
   assert.doesNotMatch(JSON.stringify(body), /controlled-test|signature=|private/);
 });
 
-test('demo is explicit, authenticated and never sends Binance requests', async (t) => {
-  const base = await start(t, { mode: 'demo', transport: async () => { throw new Error('must not request Binance'); } });
+void test('demo is explicit, authenticated and never sends Binance requests', async (t) => {
+  const base = await start(t, {
+    mode: 'demo',
+    transport: async () => {
+      throw new Error('must not request Binance');
+    },
+  });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
   const result = await fetch(`${base}/api/account`, { headers: { Cookie: cookie } });
   assert.equal(result.status, 200);
@@ -383,13 +604,19 @@ test('demo is explicit, authenticated and never sends Binance requests', async (
   assert.match(await page.text(), /模拟数据/);
 });
 
-test('Portfolio Margin Pro must not be reported as an ordinary USDT account', async (t) => {
+void test('Portfolio Margin Pro must not be reported as an ordinary USDT account', async (t) => {
   const base = await start(t, {
-    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
-    transport: async (url) => ({ status: 200, body:
-      url.pathname.endsWith('apiRestrictions') ? permissions :
-      url.pathname === '/sapi/v1/account/info' ? { isPortfolioMarginRetailEnabled: false } :
-      url.pathname === '/sapi/v1/portfolio/account' ? { accountType: 'PM_1' } : accountResponse,
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
+    transport: async (url) => ({
+      status: 200,
+      body: url.pathname.endsWith('apiRestrictions')
+        ? permissions
+        : url.pathname === '/sapi/v1/account/info'
+          ? { isPortfolioMarginRetailEnabled: false }
+          : url.pathname === '/sapi/v1/portfolio/account'
+            ? { accountType: 'PM_1' }
+            : accountResponse,
     }),
   });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
@@ -398,26 +625,91 @@ test('Portfolio Margin Pro must not be reported as an ordinary USDT account', as
   assert.equal((await result.json()).code, 'unsupported_account');
 });
 
-test('all current positions remain separate across symbols, hedge sides and margin modes', async (t) => {
-  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
-    const body = url.pathname.endsWith('apiRestrictions') ? permissions
-      : url.pathname.endsWith('portfolio/account') ? { code: -21001 }
-      : url.pathname.endsWith('/account') ? accountResponse
-      : url.pathname.endsWith('exchangeInfo') ? { symbols: ['BTCUSDT', 'ETHUSDT'].map((symbol) => ({ symbol, contractType: 'PERPETUAL', quoteAsset: 'USDT', marginAsset: 'USDT', status: 'BREAK' })) }
-      : url.pathname.endsWith('positionRisk') ? [
-        { symbol: 'ETHUSDT', positionSide: 'BOTH', positionAmt: '-0.12345678', marginType: 'cross', leverage: '10', entryPrice: '2000', markPrice: '1990', unRealizedProfit: '1.23456789' },
-        { symbol: 'BTCUSDT', positionSide: 'SHORT', positionAmt: '-0.01', marginType: 'isolated', leverage: '5', entryPrice: '60000', markPrice: '60100', unRealizedProfit: '-1', liquidationPrice: '70000', breakEvenPrice: '59990', isolatedWallet: '120', notional: '-601', updateTime: 1234567890000 },
-        { symbol: 'BTCUSDT', positionSide: 'LONG', positionAmt: '0.02', marginType: 'cross', leverage: '3', entryPrice: '60000', markPrice: '60100', unRealizedProfit: '2' },
-        { symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0' },
-      ] : url.pathname.endsWith('premiumIndex') ? [{ symbol: 'BTCUSDT', lastFundingRate: '0.0001', nextFundingTime: 1900000000000, time: 1234567890001 }]
-      : [{ symbol: 'BTCUSDT', price: '60101', time: 1234567890002 }];
-    return { status: url.pathname.endsWith('portfolio/account') ? 400 : 200, body };
-  } });
+void test('all current positions remain separate across symbols, hedge sides and margin modes', async (t) => {
+  const base = await start(t, {
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      const body = url.pathname.endsWith('apiRestrictions')
+        ? permissions
+        : url.pathname.endsWith('portfolio/account')
+          ? { code: -21001 }
+          : url.pathname.endsWith('/account')
+            ? accountResponse
+            : url.pathname.endsWith('exchangeInfo')
+              ? {
+                  symbols: ['BTCUSDT', 'ETHUSDT'].map((symbol) => ({
+                    symbol,
+                    contractType: 'PERPETUAL',
+                    quoteAsset: 'USDT',
+                    marginAsset: 'USDT',
+                    status: 'BREAK',
+                  })),
+                }
+              : url.pathname.endsWith('positionRisk')
+                ? [
+                    {
+                      symbol: 'ETHUSDT',
+                      positionSide: 'BOTH',
+                      positionAmt: '-0.12345678',
+                      marginType: 'cross',
+                      leverage: '10',
+                      entryPrice: '2000',
+                      markPrice: '1990',
+                      unRealizedProfit: '1.23456789',
+                    },
+                    {
+                      symbol: 'BTCUSDT',
+                      positionSide: 'SHORT',
+                      positionAmt: '-0.01',
+                      marginType: 'isolated',
+                      leverage: '5',
+                      entryPrice: '60000',
+                      markPrice: '60100',
+                      unRealizedProfit: '-1',
+                      liquidationPrice: '70000',
+                      breakEvenPrice: '59990',
+                      isolatedWallet: '120',
+                      notional: '-601',
+                      updateTime: 1234567890000,
+                    },
+                    {
+                      symbol: 'BTCUSDT',
+                      positionSide: 'LONG',
+                      positionAmt: '0.02',
+                      marginType: 'cross',
+                      leverage: '3',
+                      entryPrice: '60000',
+                      markPrice: '60100',
+                      unRealizedProfit: '2',
+                    },
+                    { symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0' },
+                  ]
+                : url.pathname.endsWith('premiumIndex')
+                  ? [
+                      {
+                        symbol: 'BTCUSDT',
+                        lastFundingRate: '0.0001',
+                        nextFundingTime: 1900000000000,
+                        time: 1234567890001,
+                      },
+                    ]
+                  : [{ symbol: 'BTCUSDT', price: '60101', time: 1234567890002 }];
+      return { status: url.pathname.endsWith('portfolio/account') ? 400 : 200, body };
+    },
+  });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
   const response = await fetch(`${base}/api/account/positions`, { headers: { Cookie: cookie } });
   assert.equal(response.status, 200);
   const data = await response.json();
-  assert.deepEqual(data.positions.map((p: { symbol: string; direction: string }) => [p.symbol, p.direction]), [['BTCUSDT', 'LONG'], ['BTCUSDT', 'SHORT'], ['ETHUSDT', 'SHORT']]);
+  assert.deepEqual(
+    data.positions.map((p: { symbol: string; direction: string }) => [p.symbol, p.direction]),
+    [
+      ['BTCUSDT', 'LONG'],
+      ['BTCUSDT', 'SHORT'],
+      ['ETHUSDT', 'SHORT'],
+    ],
+  );
   assert.equal(data.positions[2].quantity, '0.12345678');
   assert.equal(data.positions[2].unrealizedProfit, '1.23456789');
   assert.equal(data.positions[2].liquidationPrice, null);
@@ -427,23 +719,85 @@ test('all current positions remain separate across symbols, hedge sides and marg
   assert.doesNotMatch(JSON.stringify(data), /controlled-test|signature/);
 });
 
-test('position observation excludes delivery contracts and keeps facts when auxiliary reads fail', async (t) => {
+void test('position observation excludes delivery contracts and keeps facts when auxiliary reads fail', async (t) => {
   t.mock.timers.enable({ apis: ['Date'] });
   let phase = 'mixed';
-  const row = { symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0.12345678', marginType: 'cross', leverage: '10', entryPrice: '60000', markPrice: '60100', unRealizedProfit: '-9.12345678' };
-  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
-    if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
-    if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
-    if (url.pathname.endsWith('/account')) return { status: 200, body: phase === 'asset-invalid' ? { ...accountResponse, assets: [{ ...accountResponse.assets[0], walletBalance: 'NaN' }] } : accountResponse };
-    if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: [
-      { symbol: 'BTCUSDT', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'PERPETUAL' },
-      { symbol: 'ETHUSDT_261225', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'CURRENT_QUARTER' },
-    ] } };
-    if (url.pathname.endsWith('positionRisk')) return { status: 200, body: phase === 'empty' ? [] : phase === 'invalid' ? [{ ...row, markPrice: 'NaN' }] : phase === 'missing' ? {} : [row, ...(phase === 'mixed' ? [{ ...row, symbol: 'ETHUSDT_261225' }, { ...row, symbol: 'BTCUSD_PERP' }] : [])] };
-    return { status: 429, body: { code: -1003, msg: 'controlled-test-secret' } };
-  } });
+  const row = {
+    symbol: 'BTCUSDT',
+    positionSide: 'BOTH',
+    positionAmt: '0.12345678',
+    marginType: 'cross',
+    leverage: '10',
+    entryPrice: '60000',
+    markPrice: '60100',
+    unRealizedProfit: '-9.12345678',
+  };
+  const base = await start(t, {
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+      if (url.pathname.endsWith('portfolio/account'))
+        return { status: 400, body: { code: -21001 } };
+      if (url.pathname.endsWith('/account'))
+        return {
+          status: 200,
+          body:
+            phase === 'asset-invalid'
+              ? {
+                  ...accountResponse,
+                  assets: [{ ...accountResponse.assets[0], walletBalance: 'NaN' }],
+                }
+              : accountResponse,
+        };
+      if (url.pathname.endsWith('exchangeInfo'))
+        return {
+          status: 200,
+          body: {
+            symbols: [
+              {
+                symbol: 'BTCUSDT',
+                quoteAsset: 'USDT',
+                marginAsset: 'USDT',
+                contractType: 'PERPETUAL',
+              },
+              {
+                symbol: 'ETHUSDT_261225',
+                quoteAsset: 'USDT',
+                marginAsset: 'USDT',
+                contractType: 'CURRENT_QUARTER',
+              },
+            ],
+          },
+        };
+      if (url.pathname.endsWith('positionRisk'))
+        return {
+          status: 200,
+          body:
+            phase === 'empty'
+              ? []
+              : phase === 'invalid'
+                ? [{ ...row, markPrice: 'NaN' }]
+                : phase === 'missing'
+                  ? {}
+                  : [
+                      row,
+                      ...(phase === 'mixed'
+                        ? [
+                            { ...row, symbol: 'ETHUSDT_261225' },
+                            { ...row, symbol: 'BTCUSD_PERP' },
+                          ]
+                        : []),
+                    ],
+        };
+      return { status: 429, body: { code: -1003, msg: 'controlled-test-secret' } };
+    },
+  });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-  const read = () => { t.mock.timers.setTime(Date.now() + 65_000); return fetch(`${base}/api/account/positions`, { headers: { Cookie: cookie } }); };
+  const read = () => {
+    t.mock.timers.setTime(Date.now() + 65_000);
+    return fetch(`${base}/api/account/positions`, { headers: { Cookie: cookie } });
+  };
   const response = await read();
   assert.equal(response.status, 200);
   const data = await response.json();
@@ -461,61 +815,175 @@ test('position observation excludes delivery contracts and keeps facts when auxi
   phase = 'asset-invalid';
   assert.equal((await read()).status, 200);
   t.mock.timers.setTime(Date.now() + 65_000);
-  assert.equal((await fetch(`${base}/api/account/assets`, { headers: { Cookie: cookie } })).status, 502);
+  assert.equal(
+    (await fetch(`${base}/api/account/assets`, { headers: { Cookie: cookie } })).status,
+    502,
+  );
   phase = 'empty';
   assert.deepEqual((await (await read()).json()).positions, []);
   assert.equal((await fetch(`${base}/api/account/positions`)).status, 401);
-  assert.equal((await fetch(`${base}/api/account/positions?symbol=BTCUSDT`, { headers: { Cookie: cookie } })).status, 404);
+  assert.equal(
+    (await fetch(`${base}/api/account/positions?symbol=BTCUSDT`, { headers: { Cookie: cookie } }))
+      .status,
+    404,
+  );
 });
 
-test('ordinary active orders read the whole account and preserve exact quantities and long IDs', async (t) => {
-  const order = { symbol: 'ETHUSDT', orderId: '9007199254740993123', side: 'SELL', positionSide: 'SHORT', type: 'LIMIT', status: 'PARTIALLY_FILLED', price: '2000.12345678', origQty: '0.12345678', executedQty: '0.00000001', avgPrice: '1999.00000001', reduceOnly: false, timeInForce: 'GTC', time: 1700000000000, updateTime: 1700000000100 };
-  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
-    if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
-    if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
-    if (url.pathname === '/fapi/v2/account') return { status: 200, body: { ...accountResponse, positions: [{ symbol: 'ETHUSDT', positionSide: 'SHORT', isolated: false, positionAmt: '-1' }] } };
-    if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: ['BTCUSDT', 'ETHUSDT'].map((symbol) => ({ symbol, quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'PERPETUAL' })) } };
-    assert.equal(url.pathname, '/fapi/v1/openOrders');
-    assert.equal(url.searchParams.has('symbol'), false);
-    return { status: 200, body: [order, { ...order, symbol: 'BTCUSDT', orderId: 12, side: 'BUY', positionSide: 'LONG', status: 'NEW', executedQty: '0' }] };
-  } });
+void test('ordinary active orders read the whole account and preserve exact quantities and long IDs', async (t) => {
+  const order = {
+    symbol: 'ETHUSDT',
+    orderId: '9007199254740993123',
+    side: 'SELL',
+    positionSide: 'SHORT',
+    type: 'LIMIT',
+    status: 'PARTIALLY_FILLED',
+    price: '2000.12345678',
+    origQty: '0.12345678',
+    executedQty: '0.00000001',
+    avgPrice: '1999.00000001',
+    reduceOnly: false,
+    timeInForce: 'GTC',
+    time: 1700000000000,
+    updateTime: 1700000000100,
+  };
+  const base = await start(t, {
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+      if (url.pathname.endsWith('portfolio/account'))
+        return { status: 400, body: { code: -21001 } };
+      if (url.pathname === '/fapi/v2/account')
+        return {
+          status: 200,
+          body: {
+            ...accountResponse,
+            positions: [
+              { symbol: 'ETHUSDT', positionSide: 'SHORT', isolated: false, positionAmt: '-1' },
+            ],
+          },
+        };
+      if (url.pathname.endsWith('exchangeInfo'))
+        return {
+          status: 200,
+          body: {
+            symbols: ['BTCUSDT', 'ETHUSDT'].map((symbol) => ({
+              symbol,
+              quoteAsset: 'USDT',
+              marginAsset: 'USDT',
+              contractType: 'PERPETUAL',
+            })),
+          },
+        };
+      assert.equal(url.pathname, '/fapi/v1/openOrders');
+      assert.equal(url.searchParams.has('symbol'), false);
+      return {
+        status: 200,
+        body: [
+          order,
+          {
+            ...order,
+            symbol: 'BTCUSDT',
+            orderId: 12,
+            side: 'BUY',
+            positionSide: 'LONG',
+            status: 'NEW',
+            executedQty: '0',
+          },
+        ],
+      };
+    },
+  });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
   const response = await fetch(`${base}/api/account/orders`, { headers: { Cookie: cookie } });
   assert.equal(response.status, 200);
   const data = await response.json();
   assert.equal(data.source, 'binance');
-  assert.deepEqual(data.orders.map((o: { symbol: string }) => o.symbol), ['BTCUSDT', 'ETHUSDT']);
+  assert.deepEqual(
+    data.orders.map((o: { symbol: string }) => o.symbol),
+    ['BTCUSDT', 'ETHUSDT'],
+  );
   assert.equal(data.orders[1].orderId, '9007199254740993123');
   assert.equal(data.orders[1].remainingQty, '0.12345677');
   assert.equal(data.orders[1].avgPrice, '1999.00000001');
   assert.equal(data.orders[0].orderId, '12');
   assert.equal((await fetch(`${base}/api/account/orders`)).status, 401);
-  assert.equal((await fetch(`${base}/api/account/orders?symbol=BTCUSDT`, { headers: { Cookie: cookie } })).status, 404);
+  assert.equal(
+    (await fetch(`${base}/api/account/orders?symbol=BTCUSDT`, { headers: { Cookie: cookie } }))
+      .status,
+    404,
+  );
 });
 
-test('ordinary orders preserve raw JSON integer IDs and reject bad quantities without becoming empty', async (t) => {
+void test('ordinary orders preserve raw JSON integer IDs and reject bad quantities without becoming empty', async (t) => {
   t.mock.timers.enable({ apis: ['Date'] });
-  let row: Record<string, unknown> = { symbol: 'BTCUSDT', orderId: '9007199254740993123', side: 'BUY', positionSide: 'BOTH', type: 'LIMIT', status: 'PARTIALLY_FILLED', origQty: '1.00000001', executedQty: '1' };
+  let row: Record<string, unknown> = {
+    symbol: 'BTCUSDT',
+    orderId: '9007199254740993123',
+    side: 'BUY',
+    positionSide: 'BOTH',
+    type: 'LIMIT',
+    status: 'PARTIALLY_FILLED',
+    origQty: '1.00000001',
+    executedQty: '1',
+  };
   let raw = true;
-  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
-    if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
-    if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
-    if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
-    if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: [{ symbol: 'BTCUSDT', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'PERPETUAL' }] } };
-    assert.equal(url.pathname, '/fapi/v1/openOrders');
-    return { status: 200, body: raw ? JSON.stringify([row]).replace('"9007199254740993123"', '9007199254740993123') : [row] };
-  } });
+  const base = await start(t, {
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+      if (url.pathname.endsWith('portfolio/account'))
+        return { status: 400, body: { code: -21001 } };
+      if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
+      if (url.pathname.endsWith('exchangeInfo'))
+        return {
+          status: 200,
+          body: {
+            symbols: [
+              {
+                symbol: 'BTCUSDT',
+                quoteAsset: 'USDT',
+                marginAsset: 'USDT',
+                contractType: 'PERPETUAL',
+              },
+            ],
+          },
+        };
+      assert.equal(url.pathname, '/fapi/v1/openOrders');
+      return {
+        status: 200,
+        body: raw
+          ? JSON.stringify([row]).replace('"9007199254740993123"', '9007199254740993123')
+          : [row],
+      };
+    },
+  });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-  const read = () => { t.mock.timers.setTime(Date.now() + 65_000); return fetch(`${base}/api/account/orders`, { headers: { Cookie: cookie } }); };
+  const read = () => {
+    t.mock.timers.setTime(Date.now() + 65_000);
+    return fetch(`${base}/api/account/orders`, { headers: { Cookie: cookie } });
+  };
   let response = await read();
   assert.equal(response.status, 200);
   let data = await response.json();
   assert.equal(data.orders[0].orderId, '9007199254740993123');
   assert.equal(data.orders[0].remainingQty, '0.00000001');
-  for (const field of ['price', 'avgPrice', 'reduceOnly', 'timeInForce', 'createdAt', 'updatedAt']) assert.equal(data.orders[0][field], null);
+  for (const field of ['price', 'avgPrice', 'reduceOnly', 'timeInForce', 'createdAt', 'updatedAt'])
+    assert.equal(data.orders[0][field], null);
   raw = false;
   const valid = { ...row };
-  for (const patch of [{ origQty: '-1' }, { origQty: '0' }, { executedQty: '1.00000002' }, { executedQty: '0.000000001' }, { orderId: 9007199254740992 }, { status: 'FILLED' }, { reduceOnly: 'false' }, { timeInForce: ['GTC'] }, { time: -1 }]) {
+  for (const patch of [
+    { origQty: '-1' },
+    { origQty: '0' },
+    { executedQty: '1.00000002' },
+    { executedQty: '0.000000001' },
+    { orderId: 9007199254740992 },
+    { status: 'FILLED' },
+    { reduceOnly: 'false' },
+    { timeInForce: ['GTC'] },
+    { time: -1 },
+  ]) {
     row = { ...valid, ...patch };
     response = await read();
     assert.equal(response.status, 502, JSON.stringify(patch));
@@ -534,29 +1002,76 @@ test('ordinary orders preserve raw JSON integer IDs and reject bad quantities wi
   assert.equal(data.orders[0].timeInForce, null);
 });
 
-test('ordinary orders exclude known contracts outside USDT perpetual scope without losing valid orders', async (t) => {
+void test('ordinary orders exclude known contracts outside USDT perpetual scope without losing valid orders', async (t) => {
   t.mock.timers.enable({ apis: ['Date'] });
   let unexpected = false;
   let missingMetadata = false;
-  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
-    if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
-    if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
-    if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
-    if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: [
-      missingMetadata ? { symbol: 'BTCUSDT' } : { symbol: 'BTCUSDT', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'PERPETUAL' },
-      { symbol: 'BTCUSDT_261225', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'CURRENT_QUARTER' },
-      { symbol: 'ETHUSDC', quoteAsset: 'USDC', marginAsset: 'USDC', contractType: 'PERPETUAL' },
-    ] } };
-    return { status: 200, body: [
-      { symbol: unexpected ? 'UNKNOWNUSDT' : 'BTCUSDT', orderId: 10, side: 'BUY', positionSide: 'BOTH', type: 'LIMIT', status: 'NEW', origQty: '1', executedQty: '0' },
-      { symbol: 'BTCUSDT_261225' }, { symbol: 'ETHUSDC' },
-    ] };
-  } });
+  const base = await start(t, {
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+      if (url.pathname.endsWith('portfolio/account'))
+        return { status: 400, body: { code: -21001 } };
+      if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
+      if (url.pathname.endsWith('exchangeInfo'))
+        return {
+          status: 200,
+          body: {
+            symbols: [
+              missingMetadata
+                ? { symbol: 'BTCUSDT' }
+                : {
+                    symbol: 'BTCUSDT',
+                    quoteAsset: 'USDT',
+                    marginAsset: 'USDT',
+                    contractType: 'PERPETUAL',
+                  },
+              {
+                symbol: 'BTCUSDT_261225',
+                quoteAsset: 'USDT',
+                marginAsset: 'USDT',
+                contractType: 'CURRENT_QUARTER',
+              },
+              {
+                symbol: 'ETHUSDC',
+                quoteAsset: 'USDC',
+                marginAsset: 'USDC',
+                contractType: 'PERPETUAL',
+              },
+            ],
+          },
+        };
+      return {
+        status: 200,
+        body: [
+          {
+            symbol: unexpected ? 'UNKNOWNUSDT' : 'BTCUSDT',
+            orderId: 10,
+            side: 'BUY',
+            positionSide: 'BOTH',
+            type: 'LIMIT',
+            status: 'NEW',
+            origQty: '1',
+            executedQty: '0',
+          },
+          { symbol: 'BTCUSDT_261225' },
+          { symbol: 'ETHUSDC' },
+        ],
+      };
+    },
+  });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-  const read = () => { t.mock.timers.setTime(Date.now() + 65_000); return fetch(`${base}/api/account/orders`, { headers: { Cookie: cookie } }); };
+  const read = () => {
+    t.mock.timers.setTime(Date.now() + 65_000);
+    return fetch(`${base}/api/account/orders`, { headers: { Cookie: cookie } });
+  };
   const response = await read();
   assert.equal(response.status, 200);
-  assert.deepEqual((await response.json()).orders.map((o: { symbol: string }) => o.symbol), ['BTCUSDT']);
+  assert.deepEqual(
+    (await response.json()).orders.map((o: { symbol: string }) => o.symbol),
+    ['BTCUSDT'],
+  );
   unexpected = true;
   assert.equal((await read()).status, 502);
   unexpected = false;
@@ -564,23 +1079,78 @@ test('ordinary orders exclude known contracts outside USDT perpetual scope witho
   assert.equal((await read()).status, 502);
 });
 
-
-test('conditional orders preserve whole-account facts, close-all semantics and raw int64 identifiers', async (t) => {
-  const fixed = { symbol: 'BTCUSDT', algoId: '9007199254740993123', algoType: 'CONDITIONAL', side: 'SELL', positionSide: 'LONG', orderType: 'STOP_MARKET', algoStatus: 'NEW', quantity: '0.12345678', triggerPrice: '58000.12345678', workingType: 'MARK_PRICE', reduceOnly: true, closePosition: false, priceProtect: true, createTime: 1700000000000, updateTime: 1700000000100 };
-  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
-    if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
-    if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
-    if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
-    if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: ['BTCUSDT', 'ETHUSDT'].map((symbol) => ({ symbol, quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'PERPETUAL' })) } };
-    assert.equal(url.pathname, '/fapi/v1/openAlgoOrders');
-    assert.equal(url.searchParams.has('symbol'), false);
-    return { status: 200, body: JSON.stringify([fixed,
-      { ...fixed, algoId: '2', side: 'BUY', positionSide: 'SHORT', orderType: 'TAKE_PROFIT_MARKET', closePosition: true, quantity: '0', workingType: 'CONTRACT_PRICE' },
-      { ...fixed, symbol: 'ETHUSDT', algoId: '3', orderType: 'TAKE_PROFIT', price: '2100.00000001', quantity: '1.00000001', executedQty: '1', timeInForce: 'GTC' },
-    ]).replace('"9007199254740993123"', '9007199254740993123') };
-  } });
+void test('conditional orders preserve whole-account facts, close-all semantics and raw int64 identifiers', async (t) => {
+  const fixed = {
+    symbol: 'BTCUSDT',
+    algoId: '9007199254740993123',
+    algoType: 'CONDITIONAL',
+    side: 'SELL',
+    positionSide: 'LONG',
+    orderType: 'STOP_MARKET',
+    algoStatus: 'NEW',
+    quantity: '0.12345678',
+    triggerPrice: '58000.12345678',
+    workingType: 'MARK_PRICE',
+    reduceOnly: true,
+    closePosition: false,
+    priceProtect: true,
+    createTime: 1700000000000,
+    updateTime: 1700000000100,
+  };
+  const base = await start(t, {
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+      if (url.pathname.endsWith('portfolio/account'))
+        return { status: 400, body: { code: -21001 } };
+      if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
+      if (url.pathname.endsWith('exchangeInfo'))
+        return {
+          status: 200,
+          body: {
+            symbols: ['BTCUSDT', 'ETHUSDT'].map((symbol) => ({
+              symbol,
+              quoteAsset: 'USDT',
+              marginAsset: 'USDT',
+              contractType: 'PERPETUAL',
+            })),
+          },
+        };
+      assert.equal(url.pathname, '/fapi/v1/openAlgoOrders');
+      assert.equal(url.searchParams.has('symbol'), false);
+      return {
+        status: 200,
+        body: JSON.stringify([
+          fixed,
+          {
+            ...fixed,
+            algoId: '2',
+            side: 'BUY',
+            positionSide: 'SHORT',
+            orderType: 'TAKE_PROFIT_MARKET',
+            closePosition: true,
+            quantity: '0',
+            workingType: 'CONTRACT_PRICE',
+          },
+          {
+            ...fixed,
+            symbol: 'ETHUSDT',
+            algoId: '3',
+            orderType: 'TAKE_PROFIT',
+            price: '2100.00000001',
+            quantity: '1.00000001',
+            executedQty: '1',
+            timeInForce: 'GTC',
+          },
+        ]).replace('"9007199254740993123"', '9007199254740993123'),
+      };
+    },
+  });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-  const response = await fetch(`${base}/api/account/conditional-orders`, { headers: { Cookie: cookie } });
+  const response = await fetch(`${base}/api/account/conditional-orders`, {
+    headers: { Cookie: cookie },
+  });
   assert.equal(response.status, 200);
   const data = await response.json();
   assert.equal(data.source, 'binance');
@@ -603,36 +1173,117 @@ test('conditional orders preserve whole-account facts, close-all semantics and r
   assert.equal(limit.remainingQty, '0.00000001');
   assert.equal(limit.price, '2100.00000001');
   assert.equal((await fetch(`${base}/api/account/conditional-orders`)).status, 401);
-  assert.equal((await fetch(`${base}/api/account/conditional-orders?symbol=BTCUSDT`, { headers: { Cookie: cookie } })).status, 404);
+  assert.equal(
+    (
+      await fetch(`${base}/api/account/conditional-orders?symbol=BTCUSDT`, {
+        headers: { Cookie: cookie },
+      })
+    ).status,
+    404,
+  );
 });
 
-test('conditional orders keep unknown settings and trailing facts while rejecting invalid or unconfirmed lists', async (t) => {
-  const valid: Record<string, unknown> = { symbol: 'BTCUSDT', algoId: '123', algoType: 'CONDITIONAL', side: 'SELL', positionSide: 'BOTH', orderType: 'TRAILING_STOP_MARKET', algoStatus: 'NEW', quantity: '0.00000001', activatePrice: '60000.12345678', callbackRate: '0.3', workingType: 'OTHER_PRICE' };
+void test('conditional orders keep unknown settings and trailing facts while rejecting invalid or unconfirmed lists', async (t) => {
+  const valid: Record<string, unknown> = {
+    symbol: 'BTCUSDT',
+    algoId: '123',
+    algoType: 'CONDITIONAL',
+    side: 'SELL',
+    positionSide: 'BOTH',
+    orderType: 'TRAILING_STOP_MARKET',
+    algoStatus: 'NEW',
+    quantity: '0.00000001',
+    activatePrice: '60000.12345678',
+    callbackRate: '0.3',
+    workingType: 'OTHER_PRICE',
+  };
   t.mock.timers.enable({ apis: ['Date'] });
-  let row = { ...valid }, failed = false, missingMetadata = false, duplicate = false, empty = false;
-  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
-    if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
-    if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
-    if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
-    if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: [
-      missingMetadata ? { symbol: 'BTCUSDT' } : { symbol: 'BTCUSDT', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'PERPETUAL' },
-      { symbol: 'ETHUSDC', quoteAsset: 'USDC', marginAsset: 'USDC', contractType: 'PERPETUAL' },
-      { symbol: 'BTCUSDT_261225', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'CURRENT_QUARTER' },
-    ] } };
-    assert.equal(url.pathname, '/fapi/v1/openAlgoOrders');
-    if (failed) return { status: 429, body: { code: -1003, msg: 'controlled-test-secret' } };
-    return { status: 200, body: empty ? [] : [row, ...(duplicate ? [row] : []), { symbol: 'ETHUSDC' }, { symbol: 'BTCUSDT_261225' }] };
-  } });
+  let row = { ...valid },
+    failed = false,
+    missingMetadata = false,
+    duplicate = false,
+    empty = false;
+  const base = await start(t, {
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+      if (url.pathname.endsWith('portfolio/account'))
+        return { status: 400, body: { code: -21001 } };
+      if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
+      if (url.pathname.endsWith('exchangeInfo'))
+        return {
+          status: 200,
+          body: {
+            symbols: [
+              missingMetadata
+                ? { symbol: 'BTCUSDT' }
+                : {
+                    symbol: 'BTCUSDT',
+                    quoteAsset: 'USDT',
+                    marginAsset: 'USDT',
+                    contractType: 'PERPETUAL',
+                  },
+              {
+                symbol: 'ETHUSDC',
+                quoteAsset: 'USDC',
+                marginAsset: 'USDC',
+                contractType: 'PERPETUAL',
+              },
+              {
+                symbol: 'BTCUSDT_261225',
+                quoteAsset: 'USDT',
+                marginAsset: 'USDT',
+                contractType: 'CURRENT_QUARTER',
+              },
+            ],
+          },
+        };
+      assert.equal(url.pathname, '/fapi/v1/openAlgoOrders');
+      if (failed) return { status: 429, body: { code: -1003, msg: 'controlled-test-secret' } };
+      return {
+        status: 200,
+        body: empty
+          ? []
+          : [row, ...(duplicate ? [row] : []), { symbol: 'ETHUSDC' }, { symbol: 'BTCUSDT_261225' }],
+      };
+    },
+  });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-  const read = () => { t.mock.timers.setTime(Date.now() + 65_000); return fetch(`${base}/api/account/conditional-orders`, { headers: { Cookie: cookie } }); };
+  const read = () => {
+    t.mock.timers.setTime(Date.now() + 65_000);
+    return fetch(`${base}/api/account/conditional-orders`, { headers: { Cookie: cookie } });
+  };
   let data = await (await read()).json();
   assert.equal(data.orders.length, 1);
   assert.equal(data.orders[0].activatePrice, '60000.12345678');
   assert.equal(data.orders[0].callbackRate, '0.30000000');
   assert.equal(data.orders[0].triggerPrice, null);
   assert.equal(data.orders[0].workingType, 'OTHER_PRICE');
-  for (const field of ['closePosition', 'priceProtect', 'reduceOnly', 'timeInForce', 'executedQty', 'remainingQty', 'createdAt', 'updatedAt']) assert.equal(data.orders[0][field], null);
-  for (const patch of [{ quantity: '-1' }, { quantity: '0.000000001' }, { quantity: '0', closePosition: false }, { executedQty: '1' }, { executedQty: '0', remainingQty: '0' }, { algoId: 9007199254740992 }, { priceProtect: 'false' }, { workingType: [] }, { createTime: -1 }, { symbol: 'UNKNOWNUSDT' }, { orderType: 'LIMIT' }]) {
+  for (const field of [
+    'closePosition',
+    'priceProtect',
+    'reduceOnly',
+    'timeInForce',
+    'executedQty',
+    'remainingQty',
+    'createdAt',
+    'updatedAt',
+  ])
+    assert.equal(data.orders[0][field], null);
+  for (const patch of [
+    { quantity: '-1' },
+    { quantity: '0.000000001' },
+    { quantity: '0', closePosition: false },
+    { executedQty: '1' },
+    { executedQty: '0', remainingQty: '0' },
+    { algoId: 9007199254740992 },
+    { priceProtect: 'false' },
+    { workingType: [] },
+    { createTime: -1 },
+    { symbol: 'UNKNOWNUSDT' },
+    { orderType: 'LIMIT' },
+  ]) {
     row = { ...valid, ...patch };
     const response = await read();
     assert.equal(response.status, 502, JSON.stringify(patch));
@@ -640,11 +1291,25 @@ test('conditional orders keep unknown settings and trailing facts while rejectin
     assert.equal(data.orders, undefined);
     assert.equal(data.code, 'invalid_response');
   }
-  row = { ...valid, orderType: 'STOP', price: '59000.00000001', triggerPrice: '59500.00000001', timeInForce: 'GTD', executedQty: '0' };
+  row = {
+    ...valid,
+    orderType: 'STOP',
+    price: '59000.00000001',
+    triggerPrice: '59500.00000001',
+    timeInForce: 'GTD',
+    executedQty: '0',
+  };
   data = await (await read()).json();
   assert.equal(data.orders[0].remainingQty, '0.00000001');
   assert.equal(data.orders[0].timeInForce, 'GTD');
-  row = { ...valid, closePosition: true, quantity: '0', executedQty: '0.1', remainingQty: '0.2', workingType: undefined };
+  row = {
+    ...valid,
+    closePosition: true,
+    quantity: '0',
+    executedQty: '0.1',
+    remainingQty: '0.2',
+    workingType: undefined,
+  };
   data = await (await read()).json();
   assert.equal(data.orders[0].quantity, null);
   assert.equal(data.orders[0].executedQty, '0.10000000');
@@ -667,21 +1332,30 @@ test('conditional orders keep unknown settings and trailing facts while rejectin
   assert.doesNotMatch(JSON.stringify(data), /controlled-test|signature/);
 });
 
-test('visitors share summary and asset reads for three seconds without inventing a new query time', async (t) => {
+void test('visitors share summary and asset reads for three seconds without inventing a new query time', async (t) => {
   let accountReads = 0;
   const base = await start(t, {
-    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
     transport: async (url) => {
-      if (url.pathname === '/sapi/v1/account/apiRestrictions') return { status: 200, body: permissions };
-      if (url.pathname === '/sapi/v1/portfolio/account') return { status: 400, body: { code: -21001 } };
+      if (url.pathname === '/sapi/v1/account/apiRestrictions')
+        return { status: 200, body: permissions };
+      if (url.pathname === '/sapi/v1/portfolio/account')
+        return { status: 400, body: { code: -21001 } };
       accountReads++;
       await new Promise((resolve) => setTimeout(resolve, 30));
       return { status: 200, body: accountResponse };
     },
   });
-  const cookies = await Promise.all([login(base), login(base)]).then((responses) => responses.map((r) => r.headers.get('set-cookie')!.split(';')[0]!));
-  const read = (path: string, cookie = cookies[0]!) => fetch(`${base}${path}`, { headers: { Cookie: cookie } }).then((r) => r.json());
-  const [summary, assets] = await Promise.all([read('/api/account'), read('/api/account/assets', cookies[1])]);
+  const cookies = await Promise.all([login(base), login(base)]).then((responses) =>
+    responses.map((r) => r.headers.get('set-cookie')!.split(';')[0]!),
+  );
+  const read = (path: string, cookie = cookies[0]!) =>
+    fetch(`${base}${path}`, { headers: { Cookie: cookie } }).then((r) => r.json());
+  const [summary, assets] = await Promise.all([
+    read('/api/account'),
+    read('/api/account/assets', cookies[1]),
+  ]);
   assert.equal(accountReads, 1);
   assert.equal(summary.queriedAt, assets.queriedAt);
   const reused = await read('/api/account/assets');
@@ -695,25 +1369,38 @@ test('visitors share summary and asset reads for three seconds without inventing
   assert.ok(Date.parse(fresh.queriedAt) > Date.parse(assets.queriedAt));
 });
 
-test('automatic account polls share thirty-second data while active and workbench reads stay fresh', async (t) => {
+void test('automatic account polls share thirty-second data while active and workbench reads stay fresh', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   const calls = new Map<string, number>();
   const base = await start(t, {
-    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
     transport: async (url) => {
       calls.set(url.pathname, (calls.get(url.pathname) ?? 0) + 1);
       if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
-      if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
+      if (url.pathname.endsWith('portfolio/account'))
+        return { status: 400, body: { code: -21001 } };
       if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
       if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: [] } };
       return { status: 200, body: [] };
     },
   });
-  const cookies = await Promise.all([login(base), login(base)]).then((responses) => responses.map((r) => r.headers.get('set-cookie')!.split(';')[0]!));
-  const paths = ['/api/account/assets', '/api/account/positions', '/api/account/orders', '/api/account/conditional-orders'];
-  const read = (path: string, automatic = false, cookie = cookies[0]!) => fetch(`${base}${path}`, {
-    headers: { Cookie: cookie, ...(automatic ? { 'X-Account-Refresh': 'automatic' } : {}) },
-  }).then(async (response) => { assert.equal(response.status, 200); return response.json(); });
+  const cookies = await Promise.all([login(base), login(base)]).then((responses) =>
+    responses.map((r) => r.headers.get('set-cookie')!.split(';')[0]!),
+  );
+  const paths = [
+    '/api/account/assets',
+    '/api/account/positions',
+    '/api/account/orders',
+    '/api/account/conditional-orders',
+  ];
+  const read = (path: string, automatic = false, cookie = cookies[0]!) =>
+    fetch(`${base}${path}`, {
+      headers: { Cookie: cookie, ...(automatic ? { 'X-Account-Refresh': 'automatic' } : {}) },
+    }).then(async (response) => {
+      assert.equal(response.status, 200);
+      return response.json();
+    });
   const before = Date.now();
   const initial = await Promise.all(paths.map((path) => read(path)));
   const beforeReuse = new Map(calls);
@@ -729,27 +1416,40 @@ test('automatic account polls share thirty-second data while active and workbenc
   const summary = await read('/api/account', true);
   assert.ok(Date.parse(summary.queriedAt) > Date.parse(initial[0].queriedAt));
   const active = await Promise.all(paths.map((path) => read(path)));
-  active.forEach((value, index) => assert.ok(Date.parse(value.queriedAt) > Date.parse(initial[index].queriedAt)));
+  active.forEach((value, index) =>
+    assert.ok(Date.parse(value.queriedAt) > Date.parse(initial[index].queriedAt)),
+  );
   const afterActive = new Map(calls);
   t.mock.timers.setTime(before + 30_000);
   await Promise.all(paths.map((path) => read(path, true, cookies[1]!)));
   assert.deepEqual(calls, afterActive);
   t.mock.timers.setTime(before + 33_000);
   const expired = await Promise.all(paths.map((path) => read(path, true)));
-  expired.forEach((value, index) => assert.ok(Date.parse(value.queriedAt) > Date.parse(active[index].queriedAt)));
+  expired.forEach((value, index) =>
+    assert.ok(Date.parse(value.queriedAt) > Date.parse(active[index].queriedAt)),
+  );
   assert.equal(calls.get('/fapi/v1/openOrders'), 3);
   assert.equal(calls.get('/fapi/v1/openAlgoOrders'), 3);
 });
 
-test('rate limits stop manual and multi-visitor reads until the upstream retry time', async (t) => {
-  let limited = true, calls = 0;
+void test('rate limits stop manual and multi-visitor reads until the upstream retry time', async (t) => {
+  let limited = true,
+    calls = 0;
   const base = await start(t, {
-    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
     transport: async (url) => {
       calls++;
-      if (limited) return { status: 429, headers: { 'retry-after': '1' }, body: { code: -1003, msg: 'private upstream details' } };
-      if (url.pathname === '/sapi/v1/account/apiRestrictions') return { status: 200, body: permissions };
-      if (url.pathname === '/sapi/v1/portfolio/account') return { status: 400, body: { code: -21001 } };
+      if (limited)
+        return {
+          status: 429,
+          headers: { 'retry-after': '1' },
+          body: { code: -1003, msg: 'private upstream details' },
+        };
+      if (url.pathname === '/sapi/v1/account/apiRestrictions')
+        return { status: 200, body: permissions };
+      if (url.pathname === '/sapi/v1/portfolio/account')
+        return { status: 400, body: { code: -21001 } };
       return { status: 200, body: accountResponse };
     },
   });
@@ -760,7 +1460,13 @@ test('rate limits stop manual and multi-visitor reads until the upstream retry t
   const error = await first.json();
   assert.ok(Date.parse(error.retryAt) > Date.now());
   assert.doesNotMatch(JSON.stringify(error), /private upstream/);
-  for (const path of ['/api/account', '/api/account/positions', '/api/account/orders', '/api/account/conditional-orders', '/api/market?symbol=BTCUSDT']) {
+  for (const path of [
+    '/api/account',
+    '/api/account/positions',
+    '/api/account/orders',
+    '/api/account/conditional-orders',
+    '/api/market?symbol=BTCUSDT',
+  ]) {
     assert.equal((await read(path)).status, 429);
   }
   assert.equal(calls, 1);
@@ -769,66 +1475,87 @@ test('rate limits stop manual and multi-visitor reads until the upstream retry t
   assert.equal((await read('/api/account/assets')).status, 200);
 });
 
-test('shared reads cancel only when their last visitor leaves and never accept canceled data', async (t) => {
+void test('shared reads cancel only when their last visitor leaves and never accept canceled data', async (t) => {
   let started!: () => void, release!: () => void;
   let upstreamSignal: AbortSignal | undefined;
   let accountReads = 0;
-  let ready = new Promise<void>((resolve) => { started = resolve; });
+  let ready = new Promise<void>((resolve) => {
+    started = resolve;
+  });
   const base = await start(t, {
-    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
     transport: async (url, _headers, signal) => {
       if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
-      if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
-      accountReads++; upstreamSignal = signal; started();
-      await new Promise<void>((resolve) => { release = resolve; });
+      if (url.pathname.endsWith('portfolio/account'))
+        return { status: 400, body: { code: -21001 } };
+      accountReads++;
+      upstreamSignal = signal;
+      started();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
       return { status: 200, body: accountResponse };
     },
   });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-  const first = new AbortController(), second = new AbortController();
-  const read = (controller: AbortController) => fetch(`${base}/api/account/assets`, { headers: { Cookie: cookie }, signal: controller.signal });
+  const first = new AbortController(),
+    second = new AbortController();
+  const read = (controller: AbortController) =>
+    fetch(`${base}/api/account/assets`, { headers: { Cookie: cookie }, signal: controller.signal });
   const one = read(first).catch(() => null);
   await ready;
   const two = read(second);
   await new Promise((resolve) => setTimeout(resolve, 40));
-  first.abort(); await one;
+  first.abort();
+  await one;
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(upstreamSignal?.aborted, false);
   release();
   assert.equal((await two).status, 200);
   assert.equal(accountReads, 1);
   await new Promise((resolve) => setTimeout(resolve, 3010));
-  ready = new Promise<void>((resolve) => { started = resolve; });
+  ready = new Promise<void>((resolve) => {
+    started = resolve;
+  });
   const last = new AbortController();
   const canceled = read(last).catch(() => null);
   await ready;
   const canceledSignal = upstreamSignal!;
-  last.abort(); await canceled;
+  last.abort();
+  await canceled;
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(canceledSignal.aborted, true);
   release();
   await new Promise((resolve) => setTimeout(resolve, 40));
-  ready = new Promise<void>((resolve) => { started = resolve; });
+  ready = new Promise<void>((resolve) => {
+    started = resolve;
+  });
   const fresh = read(new AbortController());
-  await ready; release();
+  await ready;
+  release();
   assert.equal((await fresh).status, 200);
   assert.equal(accountReads, 3);
 });
 
-test('persistent failures back off across visitors and return the original failed attempt', async (t) => {
+void test('persistent failures back off across visitors and return the original failed attempt', async (t) => {
   t.mock.timers.enable({ apis: ['Date'] });
-  let calls = 0, fail = true;
+  let calls = 0,
+    fail = true;
   const base = await start(t, {
-    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
     transport: async (url) => {
       if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
-      if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
+      if (url.pathname.endsWith('portfolio/account'))
+        return { status: 400, body: { code: -21001 } };
       calls++;
       return fail ? { status: 500, body: {} } : { status: 200, body: accountResponse };
     },
   });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-  const read = () => fetch(`${base}/api/account/assets`, { headers: { Cookie: cookie } }).then((r) => r.json());
+  const read = () =>
+    fetch(`${base}/api/account/assets`, { headers: { Cookie: cookie } }).then((r) => r.json());
   for (const delay of [3000, 6000, 12000, 24000, 48000, 60000]) {
     const error = await read();
     assert.equal(Date.parse(error.retryAt) - Date.now(), delay);
@@ -842,17 +1569,30 @@ test('persistent failures back off across visitors and return the original faile
   assert.equal((await read()).equity, '975.09999999');
 });
 
-test('reported exchange quota and IP usage defer whole-account reads before exhausting the window', async (t) => {
+void test('reported exchange quota and IP usage defer whole-account reads before exhausting the window', async (t) => {
   let orders = 0;
   const base = await start(t, {
-    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
     transport: async (url) => {
       if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
-      if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
+      if (url.pathname.endsWith('portfolio/account'))
+        return { status: 400, body: { code: -21001 } };
       if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
       if (url.pathname.endsWith('positionRisk')) return { status: 200, body: [] };
-      if (url.pathname.endsWith('exchangeInfo')) return { status: 200, headers: { 'x-mbx-used-weight-1m': '2399' }, body: { symbols: [], rateLimits: [{ rateLimitType: 'REQUEST_WEIGHT', interval: 'MINUTE', intervalNum: 1, limit: 2400 }] } };
-      orders++; return { status: 200, body: [] };
+      if (url.pathname.endsWith('exchangeInfo'))
+        return {
+          status: 200,
+          headers: { 'x-mbx-used-weight-1m': '2399' },
+          body: {
+            symbols: [],
+            rateLimits: [
+              { rateLimitType: 'REQUEST_WEIGHT', interval: 'MINUTE', intervalNum: 1, limit: 2400 },
+            ],
+          },
+        };
+      orders++;
+      return { status: 200, body: [] };
     },
   });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
@@ -864,30 +1604,53 @@ test('reported exchange quota and IP usage defer whole-account reads before exha
   assert.equal(orders, 0);
 });
 
-test('whole-account visitors share every section and preserve strict market scope checks', async (t) => {
+void test('whole-account visitors share every section and preserve strict market scope checks', async (t) => {
   t.mock.timers.enable({ apis: ['Date'] });
   const calls = new Map<string, number>();
   let supportedScope = true;
   const base = await start(t, {
-    apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret',
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
     transport: async (url) => {
       calls.set(url.pathname, (calls.get(url.pathname) ?? 0) + 1);
       await new Promise((resolve) => setTimeout(resolve, 20));
       if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
-      if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
-      if (url.pathname.endsWith('/account')) return { status: 200, body: { ...accountResponse, multiAssetsMargin: !supportedScope } };
+      if (url.pathname.endsWith('portfolio/account'))
+        return { status: 400, body: { code: -21001 } };
+      if (url.pathname.endsWith('/account'))
+        return { status: 200, body: { ...accountResponse, multiAssetsMargin: !supportedScope } };
       if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: [] } };
       return { status: 200, body: [] };
     },
   });
-  const cookies = await Promise.all([login(base), login(base)]).then((responses) => responses.map((r) => r.headers.get('set-cookie')!.split(';')[0]!));
-  const paths = ['/api/account', '/api/account/assets', '/api/account/positions', '/api/account/orders', '/api/account/conditional-orders'];
-  const read = (path: string, cookie: string, automatic = false) => fetch(`${base}${path}`, {
-    headers: { Cookie: cookie, ...(automatic ? { 'X-Account-Refresh': 'automatic' } : {}) },
-  });
-  const responses = await Promise.all(cookies.flatMap((cookie) => paths.map((path) => read(path, cookie))));
+  const cookies = await Promise.all([login(base), login(base)]).then((responses) =>
+    responses.map((r) => r.headers.get('set-cookie')!.split(';')[0]!),
+  );
+  const paths = [
+    '/api/account',
+    '/api/account/assets',
+    '/api/account/positions',
+    '/api/account/orders',
+    '/api/account/conditional-orders',
+  ];
+  const read = (path: string, cookie: string, automatic = false) =>
+    fetch(`${base}${path}`, {
+      headers: { Cookie: cookie, ...(automatic ? { 'X-Account-Refresh': 'automatic' } : {}) },
+    });
+  const responses = await Promise.all(
+    cookies.flatMap((cookie) => paths.map((path) => read(path, cookie))),
+  );
   for (const response of responses) assert.equal(response.status, 200);
-  for (const path of ['/sapi/v1/account/apiRestrictions', '/sapi/v1/portfolio/account', '/fapi/v2/account', '/fapi/v1/exchangeInfo', '/fapi/v2/positionRisk', '/fapi/v1/openOrders', '/fapi/v1/openAlgoOrders']) assert.equal(calls.get(path), 1, path);
+  for (const path of [
+    '/sapi/v1/account/apiRestrictions',
+    '/sapi/v1/portfolio/account',
+    '/fapi/v2/account',
+    '/fapi/v1/exchangeInfo',
+    '/fapi/v2/positionRisk',
+    '/fapi/v1/openOrders',
+    '/fapi/v1/openAlgoOrders',
+  ])
+    assert.equal(calls.get(path), 1, path);
   supportedScope = false;
   // A formal market query cannot borrow the still-current observation cache.
   const strict = await read('/api/market?symbol=BTCUSDT', cookies[0]!);
@@ -905,30 +1668,45 @@ test('whole-account visitors share every section and preserve strict market scop
   }
 });
 
-test('a reported ban deadline takes precedence over the fallback and never leaks upstream text', async (t) => {
+void test('a reported ban deadline takes precedence over the fallback and never leaks upstream text', async (t) => {
   const until = Date.now() + 120_000;
   let calls = 0;
-  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async () => {
-    calls++; return { status: 418, body: { code: -1003, msg: `private details IP banned until ${until}` } };
-  } });
+  const base = await start(t, {
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
+    transport: async () => {
+      calls++;
+      return {
+        status: 418,
+        body: { code: -1003, msg: `private details IP banned until ${until}` },
+      };
+    },
+  });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-  const read = () => fetch(`${base}/api/account`, { headers: { Cookie: cookie } }).then((r) => r.json());
+  const read = () =>
+    fetch(`${base}/api/account`, { headers: { Cookie: cookie } }).then((r) => r.json());
   const error = await read();
   assert.equal(error.retryAt, new Date(until).toISOString());
   assert.doesNotMatch(JSON.stringify(error), /private details/);
-  await read(); assert.equal(calls, 1);
+  await read();
+  assert.equal(calls, 1);
 });
 
-test('a slow successful read does not extend reuse past the next foreground tick', async (t) => {
+void test('a slow successful read does not extend reuse past the next foreground tick', async (t) => {
   t.mock.timers.enable({ apis: ['Date'] });
   let calls = 0;
-  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
-    if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
-    if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
-    calls++;
-    t.mock.timers.setTime(Date.now() + 1000);
-    return { status: 200, body: accountResponse };
-  } });
+  const base = await start(t, {
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+      if (url.pathname.endsWith('portfolio/account'))
+        return { status: 400, body: { code: -21001 } };
+      calls++;
+      t.mock.timers.setTime(Date.now() + 1000);
+      return { status: 200, body: accountResponse };
+    },
+  });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
   const before = Date.now();
   const read = () => fetch(`${base}/api/account/assets`, { headers: { Cookie: cookie } });
@@ -938,16 +1716,23 @@ test('a slow successful read does not extend reuse past the next foreground tick
   assert.equal(calls, 2);
 });
 
-test('asset details cannot extend the success reuse window of an earlier summary', async (t) => {
+void test('asset details cannot extend the success reuse window of an earlier summary', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   let calls = 0;
-  const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
-    if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
-    if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
-    calls++; return { status: 200, body: accountResponse };
-  } });
+  const base = await start(t, {
+    apiKey: 'controlled-test-key',
+    apiSecret: 'controlled-test-secret',
+    transport: async (url) => {
+      if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+      if (url.pathname.endsWith('portfolio/account'))
+        return { status: 400, body: { code: -21001 } };
+      calls++;
+      return { status: 200, body: accountResponse };
+    },
+  });
   const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-  const read = (path: string) => fetch(`${base}${path}`, { headers: { Cookie: cookie } }).then((r) => r.json());
+  const read = (path: string) =>
+    fetch(`${base}${path}`, { headers: { Cookie: cookie } }).then((r) => r.json());
   const before = Date.now();
   const summary = await read('/api/account');
   t.mock.timers.setTime(before + 2800);
@@ -958,34 +1743,78 @@ test('asset details cannot extend the success reuse window of an earlier summary
   assert.ok(Date.parse(fresh.queriedAt) > Date.parse(summary.queriedAt));
 });
 
-test('invalid or refused auxiliary market data backs off while positions and funding keep updating', async (t) => {
-  for (const status of [200, 400, 'alternating'] as const) await t.test(String(status), async (t) => {
-    t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
-    let calls = 0;
-    const base = await start(t, { apiKey: 'controlled-test-key', apiSecret: 'controlled-test-secret', transport: async (url) => {
-      if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
-      if (url.pathname.endsWith('portfolio/account')) return { status: 400, body: { code: -21001 } };
-      if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
-      if (url.pathname.endsWith('exchangeInfo')) return { status: 200, body: { symbols: [{ symbol: 'BTCUSDT', quoteAsset: 'USDT', marginAsset: 'USDT', contractType: 'PERPETUAL' }] } };
-      if (url.pathname.endsWith('positionRisk')) return { status: 200, body: [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '1', marginType: 'cross', leverage: '10', entryPrice: '60000', markPrice: '60100', unRealizedProfit: '100' }] };
-      if (url.pathname.endsWith('premiumIndex')) return { status: 200, body: [{ symbol: 'BTCUSDT', lastFundingRate: '0.0001', time: Date.now() }] };
-      calls++;
-      const responseStatus = status === 'alternating' ? (calls % 2 ? 200 : 500) : status;
-      return { status: responseStatus, body: responseStatus === 200 ? [{ symbol: 'BTCUSDT', price: 'NaN' }] : { code: -1 } };
-    } });
-    const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
-    const read = () => fetch(`${base}/api/account/positions`, { headers: { Cookie: cookie } }).then((r) => r.json());
-    const first = await read();
-    assert.equal(first.last.status, 'error');
-    assert.equal(Date.parse(first.last.retryAt) - Date.now(), 3000);
-    t.mock.timers.setTime(Date.now() + 3000);
-    const second = await read();
-    assert.equal(Date.parse(second.last.retryAt) - Date.now(), 6000);
-    t.mock.timers.setTime(Date.now() + 3000);
-    const waiting = await read();
-    assert.equal(calls, 2);
-    assert.equal(waiting.last.attemptedAt, second.last.attemptedAt);
-    assert.ok(Date.parse(waiting.queriedAt) > Date.parse(second.queriedAt));
-    assert.ok(Date.parse(waiting.funding.queriedAt) > Date.parse(second.funding.queriedAt));
-  });
+void test('invalid or refused auxiliary market data backs off while positions and funding keep updating', async (t) => {
+  for (const status of [200, 400, 'alternating'] as const)
+    await t.test(String(status), async (t) => {
+      t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+      let calls = 0;
+      const base = await start(t, {
+        apiKey: 'controlled-test-key',
+        apiSecret: 'controlled-test-secret',
+        transport: async (url) => {
+          if (url.pathname.endsWith('apiRestrictions')) return { status: 200, body: permissions };
+          if (url.pathname.endsWith('portfolio/account'))
+            return { status: 400, body: { code: -21001 } };
+          if (url.pathname.endsWith('/account')) return { status: 200, body: accountResponse };
+          if (url.pathname.endsWith('exchangeInfo'))
+            return {
+              status: 200,
+              body: {
+                symbols: [
+                  {
+                    symbol: 'BTCUSDT',
+                    quoteAsset: 'USDT',
+                    marginAsset: 'USDT',
+                    contractType: 'PERPETUAL',
+                  },
+                ],
+              },
+            };
+          if (url.pathname.endsWith('positionRisk'))
+            return {
+              status: 200,
+              body: [
+                {
+                  symbol: 'BTCUSDT',
+                  positionSide: 'BOTH',
+                  positionAmt: '1',
+                  marginType: 'cross',
+                  leverage: '10',
+                  entryPrice: '60000',
+                  markPrice: '60100',
+                  unRealizedProfit: '100',
+                },
+              ],
+            };
+          if (url.pathname.endsWith('premiumIndex'))
+            return {
+              status: 200,
+              body: [{ symbol: 'BTCUSDT', lastFundingRate: '0.0001', time: Date.now() }],
+            };
+          calls++;
+          const responseStatus = status === 'alternating' ? (calls % 2 ? 200 : 500) : status;
+          return {
+            status: responseStatus,
+            body: responseStatus === 200 ? [{ symbol: 'BTCUSDT', price: 'NaN' }] : { code: -1 },
+          };
+        },
+      });
+      const cookie = (await login(base)).headers.get('set-cookie')!.split(';')[0]!;
+      const read = () =>
+        fetch(`${base}/api/account/positions`, { headers: { Cookie: cookie } }).then((r) =>
+          r.json(),
+        );
+      const first = await read();
+      assert.equal(first.last.status, 'error');
+      assert.equal(Date.parse(first.last.retryAt) - Date.now(), 3000);
+      t.mock.timers.setTime(Date.now() + 3000);
+      const second = await read();
+      assert.equal(Date.parse(second.last.retryAt) - Date.now(), 6000);
+      t.mock.timers.setTime(Date.now() + 3000);
+      const waiting = await read();
+      assert.equal(calls, 2);
+      assert.equal(waiting.last.attemptedAt, second.last.attemptedAt);
+      assert.ok(Date.parse(waiting.queriedAt) > Date.parse(second.queriedAt));
+      assert.ok(Date.parse(waiting.funding.queriedAt) > Date.parse(second.funding.queriedAt));
+    });
 });

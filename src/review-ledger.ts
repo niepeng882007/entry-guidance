@@ -1,12 +1,46 @@
-import { entryType, matchesReview, sortReview, defaultReviewFilters, type EntryType, type ReviewFilters } from './review-filters.ts';
+import {
+  entryType,
+  matchesReview,
+  sortReview,
+  defaultReviewFilters,
+  type EntryType,
+  type ReviewFilters,
+} from './review-filters.ts';
 import { randomUUID } from 'node:crypto';
-import { backupTables, recordKey, canonical, fingerprint, personal, validateBackup, BackupError, type BackupTable, type BackupRecord, type ReviewBackup, type RestorePreview, type RecordVersion } from './review-backup.ts';
+import {
+  backupTables,
+  recordKey,
+  canonical,
+  fingerprint,
+  personal,
+  validateBackup,
+  BackupError,
+  type BackupTable,
+  type BackupRecord,
+  type ReviewBackup,
+  type RestorePreview,
+  type RecordVersion,
+} from './review-backup.ts';
 import { gzipSync, gunzipSync } from 'node:zlib';
-import { noteBasis, noteBelongsTo, noteInput, tagInput, ReviewWriteError, type ReviewJournal, type ReviewNote, type StyleTag } from './review-notes.ts';
+import {
+  noteBasis,
+  noteBelongsTo,
+  noteInput,
+  tagInput,
+  ReviewWriteError,
+  type ReviewJournal,
+  type ReviewNote,
+  type StyleTag,
+} from './review-notes.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { comparePlan, type ArchivedPlan, type PlanComparison, type PlanLink } from './plan-comparison.ts';
+import {
+  comparePlan,
+  type ArchivedPlan,
+  type PlanComparison,
+  type PlanLink,
+} from './plan-comparison.ts';
 import type { Plan, Verification } from './verification.ts';
 import type { EntryInput } from '../public/draft.js';
 import { formatDecimal, parseDecimal } from '../public/draft.js';
@@ -17,53 +51,145 @@ import { validateAnalysisTask } from './analysis-contract.ts';
 
 export type ReviewIdentity = { source: 'demo' | 'binance'; accountId: string };
 export type ReviewOrder = {
-  id: string; symbol: string; side: 'BUY' | 'SELL'; type: string | null;
-  quantity: string; time: string; algoId?: string;
+  id: string;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  type: string | null;
+  quantity: string;
+  time: string;
+  algoId?: string;
 };
 export type ReviewFill = {
-  id: string; orderId: string; symbol: string; side: 'BUY' | 'SELL';
-  positionSide: 'BOTH' | 'LONG' | 'SHORT'; quantity: string; price: string; time: string;
-  realizedPnl: string | null; commission: string | null; commissionAsset: string | null;
+  id: string;
+  orderId: string;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  positionSide: 'BOTH' | 'LONG' | 'SHORT';
+  quantity: string;
+  price: string;
+  time: string;
+  realizedPnl: string | null;
+  commission: string | null;
+  commissionAsset: string | null;
   allocation?: 'close' | 'open';
   event?: 'entry' | 'add' | 'reduce' | 'exit';
 };
-export type ReviewFunding = { id: string; symbol: string; time: string; amount: string | null; asset: string | null; attribution?: 'confirmed' | 'ambiguous' };
+export type ReviewFunding = {
+  id: string;
+  symbol: string;
+  time: string;
+  amount: string | null;
+  asset: string | null;
+  attribution?: 'confirmed' | 'ambiguous';
+};
 export type TradeEvidence = {
-  symbol: string; baseAsset: string; startPosition: string | null; endPosition: string | null;
-  fillsComplete: boolean; fundingComplete: boolean;
-  orders: ReviewOrder[]; fills: ReviewFill[]; funding: ReviewFunding[];
+  symbol: string;
+  baseAsset: string;
+  startPosition: string | null;
+  endPosition: string | null;
+  fillsComplete: boolean;
+  fundingComplete: boolean;
+  orders: ReviewOrder[];
+  fills: ReviewFill[];
+  funding: ReviewFunding[];
   raw?: RawRecord[];
 };
 export type ReviewTrade = ReviewIdentity & {
-  id: string; groupingVersion: number; symbol: string; baseAsset: string;
-  side: 'long' | 'short' | null; status: 'closed' | 'open' | 'incomplete'; openedAt: string | null; closedAt: string | null;
-  realizedPnl: string | null; commission: string | null; fundingNet: string | null;
-  netPnl: string | null; missing: string[]; evidence: TradeEvidence;
-  observedAt?: string; unrealizedPnl?: string | null; unrealizedAt?: string | null;
-  planComparison?: PlanComparison; planLink?: PlanLink;
+  id: string;
+  groupingVersion: number;
+  symbol: string;
+  baseAsset: string;
+  side: 'long' | 'short' | null;
+  status: 'closed' | 'open' | 'incomplete';
+  openedAt: string | null;
+  closedAt: string | null;
+  realizedPnl: string | null;
+  commission: string | null;
+  fundingNet: string | null;
+  netPnl: string | null;
+  missing: string[];
+  evidence: TradeEvidence;
+  observedAt?: string;
+  unrealizedPnl?: string | null;
+  unrealizedAt?: string | null;
+  planComparison?: PlanComparison;
+  planLink?: PlanLink;
   exitReason?: 'LIQUIDATION' | 'ADL' | 'unknown';
   noteBasis?: string;
 };
-export type ReviewSummary = Omit<ReviewTrade, 'evidence' | 'planComparison'> & { entryType: EntryType; tagIds: string[]; durationMs: number | null };
+export type ReviewSummary = Omit<ReviewTrade, 'evidence' | 'planComparison'> & {
+  entryType: EntryType;
+  tagIds: string[];
+  durationMs: number | null;
+};
 export type HistorySource = 'trades' | 'history' | 'algoHistory' | 'income' | 'forceOrders';
-export type HistoryPage = { source: HistorySource; startTime: number; endTime: number; page: number; autoCloseType?: 'LIQUIDATION' | 'ADL'; fingerprint?: string };
-export type RawRecord = { kind: HistorySource | 'position'; id: string; time: number; payload: Record<string, unknown> };
+export type HistoryPage = {
+  source: HistorySource;
+  startTime: number;
+  endTime: number;
+  page: number;
+  autoCloseType?: 'LIQUIDATION' | 'ADL';
+  fingerprint?: string;
+};
+export type RawRecord = {
+  kind: HistorySource | 'position';
+  id: string;
+  time: number;
+  payload: Record<string, unknown>;
+};
 export type SyncState = {
-  symbol: string; startTime: number; endTime: number; status: 'running' | 'complete' | 'failed' | 'interrupted';
-  pages: number; records: number; pending: HistoryPage[]; completed: HistoryPage[];
+  symbol: string;
+  startTime: number;
+  endTime: number;
+  status: 'running' | 'complete' | 'failed' | 'interrupted';
+  pages: number;
+  records: number;
+  pending: HistoryPage[];
+  completed: HistoryPage[];
   unavailable?: HistoryPage[];
   attemptedAt?: string;
   errorCode?: string;
-  missing: string[]; lastSuccessAt: string | null;
+  missing: string[];
+  lastSuccessAt: string | null;
 };
 export type ArchiveState = {
-  status: SyncState['status']; startTime: number; endTime: number;
-  discovery: SyncState; symbols: string[]; pendingSymbols: string[]; completedSymbols: string[];
-  missing: string[]; scopeMissing: string[]; lastSuccessAt: string | null; errorCode?: string;
-  orderDownload?: { status: 'submitting' | 'processing' | 'complete' | 'failed' | 'unknown'; downloadId: string | null; startTime: number; endTime: number; records: number; message: string };
+  status: SyncState['status'];
+  startTime: number;
+  endTime: number;
+  discovery: SyncState;
+  symbols: string[];
+  pendingSymbols: string[];
+  completedSymbols: string[];
+  missing: string[];
+  scopeMissing: string[];
+  lastSuccessAt: string | null;
+  errorCode?: string;
+  orderDownload?: {
+    status: 'submitting' | 'processing' | 'complete' | 'failed' | 'unknown';
+    downloadId: string | null;
+    startTime: number;
+    endTime: number;
+    records: number;
+    message: string;
+  };
 };
 export type ArchiveProgress = ArchiveState & ReviewIdentity & { contracts: SyncState[] };
-export type ReviewList = { source: ReviewIdentity['source']; accountId: string | null; syncStatus: 'demo' | 'not-synced' | 'synced'; trades: ReviewSummary[]; statistics: StatisticsEvidence; filters: ReviewFilters; total: number; page: number; pageSize: number; nextPage: number | null; options: { symbols: string[]; tags: Pick<StyleTag, 'id' | 'name' | 'active'>[] }; sync?: SyncState | null; archive?: ArchiveProgress | null; archiveIssue?: { code: string; message: string; attemptedAt: string } };
+export type ReviewList = {
+  source: ReviewIdentity['source'];
+  accountId: string | null;
+  syncStatus: 'demo' | 'not-synced' | 'synced';
+  trades: ReviewSummary[];
+  statistics: StatisticsEvidence;
+  filters: ReviewFilters;
+  total: number;
+  page: number;
+  pageSize: number;
+  nextPage: number | null;
+  options: { symbols: string[]; tags: Pick<StyleTag, 'id' | 'name' | 'active'>[] };
+  sync?: SyncState | null;
+  archive?: ArchiveProgress | null;
+  archiveIssue?: { code: string; message: string; attemptedAt: string };
+};
 
 function marketPayload(value: unknown): MarketArchive {
   if (!(value instanceof Uint8Array)) throw new Error('行情归档格式无效。');
@@ -71,63 +197,127 @@ function marketPayload(value: unknown): MarketArchive {
 }
 
 function signed(value: string, label: string) {
-  return parseDecimal(value.startsWith('-') ? value.slice(1) : value, label) * (value.startsWith('-') ? -1n : 1n);
+  return (
+    parseDecimal(value.startsWith('-') ? value.slice(1) : value, label) *
+    (value.startsWith('-') ? -1n : 1n)
+  );
 }
 
 function summarize(identity: ReviewIdentity, evidence: TradeEvidence): ReviewTrade {
   const { fills, orders, funding } = evidence;
-  if (evidence.symbol !== `${evidence.baseAsset}USDT` || !/^[A-Z0-9]+$/.test(evidence.baseAsset) || evidence.startPosition !== '0' || evidence.endPosition !== '0' || fills.length < 2) throw new Error('仅接受有空仓起点与终点证据的单向交易。');
+  if (
+    evidence.symbol !== `${evidence.baseAsset}USDT` ||
+    !/^[A-Z0-9]+$/.test(evidence.baseAsset) ||
+    evidence.startPosition !== '0' ||
+    evidence.endPosition !== '0' ||
+    fills.length < 2
+  )
+    throw new Error('仅接受有空仓起点与终点证据的单向交易。');
   const first = fills[0]!;
   const last = fills.at(-1)!;
-  let position = 0n, realized = 0n, commission = 0n, fundingNet = 0n;
+  let position = 0n,
+    realized = 0n,
+    commission = 0n,
+    fundingNet = 0n;
   const missing = new Set<string>();
   if (!evidence.fillsComplete) missing.add('成交区间未确认完整');
   if (!evidence.fundingComplete) missing.add('资金费区间未确认完整');
   const validTime = (value: string) => Number.isFinite(Date.parse(value));
-  const unique = (items: { id: string }[]) => items.every((item) => item.id.length > 0) && new Set(items.map((item) => item.id)).size === items.length;
+  const unique = (items: { id: string }[]) =>
+    items.every((item) => item.id.length > 0) &&
+    new Set(items.map((item) => item.id)).size === items.length;
   if (![fills, orders, funding].every(unique)) throw new Error('原始记录身份缺失或重复。');
   for (const order of orders) {
-    if (order.symbol !== evidence.symbol || !['BUY', 'SELL'].includes(order.side) || ![null, 'LIMIT', 'MARKET'].includes(order.type) || !validTime(order.time) || parseDecimal(order.quantity, '订单数量') <= 0n) throw new Error('订单证据无效。');
+    if (
+      order.symbol !== evidence.symbol ||
+      !['BUY', 'SELL'].includes(order.side) ||
+      ![null, 'LIMIT', 'MARKET'].includes(order.type) ||
+      !validTime(order.time) ||
+      parseDecimal(order.quantity, '订单数量') <= 0n
+    )
+      throw new Error('订单证据无效。');
   }
   for (let index = 0; index < fills.length; index++) {
     const fill = fills[index]!;
     const order = orders.find((item) => item.id === fill.orderId);
-    if (!order || order.symbol !== fill.symbol || order.side !== fill.side || fill.symbol !== evidence.symbol || fill.positionSide !== 'BOTH' || !validTime(fill.time) || (index > 0 && Date.parse(fill.time) < Date.parse(fills[index - 1]!.time))) throw new Error('成交与订单关联或时间无效。');
+    if (
+      !order ||
+      order.symbol !== fill.symbol ||
+      order.side !== fill.side ||
+      fill.symbol !== evidence.symbol ||
+      fill.positionSide !== 'BOTH' ||
+      !validTime(fill.time) ||
+      (index > 0 && Date.parse(fill.time) < Date.parse(fills[index - 1]!.time))
+    )
+      throw new Error('成交与订单关联或时间无效。');
     const quantity = parseDecimal(fill.quantity, '成交数量');
-    if (quantity <= 0n || parseDecimal(fill.price, '成交价格') <= 0n) throw new Error('成交数量与价格须为正数。');
+    if (quantity <= 0n || parseDecimal(fill.price, '成交价格') <= 0n)
+      throw new Error('成交数量与价格须为正数。');
     position += quantity * (fill.side === 'BUY' ? 1n : -1n);
-    if ((first.side === 'BUY' ? position < 0n : position > 0n) || (position === 0n && index < fills.length - 1)) throw new Error('本轮仅归档单个无反手交易周期。');
+    if (
+      (first.side === 'BUY' ? position < 0n : position > 0n) ||
+      (position === 0n && index < fills.length - 1)
+    )
+      throw new Error('本轮仅归档单个无反手交易周期。');
     if (fill.realizedPnl === null) missing.add('已实现盈亏缺失');
     else realized += signed(fill.realizedPnl, '已实现盈亏');
     if (fill.commission !== null) {
       const cost = parseDecimal(fill.commission, '手续费');
       if (fill.commissionAsset === 'USDT') commission += cost;
     }
-    if (fill.commission === null || fill.commissionAsset !== 'USDT') missing.add('手续费缺失或非 USDT，缺少可靠换算');
+    if (fill.commission === null || fill.commissionAsset !== 'USDT')
+      missing.add('手续费缺失或非 USDT，缺少可靠换算');
   }
   if (position !== 0n) throw new Error('成交链未回到空仓。');
   for (const order of orders) {
-    const total = fills.filter((fill) => fill.orderId === order.id).reduce((sum, fill) => sum + parseDecimal(fill.quantity, '成交数量'), 0n);
-    if (total !== parseDecimal(order.quantity, '订单数量')) throw new Error('订单数量与成交数量不一致。');
+    const total = fills
+      .filter((fill) => fill.orderId === order.id)
+      .reduce((sum, fill) => sum + parseDecimal(fill.quantity, '成交数量'), 0n);
+    if (total !== parseDecimal(order.quantity, '订单数量'))
+      throw new Error('订单数量与成交数量不一致。');
   }
   for (const fee of funding) {
-    if (fee.symbol !== evidence.symbol || !validTime(fee.time) || Date.parse(fee.time) < Date.parse(first.time) || Date.parse(fee.time) > Date.parse(last.time)) throw new Error('资金费与交易关联无效。');
+    if (
+      fee.symbol !== evidence.symbol ||
+      !validTime(fee.time) ||
+      Date.parse(fee.time) < Date.parse(first.time) ||
+      Date.parse(fee.time) > Date.parse(last.time)
+    )
+      throw new Error('资金费与交易关联无效。');
     if (fee.amount !== null) {
       const income = signed(fee.amount, '资金费');
       if (fee.asset === 'USDT') fundingNet += income;
     }
     if (fee.amount === null || fee.asset !== 'USDT') missing.add('资金费缺失或非 USDT，归属待确认');
   }
-  const realizedPnl = fills.some((fill) => fill.realizedPnl === null) ? null : formatDecimal(realized);
-  const commissionAmount = fills.some((fill) => fill.commission === null || fill.commissionAsset !== 'USDT') ? null : formatDecimal(commission);
-  const fundingAmount = !evidence.fundingComplete || funding.some((fee) => fee.amount === null || fee.asset !== 'USDT') ? null : formatDecimal(fundingNet);
+  const realizedPnl = fills.some((fill) => fill.realizedPnl === null)
+    ? null
+    : formatDecimal(realized);
+  const commissionAmount = fills.some(
+    (fill) => fill.commission === null || fill.commissionAsset !== 'USDT',
+  )
+    ? null
+    : formatDecimal(commission);
+  const fundingAmount =
+    !evidence.fundingComplete || funding.some((fee) => fee.amount === null || fee.asset !== 'USDT')
+      ? null
+      : formatDecimal(fundingNet);
   return {
-    ...identity, id: `${evidence.symbol}-${first.id}`, groupingVersion: 1,
-    symbol: evidence.symbol, baseAsset: evidence.baseAsset, side: first.side === 'BUY' ? 'long' : 'short',
-    status: missing.size ? 'incomplete' : 'closed', openedAt: new Date(first.time).toISOString(), closedAt: new Date(last.time).toISOString(),
-    realizedPnl, commission: commissionAmount, fundingNet: fundingAmount,
+    ...identity,
+    id: `${evidence.symbol}-${first.id}`,
+    groupingVersion: 1,
+    symbol: evidence.symbol,
+    baseAsset: evidence.baseAsset,
+    side: first.side === 'BUY' ? 'long' : 'short',
+    status: missing.size ? 'incomplete' : 'closed',
+    openedAt: new Date(first.time).toISOString(),
+    closedAt: new Date(last.time).toISOString(),
+    realizedPnl,
+    commission: commissionAmount,
+    fundingNet: fundingAmount,
     netPnl: missing.size ? null : formatDecimal(realized - commission + fundingNet),
-    missing: [...missing], evidence,
+    missing: [...missing],
+    evidence,
   };
 }
 
@@ -138,18 +328,30 @@ export class ReviewLedger {
   static boundAccount(path: string, binding: string): string | null {
     const db = new DatabaseSync(path, { readOnly: true });
     try {
-      if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='review_bindings'").get()) return null;
+      if (
+        !db
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='review_bindings'")
+          .get()
+      )
+        return null;
       const row = db.prepare('SELECT account FROM review_bindings WHERE binding=?').get(binding);
       return row ? String(row.account) : null;
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
   }
 
   bindAccount(binding: string) {
-    this.db.prepare('INSERT INTO review_bindings VALUES (?, ?) ON CONFLICT(binding) DO UPDATE SET account=excluded.account').run(binding, this.identity.accountId);
+    this.db
+      .prepare(
+        'INSERT INTO review_bindings VALUES (?, ?) ON CONFLICT(binding) DO UPDATE SET account=excluded.account',
+      )
+      .run(binding, this.identity.accountId);
   }
 
   constructor(path: string, identity: ReviewIdentity) {
-    if (!identity.accountId.trim() || !['demo', 'binance'].includes(identity.source)) throw new Error('账本需明确来源与账户身份。');
+    if (!identity.accountId.trim() || !['demo', 'binance'].includes(identity.source))
+      throw new Error('账本需明确来源与账户身份。');
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     this.identity = { ...identity };
     this.db = new DatabaseSync(path, { timeout: 5000 });
@@ -214,7 +416,10 @@ export class ReviewLedger {
           PRIMARY KEY (source, account)
         ) STRICT;
       `);
-    } catch (error) { this.db.close(); throw error; }
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
 
   archive(evidence: TradeEvidence) {
@@ -222,64 +427,140 @@ export class ReviewLedger {
     const { source, accountId } = this.identity;
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      for (const [kind, records] of [['order', evidence.orders], ['fill', evidence.fills], ['funding', evidence.funding]] as const) {
+      for (const [kind, records] of [
+        ['order', evidence.orders],
+        ['fill', evidence.fills],
+        ['funding', evidence.funding],
+      ] as const) {
         for (const record of records) {
           const payload = JSON.stringify(record);
-          const existing = this.db.prepare('SELECT payload, trade_id FROM evidence WHERE source=? AND account=? AND symbol=? AND kind=? AND id=?').get(source, accountId, evidence.symbol, kind, record.id);
-          if (existing && (existing.payload !== payload || existing.trade_id !== trade.id)) throw new Error('来源记录冲突，保留已有账本。');
-          this.db.prepare('INSERT OR IGNORE INTO evidence VALUES (?, ?, ?, ?, ?, ?, ?)').run(source, accountId, evidence.symbol, kind, record.id, trade.id, payload);
+          const existing = this.db
+            .prepare(
+              'SELECT payload, trade_id FROM evidence WHERE source=? AND account=? AND symbol=? AND kind=? AND id=?',
+            )
+            .get(source, accountId, evidence.symbol, kind, record.id);
+          if (existing && (existing.payload !== payload || existing.trade_id !== trade.id))
+            throw new Error('来源记录冲突，保留已有账本。');
+          this.db
+            .prepare('INSERT OR IGNORE INTO evidence VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .run(source, accountId, evidence.symbol, kind, record.id, trade.id, payload);
         }
       }
       const payload = JSON.stringify(trade);
-      const existing = this.db.prepare('SELECT payload FROM trades WHERE source=? AND account=? AND id=?').get(source, accountId, trade.id);
+      const existing = this.db
+        .prepare('SELECT payload FROM trades WHERE source=? AND account=? AND id=?')
+        .get(source, accountId, trade.id);
       if (existing && existing.payload !== payload) throw new Error('交易归并冲突，保留已有账本。');
-      this.db.prepare('INSERT OR IGNORE INTO trades VALUES (?, ?, ?, ?, ?)').run(source, accountId, trade.id, trade.openedAt!, payload);
+      this.db
+        .prepare('INSERT OR IGNORE INTO trades VALUES (?, ?, ?, ?, ?)')
+        .run(source, accountId, trade.id, trade.openedAt!, payload);
       this.db.exec('COMMIT');
       return trade.id;
-    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   savePlan(plan: Plan, input: EntryInput) {
-    if (plan.source !== this.identity.source || plan.reviewAccountId !== this.identity.accountId) throw new Error('原方案账户身份未确认。');
+    if (plan.source !== this.identity.source || plan.reviewAccountId !== this.identity.accountId)
+      throw new Error('原方案账户身份未确认。');
     const payload = JSON.stringify({ plan, input });
-    const previous = this.db.prepare('SELECT payload FROM review_plans WHERE source=? AND account=? AND id=?').get(this.identity.source, this.identity.accountId, plan.id);
+    const previous = this.db
+      .prepare('SELECT payload FROM review_plans WHERE source=? AND account=? AND id=?')
+      .get(this.identity.source, this.identity.accountId, plan.id);
     if (previous && previous.payload !== payload) throw new Error('原方案冲突，保留原参数。');
-    this.db.prepare('INSERT OR IGNORE INTO review_plans VALUES (?, ?, ?, ?)').run(this.identity.source, this.identity.accountId, plan.id, payload);
+    this.db
+      .prepare('INSERT OR IGNORE INTO review_plans VALUES (?, ?, ?, ?)')
+      .run(this.identity.source, this.identity.accountId, plan.id, payload);
   }
 
   saveVerification(plan: Plan, verification: Verification) {
-    if (plan.reviewAccountId !== this.identity.accountId || plan.source !== this.identity.source || verification.source !== this.identity.source) throw new Error('核验账户身份未确认。');
-    if (!this.db.prepare('SELECT id FROM review_plans WHERE source=? AND account=? AND id=?').get(this.identity.source, this.identity.accountId, plan.id)) throw new Error('缺少原方案。');
-    this.db.prepare('INSERT INTO review_verifications(source, account, plan_id, payload) VALUES (?, ?, ?, ?)').run(this.identity.source, this.identity.accountId, plan.id, JSON.stringify(verification));
+    if (
+      plan.reviewAccountId !== this.identity.accountId ||
+      plan.source !== this.identity.source ||
+      verification.source !== this.identity.source
+    )
+      throw new Error('核验账户身份未确认。');
+    if (
+      !this.db
+        .prepare('SELECT id FROM review_plans WHERE source=? AND account=? AND id=?')
+        .get(this.identity.source, this.identity.accountId, plan.id)
+    )
+      throw new Error('缺少原方案。');
+    this.db
+      .prepare(
+        'INSERT INTO review_verifications(source, account, plan_id, payload) VALUES (?, ?, ?, ?)',
+      )
+      .run(this.identity.source, this.identity.accountId, plan.id, JSON.stringify(verification));
   }
 
   list(filters: ReviewFilters = defaultReviewFilters()): ReviewSummary[] {
     const plans = this.archivedPlans();
-    const notes = this.db.prepare('SELECT payload FROM review_notes WHERE source=? AND account=?').all(this.identity.source, this.identity.accountId).map((row) => JSON.parse(String(row.payload)) as ReviewNote);
-    return this.db.prepare('SELECT payload FROM trades WHERE source=? AND account=?').all(this.identity.source, this.identity.accountId).map((row) => {
-      const trade = this.withPlan(JSON.parse(String(row.payload)) as ReviewTrade, plans);
-      const { evidence: _evidence, planComparison: _comparison, ...summary } = trade;
-      const elapsed = trade.openedAt && trade.closedAt ? Date.parse(trade.closedAt) - Date.parse(trade.openedAt) : null;
-      const durationMs = trade.status !== 'open' && trade.evidence.fillsComplete && trade.evidence.startPosition === '0' && trade.evidence.endPosition === '0' && elapsed !== null && Number.isSafeInteger(elapsed) && elapsed >= 0 ? elapsed : null;
-      return { ...summary, durationMs, entryType: entryType(trade), tagIds: [...new Set(notes.filter((note) => noteBelongsTo(note, trade)).flatMap((note) => note.tagIds))].sort() };
-    }).filter((trade) => matchesReview(trade, filters)).sort(sortReview);
+    const notes = this.db
+      .prepare('SELECT payload FROM review_notes WHERE source=? AND account=?')
+      .all(this.identity.source, this.identity.accountId)
+      .map((row) => JSON.parse(String(row.payload)) as ReviewNote);
+    return this.db
+      .prepare('SELECT payload FROM trades WHERE source=? AND account=?')
+      .all(this.identity.source, this.identity.accountId)
+      .map((row) => {
+        const trade = this.withPlan(JSON.parse(String(row.payload)) as ReviewTrade, plans);
+        const { evidence: _evidence, planComparison: _comparison, ...summary } = trade;
+        const elapsed =
+          trade.openedAt && trade.closedAt
+            ? Date.parse(trade.closedAt) - Date.parse(trade.openedAt)
+            : null;
+        const durationMs =
+          trade.status !== 'open' &&
+          trade.evidence.fillsComplete &&
+          trade.evidence.startPosition === '0' &&
+          trade.evidence.endPosition === '0' &&
+          elapsed !== null &&
+          Number.isSafeInteger(elapsed) &&
+          elapsed >= 0
+            ? elapsed
+            : null;
+        return {
+          ...summary,
+          durationMs,
+          entryType: entryType(trade),
+          tagIds: [
+            ...new Set(
+              notes.filter((note) => noteBelongsTo(note, trade)).flatMap((note) => note.tagIds),
+            ),
+          ].sort(),
+        };
+      })
+      .filter((trade) => matchesReview(trade, filters))
+      .sort(sortReview);
   }
 
   get(id: string): ReviewTrade | null {
-    const row = this.db.prepare('SELECT payload FROM trades WHERE source=? AND account=? AND id=?').get(this.identity.source, this.identity.accountId, id);
+    const row = this.db
+      .prepare('SELECT payload FROM trades WHERE source=? AND account=? AND id=?')
+      .get(this.identity.source, this.identity.accountId, id);
     return row ? this.withPlan(JSON.parse(String(row.payload)) as ReviewTrade) : null;
   }
 
   market(id: string): MarketArchive | null {
-    const row = this.db.prepare('SELECT payload FROM review_market WHERE source=? AND account=? AND id=?').get(this.identity.source, this.identity.accountId, id);
+    const row = this.db
+      .prepare('SELECT payload FROM review_market WHERE source=? AND account=? AND id=?')
+      .get(this.identity.source, this.identity.accountId, id);
     return row ? marketPayload(row.payload) : null;
   }
 
-  scope(): ReviewIdentity { return { ...this.identity }; }
+  scope(): ReviewIdentity {
+    return { ...this.identity };
+  }
 
   tradeMarkets(tradeId: string): MarketArchive[] {
     const latest = new Map<string, MarketArchive>();
-    for (const row of this.db.prepare('SELECT payload FROM review_market WHERE source=? AND account=? ORDER BY queried_at, rowid').all(this.identity.source, this.identity.accountId)) {
+    for (const row of this.db
+      .prepare(
+        'SELECT payload FROM review_market WHERE source=? AND account=? ORDER BY queried_at, rowid',
+      )
+      .all(this.identity.source, this.identity.accountId)) {
       const market = marketPayload(row.payload);
       if (market.tradeId === tradeId) latest.set(market.interval, market);
     }
@@ -287,68 +568,129 @@ export class ReviewLedger {
   }
 
   analyses(tradeId?: string): AnalysisTask[] {
-    const rows = tradeId === undefined
-      ? this.db.prepare('SELECT payload FROM review_analysis WHERE source=? AND account=? ORDER BY rowid DESC').all(this.identity.source, this.identity.accountId)
-      : this.db.prepare('SELECT payload FROM review_analysis WHERE source=? AND account=? AND trade_id=? ORDER BY rowid DESC').all(this.identity.source, this.identity.accountId, tradeId);
+    const rows =
+      tradeId === undefined
+        ? this.db
+            .prepare(
+              'SELECT payload FROM review_analysis WHERE source=? AND account=? ORDER BY rowid DESC',
+            )
+            .all(this.identity.source, this.identity.accountId)
+        : this.db
+            .prepare(
+              'SELECT payload FROM review_analysis WHERE source=? AND account=? AND trade_id=? ORDER BY rowid DESC',
+            )
+            .all(this.identity.source, this.identity.accountId, tradeId);
     return rows.map((row) => {
-      const task = JSON.parse(gunzipSync(row.payload as Uint8Array).toString('utf8')) as AnalysisTask;
+      const task = JSON.parse(
+        gunzipSync(row.payload as Uint8Array).toString('utf8'),
+      ) as AnalysisTask;
       return validateAnalysisTask(task, { ...this.identity, id: task.tradeId });
     });
   }
 
   analysis(id: string): AnalysisTask | null {
-    const row = this.db.prepare('SELECT payload FROM review_analysis WHERE source=? AND account=? AND id=?').get(this.identity.source, this.identity.accountId, id);
+    const row = this.db
+      .prepare('SELECT payload FROM review_analysis WHERE source=? AND account=? AND id=?')
+      .get(this.identity.source, this.identity.accountId, id);
     if (!row) return null;
     const task = JSON.parse(gunzipSync(row.payload as Uint8Array).toString('utf8')) as AnalysisTask;
     return validateAnalysisTask(task, { ...this.identity, id: task.tradeId });
   }
 
   saveAnalysis(task: AnalysisTask) {
-    if (task.source !== this.identity.source || task.accountId !== this.identity.accountId) throw new Error('分析账户身份不一致。');
+    if (task.source !== this.identity.source || task.accountId !== this.identity.accountId)
+      throw new Error('分析账户身份不一致。');
     validateAnalysisTask(task, { ...this.identity, id: task.tradeId });
-    this.db.prepare('INSERT INTO review_analysis VALUES (?, ?, ?, ?, ?) ON CONFLICT(source, account, id) DO UPDATE SET payload=excluded.payload').run(task.source, task.accountId, task.id, task.tradeId, gzipSync(JSON.stringify(task)));
+    this.db
+      .prepare(
+        'INSERT INTO review_analysis VALUES (?, ?, ?, ?, ?) ON CONFLICT(source, account, id) DO UPDATE SET payload=excluded.payload',
+      )
+      .run(task.source, task.accountId, task.id, task.tradeId, gzipSync(JSON.stringify(task)));
   }
 
   latestMarket(key: string): MarketArchive | null {
-    const row = this.db.prepare('SELECT payload FROM review_market WHERE source=? AND account=? AND cache_key=? ORDER BY queried_at DESC, rowid DESC LIMIT 1').get(this.identity.source, this.identity.accountId, key);
+    const row = this.db
+      .prepare(
+        'SELECT payload FROM review_market WHERE source=? AND account=? AND cache_key=? ORDER BY queried_at DESC, rowid DESC LIMIT 1',
+      )
+      .get(this.identity.source, this.identity.accountId, key);
     return row ? marketPayload(row.payload) : null;
   }
 
   saveMarket(value: MarketArchive) {
-    if (value.source !== this.identity.source || value.accountId !== this.identity.accountId) throw new Error('行情账户身份不一致。');
-    this.db.prepare('INSERT INTO review_market VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(source, account, id) DO UPDATE SET queried_at=excluded.queried_at, payload=excluded.payload').run(this.identity.source, this.identity.accountId, value.snapshotId, value.cacheKey, value.queriedAt, gzipSync(JSON.stringify(value)));
+    if (value.source !== this.identity.source || value.accountId !== this.identity.accountId)
+      throw new Error('行情账户身份不一致。');
+    this.db
+      .prepare(
+        'INSERT INTO review_market VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(source, account, id) DO UPDATE SET queried_at=excluded.queried_at, payload=excluded.payload',
+      )
+      .run(
+        this.identity.source,
+        this.identity.accountId,
+        value.snapshotId,
+        value.cacheKey,
+        value.queriedAt,
+        gzipSync(JSON.stringify(value)),
+      );
   }
 
   private archivedPlans(): ArchivedPlan[] {
     const checks = new Map<string, Verification[]>();
-    for (const row of this.db.prepare('SELECT plan_id, payload FROM review_verifications WHERE source=? AND account=? ORDER BY id').all(this.identity.source, this.identity.accountId)) {
+    for (const row of this.db
+      .prepare(
+        'SELECT plan_id, payload FROM review_verifications WHERE source=? AND account=? ORDER BY id',
+      )
+      .all(this.identity.source, this.identity.accountId)) {
       const id = String(row.plan_id);
       const records = checks.get(id) ?? [];
       records.push(JSON.parse(String(row.payload)) as Verification);
       checks.set(id, records);
     }
-    return this.db.prepare('SELECT payload FROM review_plans WHERE source=? AND account=?').all(this.identity.source, this.identity.accountId).map((row) => {
-      const record = JSON.parse(String(row.payload)) as Omit<ArchivedPlan, 'verifications'>;
-      return { ...record, verifications: checks.get(record.plan.id) ?? [] };
-    });
+    return this.db
+      .prepare('SELECT payload FROM review_plans WHERE source=? AND account=?')
+      .all(this.identity.source, this.identity.accountId)
+      .map((row) => {
+        const record = JSON.parse(String(row.payload)) as Omit<ArchivedPlan, 'verifications'>;
+        return { ...record, verifications: checks.get(record.plan.id) ?? [] };
+      });
   }
 
   private withPlan(trade: ReviewTrade, records = this.archivedPlans()): ReviewTrade {
     const comparison = comparePlan(trade, records);
-    return { ...trade, noteBasis: noteBasis(trade), planComparison: comparison, planLink: { status: comparison.status, reason: comparison.reason, candidatePlanIds: comparison.candidatePlanIds } };
+    return {
+      ...trade,
+      noteBasis: noteBasis(trade),
+      planComparison: comparison,
+      planLink: {
+        status: comparison.status,
+        reason: comparison.reason,
+        candidatePlanIds: comparison.candidatePlanIds,
+      },
+    };
   }
 
   tags(): StyleTag[] {
-    return this.db.prepare('SELECT payload FROM style_tags WHERE source=? AND account=? ORDER BY id').all(this.identity.source, this.identity.accountId).map((row) => JSON.parse(String(row.payload)) as StyleTag);
+    return this.db
+      .prepare('SELECT payload FROM style_tags WHERE source=? AND account=? ORDER BY id')
+      .all(this.identity.source, this.identity.accountId)
+      .map((row) => JSON.parse(String(row.payload)) as StyleTag);
   }
 
   journal(): ReviewJournal {
     const { source, accountId } = this.identity;
     const tags = this.tags();
-    const notes = this.db.prepare('SELECT payload FROM review_notes WHERE source=? AND account=? ORDER BY id').all(source, accountId).map((row) => {
-      const note = JSON.parse(String(row.payload)) as ReviewNote;
-      return { ...note, binding: noteBelongsTo(note, this.get(note.trade.id)) ? 'current' as const : 'pending' as const };
-    });
+    const notes = this.db
+      .prepare('SELECT payload FROM review_notes WHERE source=? AND account=? ORDER BY id')
+      .all(source, accountId)
+      .map((row) => {
+        const note = JSON.parse(String(row.payload)) as ReviewNote;
+        return {
+          ...note,
+          binding: noteBelongsTo(note, this.get(note.trade.id))
+            ? ('current' as const)
+            : ('pending' as const),
+        };
+      });
     return { ...this.identity, notes, tags };
   }
 
@@ -359,21 +701,44 @@ export class ReviewLedger {
     try {
       const trade = this.get(tradeId);
       if (!trade) throw new ReviewWriteError(404, '未找到该来源的归档交易。');
-      if (trade.noteBasis !== input.basis) throw new ReviewWriteError(409, '交易依据已变化，请重新读取；当前输入保留。');
+      if (trade.noteBasis !== input.basis)
+        throw new ReviewWriteError(409, '交易依据已变化，请重新读取；当前输入保留。');
       const journal = this.journal();
-      const previous = input.noteId === null ? undefined : journal.notes.find((note) => note.id === input.noteId);
-      if (input.noteId !== null && (!previous || previous.trade.id !== tradeId)) throw new ReviewWriteError(404, '未找到该账户的笔记。');
-      if (previous && (previous.version !== input.version || previous.binding !== 'current') || !previous && journal.notes.some((note) => note.trade.id === tradeId && note.binding === 'current')) throw new ReviewWriteError(409, '笔记已被更新或归属已变化，请重新读取；当前输入保留。');
+      const previous =
+        input.noteId === null ? undefined : journal.notes.find((note) => note.id === input.noteId);
+      if (input.noteId !== null && (!previous || previous.trade.id !== tradeId))
+        throw new ReviewWriteError(404, '未找到该账户的笔记。');
+      if (
+        (previous && (previous.version !== input.version || previous.binding !== 'current')) ||
+        (!previous &&
+          journal.notes.some((note) => note.trade.id === tradeId && note.binding === 'current'))
+      )
+        throw new ReviewWriteError(409, '笔记已被更新或归属已变化，请重新读取；当前输入保留。');
       for (const id of input.tagIds) {
         const tag = journal.tags.find((tag) => tag.id === id);
-        if (!tag || !tag.active && !previous?.tagIds.includes(id)) throw new ReviewWriteError(400, '标签不存在或已停用；当前输入保留。');
+        if (!tag || (!tag.active && !previous?.tagIds.includes(id)))
+          throw new ReviewWriteError(400, '标签不存在或已停用；当前输入保留。');
       }
       const { noteId: _id, basis: _basis, version, ...content } = input;
-      const note: ReviewNote = { ...content, id: previous?.id ?? randomUUID(), version: version + 1, updatedAt: new Date().toISOString(), trade, binding: 'current' };
-      this.db.prepare('INSERT INTO review_notes VALUES (?, ?, ?, ?) ON CONFLICT(source, account, id) DO UPDATE SET payload=excluded.payload').run(source, accountId, note.id, JSON.stringify(note));
+      const note: ReviewNote = {
+        ...content,
+        id: previous?.id ?? randomUUID(),
+        version: version + 1,
+        updatedAt: new Date().toISOString(),
+        trade,
+        binding: 'current',
+      };
+      this.db
+        .prepare(
+          'INSERT INTO review_notes VALUES (?, ?, ?, ?) ON CONFLICT(source, account, id) DO UPDATE SET payload=excluded.payload',
+        )
+        .run(source, accountId, note.id, JSON.stringify(note));
       this.db.exec('COMMIT');
       return this.journal();
-    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   saveTag(value: unknown): ReviewJournal {
@@ -384,45 +749,86 @@ export class ReviewLedger {
       const { tags } = this.journal();
       const previous = input.id === null ? undefined : tags.find((tag) => tag.id === input.id);
       if (input.id !== null && !previous) throw new ReviewWriteError(404, '未找到该账户的标签。');
-      if (previous && previous.version !== input.version) throw new ReviewWriteError(409, '标签已被其他设备更新，请重新读取；当前输入保留。');
-      if (tags.some((tag) => tag.id !== input.id && tag.name === input.name)) throw new ReviewWriteError(409, '同名标签已存在，请使用已有标签。');
-      if (!previous && tags.length >= 100) throw new ReviewWriteError(400, '标签最多 100 个，请维护已有标签。');
-      const tag: StyleTag = { ...input, id: previous?.id ?? randomUUID(), version: input.version + 1, updatedAt: new Date().toISOString() };
-      this.db.prepare('INSERT INTO style_tags VALUES (?, ?, ?, ?) ON CONFLICT(source, account, id) DO UPDATE SET payload=excluded.payload').run(source, accountId, tag.id, JSON.stringify(tag));
+      if (previous && previous.version !== input.version)
+        throw new ReviewWriteError(409, '标签已被其他设备更新，请重新读取；当前输入保留。');
+      if (tags.some((tag) => tag.id !== input.id && tag.name === input.name))
+        throw new ReviewWriteError(409, '同名标签已存在，请使用已有标签。');
+      if (!previous && tags.length >= 100)
+        throw new ReviewWriteError(400, '标签最多 100 个，请维护已有标签。');
+      const tag: StyleTag = {
+        ...input,
+        id: previous?.id ?? randomUUID(),
+        version: input.version + 1,
+        updatedAt: new Date().toISOString(),
+      };
+      this.db
+        .prepare(
+          'INSERT INTO style_tags VALUES (?, ?, ?, ?) ON CONFLICT(source, account, id) DO UPDATE SET payload=excluded.payload',
+        )
+        .run(source, accountId, tag.id, JSON.stringify(tag));
       this.db.exec('COMMIT');
       return this.journal();
-    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   sync(symbol?: string): SyncState | null {
     const states = this.syncs().filter((state) => !symbol || state.symbol === symbol);
-    return states.sort((a, b) => (b.attemptedAt ? Date.parse(b.attemptedAt) : b.endTime) - (a.attemptedAt ? Date.parse(a.attemptedAt) : a.endTime))[0] ?? null;
+    return (
+      states.sort(
+        (a, b) =>
+          (b.attemptedAt ? Date.parse(b.attemptedAt) : b.endTime) -
+          (a.attemptedAt ? Date.parse(a.attemptedAt) : a.endTime),
+      )[0] ?? null
+    );
   }
 
   syncs(): SyncState[] {
-    return this.db.prepare('SELECT payload FROM history_sync WHERE source=? AND account=? AND symbol<>? ORDER BY symbol').all(this.identity.source, this.identity.accountId, '*').map((row) => JSON.parse(String(row.payload)) as SyncState);
+    return this.db
+      .prepare(
+        'SELECT payload FROM history_sync WHERE source=? AND account=? AND symbol<>? ORDER BY symbol',
+      )
+      .all(this.identity.source, this.identity.accountId, '*')
+      .map((row) => JSON.parse(String(row.payload)) as SyncState);
   }
 
   archiveState(): ArchiveState | null {
-    const row = this.db.prepare('SELECT payload FROM account_archive WHERE source=? AND account=?').get(this.identity.source, this.identity.accountId);
-    return row ? JSON.parse(String(row.payload)) as ArchiveState : null;
+    const row = this.db
+      .prepare('SELECT payload FROM account_archive WHERE source=? AND account=?')
+      .get(this.identity.source, this.identity.accountId);
+    return row ? (JSON.parse(String(row.payload)) as ArchiveState) : null;
   }
 
   saveArchive(state: ArchiveState, records: RawRecord[] = []) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.saveRaw('*', records);
-      this.db.prepare('INSERT INTO account_archive VALUES (?, ?, ?) ON CONFLICT(source, account) DO UPDATE SET payload=excluded.payload').run(this.identity.source, this.identity.accountId, JSON.stringify(state));
+      this.db
+        .prepare(
+          'INSERT INTO account_archive VALUES (?, ?, ?) ON CONFLICT(source, account) DO UPDATE SET payload=excluded.payload',
+        )
+        .run(this.identity.source, this.identity.accountId, JSON.stringify(state));
       this.db.exec('COMMIT');
-    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   raw(symbol: string): RawRecord[] {
-    return this.db.prepare('SELECT payload FROM history_raw WHERE source=? AND account=? AND symbol=?').all(this.identity.source, this.identity.accountId, symbol).map((row) => JSON.parse(String(row.payload)) as RawRecord);
+    return this.db
+      .prepare('SELECT payload FROM history_raw WHERE source=? AND account=? AND symbol=?')
+      .all(this.identity.source, this.identity.accountId, symbol)
+      .map((row) => JSON.parse(String(row.payload)) as RawRecord);
   }
 
   allRaw(): RawRecord[] {
-    return this.db.prepare('SELECT payload FROM history_raw WHERE source=? AND account=?').all(this.identity.source, this.identity.accountId).map((row) => JSON.parse(String(row.payload)) as RawRecord);
+    return this.db
+      .prepare('SELECT payload FROM history_raw WHERE source=? AND account=?')
+      .all(this.identity.source, this.identity.accountId)
+      .map((row) => JSON.parse(String(row.payload)) as RawRecord);
   }
 
   saveSync(state: SyncState, records: RawRecord[] = []) {
@@ -430,34 +836,87 @@ export class ReviewLedger {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.saveRaw(state.symbol, records);
-      this.db.prepare('INSERT INTO history_sync VALUES (?, ?, ?, ?) ON CONFLICT(source, account, symbol) DO UPDATE SET payload=excluded.payload').run(source, accountId, state.symbol, JSON.stringify(state));
+      this.db
+        .prepare(
+          'INSERT INTO history_sync VALUES (?, ?, ?, ?) ON CONFLICT(source, account, symbol) DO UPDATE SET payload=excluded.payload',
+        )
+        .run(source, accountId, state.symbol, JSON.stringify(state));
       this.db.exec('COMMIT');
-    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   private saveRaw(symbol: string, records: RawRecord[]) {
     const { source, accountId } = this.identity;
     for (let record of records) {
-        const recordSymbol = typeof record.payload.symbol === 'string' ? record.payload.symbol : symbol;
-        const existing = record.kind === 'income'
-          ? this.db.prepare('SELECT payload FROM history_raw WHERE source=? AND account=? AND kind=? AND id=?').get(source, accountId, record.kind, record.id)
-          : this.db.prepare('SELECT payload FROM history_raw WHERE source=? AND account=? AND symbol=? AND kind=? AND id=?').get(source, accountId, recordSymbol, record.kind, record.id);
-        if (existing && ['trades', 'income'].includes(record.kind)) {
-          const previous = JSON.parse(String(existing.payload)) as RawRecord;
-          const fields = record.kind === 'trades' ? ['symbol', 'id', 'orderId', 'side', 'positionSide', 'qty', 'price', 'time', 'realizedPnl', 'commission', 'commissionAsset'] : ['symbol', 'tranId', 'incomeType', 'time', 'income', 'asset', 'tradeId'];
-          const enrichable = record.kind === 'trades' ? ['realizedPnl', 'commission', 'commissionAsset'] : ['income', 'asset', 'tradeId'];
-          if (fields.some((field) => {
-            const before = previous.payload[field], after = record.payload[field];
-            if (enrichable.includes(field) && (before === null || before === undefined || (field === 'tradeId' && before === ''))) return false;
-            return ['id', 'orderId', 'tranId', 'tradeId'].includes(field) ? String(before) !== String(after) : before !== after;
-          })) throw new Error('来源事实冲突，保留已有账本。');
-        }
-        if (existing && record.kind === 'history') {
-          const previous = JSON.parse(String(existing.payload)) as RawRecord;
-          if (Number(record.payload.updateTime ?? record.time) < Number(previous.payload.updateTime ?? previous.time)) continue;
-          record = { ...record, payload: { ...previous.payload, ...record.payload } };
-        }
-        this.db.prepare('INSERT INTO history_raw VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(source, account, symbol, kind, id) DO UPDATE SET payload=excluded.payload').run(source, accountId, recordSymbol, record.kind, record.id, JSON.stringify(record));
+      const recordSymbol =
+        typeof record.payload.symbol === 'string' ? record.payload.symbol : symbol;
+      const existing =
+        record.kind === 'income'
+          ? this.db
+              .prepare(
+                'SELECT payload FROM history_raw WHERE source=? AND account=? AND kind=? AND id=?',
+              )
+              .get(source, accountId, record.kind, record.id)
+          : this.db
+              .prepare(
+                'SELECT payload FROM history_raw WHERE source=? AND account=? AND symbol=? AND kind=? AND id=?',
+              )
+              .get(source, accountId, recordSymbol, record.kind, record.id);
+      if (existing && ['trades', 'income'].includes(record.kind)) {
+        const previous = JSON.parse(String(existing.payload)) as RawRecord;
+        const fields =
+          record.kind === 'trades'
+            ? [
+                'symbol',
+                'id',
+                'orderId',
+                'side',
+                'positionSide',
+                'qty',
+                'price',
+                'time',
+                'realizedPnl',
+                'commission',
+                'commissionAsset',
+              ]
+            : ['symbol', 'tranId', 'incomeType', 'time', 'income', 'asset', 'tradeId'];
+        const enrichable =
+          record.kind === 'trades'
+            ? ['realizedPnl', 'commission', 'commissionAsset']
+            : ['income', 'asset', 'tradeId'];
+        if (
+          fields.some((field) => {
+            const before = previous.payload[field],
+              after = record.payload[field];
+            if (
+              enrichable.includes(field) &&
+              (before === null || before === undefined || (field === 'tradeId' && before === ''))
+            )
+              return false;
+            return ['id', 'orderId', 'tranId', 'tradeId'].includes(field)
+              ? String(before) !== String(after)
+              : before !== after;
+          })
+        )
+          throw new Error('来源事实冲突，保留已有账本。');
+      }
+      if (existing && record.kind === 'history') {
+        const previous = JSON.parse(String(existing.payload)) as RawRecord;
+        if (
+          Number(record.payload.updateTime ?? record.time) <
+          Number(previous.payload.updateTime ?? previous.time)
+        )
+          continue;
+        record = { ...record, payload: { ...previous.payload, ...record.payload } };
+      }
+      this.db
+        .prepare(
+          'INSERT INTO history_raw VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(source, account, symbol, kind, id) DO UPDATE SET payload=excluded.payload',
+        )
+        .run(source, accountId, recordSymbol, record.kind, record.id, JSON.stringify(record));
     }
   }
 
@@ -465,22 +924,46 @@ export class ReviewLedger {
     const { source, accountId } = this.identity;
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      for (const row of this.list().filter((trade) => trade.symbol === symbol)) this.db.prepare('DELETE FROM trades WHERE source=? AND account=? AND id=?').run(source, accountId, row.id);
+      for (const row of this.list().filter((trade) => trade.symbol === symbol))
+        this.db
+          .prepare('DELETE FROM trades WHERE source=? AND account=? AND id=?')
+          .run(source, accountId, row.id);
       for (const trade of trades) {
-        if (trade.source !== source || trade.accountId !== accountId || trade.symbol !== symbol) throw new Error('交易投影身份不一致。');
-        this.db.prepare('INSERT INTO trades VALUES (?, ?, ?, ?, ?)').run(source, accountId, trade.id, trade.openedAt ?? trade.evidence.fills[0]?.time ?? '', JSON.stringify(trade));
+        if (trade.source !== source || trade.accountId !== accountId || trade.symbol !== symbol)
+          throw new Error('交易投影身份不一致。');
+        this.db
+          .prepare('INSERT INTO trades VALUES (?, ?, ?, ?, ?)')
+          .run(
+            source,
+            accountId,
+            trade.id,
+            trade.openedAt ?? trade.evidence.fills[0]?.time ?? '',
+            JSON.stringify(trade),
+          );
       }
       this.db.exec('COMMIT');
-    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   private backupRecords(): BackupRecord[] {
     const records: BackupRecord[] = [];
     for (const [table, schema] of Object.entries(backupTables)) {
-      for (const row of this.db.prepare('SELECT ' + schema.columns.join(',') + ' FROM ' + table + ' WHERE source=? AND account=?').all(this.identity.source, this.identity.accountId)) {
+      for (const row of this.db
+        .prepare(
+          'SELECT ' + schema.columns.join(',') + ' FROM ' + table + ' WHERE source=? AND account=?',
+        )
+        .all(this.identity.source, this.identity.accountId)) {
         const compressed = table === 'review_market' || table === 'review_analysis';
-        const payload = compressed ? gunzipSync(row.payload as Uint8Array).toString('utf8') : String(row.payload);
-        records.push({ table: table as BackupTable, data: { ...row, payload: JSON.parse(payload) as unknown } });
+        const payload = compressed
+          ? gunzipSync(row.payload as Uint8Array).toString('utf8')
+          : String(row.payload);
+        records.push({
+          table: table as BackupTable,
+          data: { ...row, payload: JSON.parse(payload) as unknown },
+        });
       }
     }
     // Identical observations have no installation-local integer ID in the portable format.
@@ -489,7 +972,8 @@ export class ReviewLedger {
       if (row.table !== 'review_verifications') return true;
       const key = recordKey(row);
       if (observations.has(key)) return false;
-      observations.add(key); return true;
+      observations.add(key);
+      return true;
     });
     return unique.sort((a, b) => recordKey(a).localeCompare(recordKey(b)));
   }
@@ -497,8 +981,16 @@ export class ReviewLedger {
   backup(): ReviewBackup {
     this.db.exec('BEGIN');
     try {
-      return { ...this.identity, format: 'entry-guidance-review', version: 1, exportedAt: new Date().toISOString(), records: this.backupRecords() };
-    } finally { this.db.exec('ROLLBACK'); }
+      return {
+        ...this.identity,
+        format: 'entry-guidance-review',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        records: this.backupRecords(),
+      };
+    } finally {
+      this.db.exec('ROLLBACK');
+    }
   }
 
   previewRestore(value: unknown): RestorePreview {
@@ -506,78 +998,171 @@ export class ReviewLedger {
     return this.restorePreview(checked, this.backup().records);
   }
 
-  private restorePreview(checked: ReturnType<typeof validateBackup>, current: BackupRecord[]): RestorePreview {
+  private restorePreview(
+    checked: ReturnType<typeof validateBackup>,
+    current: BackupRecord[],
+  ): RestorePreview {
     const incoming = checked.backup?.records ?? [];
     const existing = new Map(current.map((row) => [recordKey(row), row]));
     const compared = [...current];
-    const result: RestorePreview = { added: 0, duplicates: 0, conflicts: [], rejected: checked.rejected, token: fingerprint([checked.backup, checked.rejected, current]) };
+    const result: RestorePreview = {
+      added: 0,
+      duplicates: 0,
+      conflicts: [],
+      rejected: checked.rejected,
+      token: fingerprint([checked.backup, checked.rejected, current]),
+    };
     for (const row of incoming) {
-      const key = recordKey(row), previous = this.restorePrevious(row, compared, existing);
+      const key = recordKey(row),
+        previous = this.restorePrevious(row, compared, existing);
       if (!previous) {
         result.added++;
         if (row.table === 'style_tags') compared.push(row);
-      }
-      else if (canonical(previous) === canonical(row)) result.duplicates++;
-      else result.conflicts.push({ key, table: row.table, id: String(row.data.id ?? row.data.symbol ?? '账户'), overwritable: personal(row.table) && recordKey(previous) === key, current: previous.data.payload, incoming: row.data.payload });
+      } else if (canonical(previous) === canonical(row)) result.duplicates++;
+      else
+        result.conflicts.push({
+          key,
+          table: row.table,
+          id: String(row.data.id ?? row.data.symbol ?? '账户'),
+          overwritable: personal(row.table) && recordKey(previous) === key,
+          current: previous.data.payload,
+          incoming: row.data.payload,
+        });
     }
-    const available = incoming.filter((row) => row.table === 'style_tags' && !result.conflicts.some((conflict) => conflict.key === recordKey(row)) && (existing.has(recordKey(row)) || !this.retainedRestoreVersion(row, existing)));
-    const tags = new Set([...current, ...available].filter((row) => row.table === 'style_tags').map((row) => row.data.id));
-    const trades = new Map(current.filter((row) => row.table === 'trades').map((row) => [row.data.id, row.data.payload as ReviewTrade]));
-    for (const row of incoming) if (row.table === 'trades' && !trades.has(row.data.id)) trades.set(row.data.id, row.data.payload as ReviewTrade);
+    const available = incoming.filter(
+      (row) =>
+        row.table === 'style_tags' &&
+        !result.conflicts.some((conflict) => conflict.key === recordKey(row)) &&
+        (existing.has(recordKey(row)) || !this.retainedRestoreVersion(row, existing)),
+    );
+    const tags = new Set(
+      [...current, ...available]
+        .filter((row) => row.table === 'style_tags')
+        .map((row) => row.data.id),
+    );
+    const trades = new Map(
+      current
+        .filter((row) => row.table === 'trades')
+        .map((row) => [row.data.id, row.data.payload as ReviewTrade]),
+    );
+    for (const row of incoming)
+      if (row.table === 'trades' && !trades.has(row.data.id))
+        trades.set(row.data.id, row.data.payload as ReviewTrade);
     const boundNotes = new Map<string, ReviewNote>();
-    for (const row of current) if (row.table === 'review_notes') {
-      const note = row.data.payload as ReviewNote;
-      if (noteBelongsTo(note, trades.get(note.trade.id) ?? null)) boundNotes.set(note.trade.id, note);
-    }
+    for (const row of current)
+      if (row.table === 'review_notes') {
+        const note = row.data.payload as ReviewNote;
+        if (noteBelongsTo(note, trades.get(note.trade.id) ?? null))
+          boundNotes.set(note.trade.id, note);
+      }
     for (const row of incoming) {
       if (row.table !== 'review_notes') continue;
       if (!existing.has(recordKey(row)) && this.retainedRestoreVersion(row, existing)) continue;
       const note = row.data.payload as ReviewNote;
       const bound = boundNotes.get(note.trade.id);
-      if (note.tagIds.some((id) => !tags.has(id)) || !noteBelongsTo(note, trades.get(note.trade.id) ?? null) || bound && bound.id !== note.id) {
+      if (
+        note.tagIds.some((id) => !tags.has(id)) ||
+        !noteBelongsTo(note, trades.get(note.trade.id) ?? null) ||
+        (bound && bound.id !== note.id)
+      ) {
         const conflict = result.conflicts.find((item) => item.key === recordKey(row));
-        if (conflict) { conflict.overwritable = false; continue; }
+        if (conflict) {
+          conflict.overwritable = false;
+          continue;
+        }
         if (existing.has(recordKey(row))) continue;
         result.added--;
-        result.conflicts.push({ key: recordKey(row), table: row.table, id: note.id, overwritable: false, current: bound ?? null, incoming: note });
+        result.conflicts.push({
+          key: recordKey(row),
+          table: row.table,
+          id: note.id,
+          overwritable: false,
+          current: bound ?? null,
+          incoming: note,
+        });
       } else boundNotes.set(note.trade.id, note);
     }
     return result;
   }
 
-  private restorePrevious(row: BackupRecord, current: BackupRecord[], existing: Map<string, BackupRecord>) {
+  private restorePrevious(
+    row: BackupRecord,
+    current: BackupRecord[],
+    existing: Map<string, BackupRecord>,
+  ) {
     const exact = existing.get(recordKey(row));
     if (exact) return exact;
     if (this.retainedRestoreVersion(row, existing)) return row;
-    if (row.table === 'style_tags') return current.find((item) => item.table === row.table && (item.data.payload as StyleTag).name === (row.data.payload as StyleTag).name);
+    if (row.table === 'style_tags')
+      return current.find(
+        (item) =>
+          item.table === row.table &&
+          (item.data.payload as StyleTag).name === (row.data.payload as StyleTag).name,
+      );
     if (row.table === 'review_notes') {
       const note = row.data.payload as ReviewNote;
-      return current.find((item) => item.table === row.table && noteBelongsTo(item.data.payload as ReviewNote, note.trade));
+      return current.find(
+        (item) =>
+          item.table === row.table && noteBelongsTo(item.data.payload as ReviewNote, note.trade),
+      );
     }
     return undefined;
   }
 
   private retainedRestoreVersion(row: BackupRecord, existing: Map<string, BackupRecord>): boolean {
-    return personal(row.table) && existing.has(canonical(['review_versions', fingerprint([row.table, row.data.id, row.data.payload])]));
+    return (
+      personal(row.table) &&
+      existing.has(
+        canonical(['review_versions', fingerprint([row.table, row.data.id, row.data.payload])]),
+      )
+    );
   }
 
   restoreVersions(): RecordVersion[] {
-    return this.db.prepare('SELECT id,kind,record_id,payload FROM review_versions WHERE source=? AND account=? ORDER BY id').all(this.identity.source, this.identity.accountId).map((row) => ({ id: String(row.id), kind: String(row.kind) as RecordVersion['kind'], recordId: String(row.record_id), value: JSON.parse(String(row.payload)) as unknown }));
+    return this.db
+      .prepare(
+        'SELECT id,kind,record_id,payload FROM review_versions WHERE source=? AND account=? ORDER BY id',
+      )
+      .all(this.identity.source, this.identity.accountId)
+      .map((row) => ({
+        id: String(row.id),
+        kind: String(row.kind) as RecordVersion['kind'],
+        recordId: String(row.record_id),
+        value: JSON.parse(String(row.payload)) as unknown,
+      }));
   }
 
   private keepRestoreVersion(row: BackupRecord) {
     const id = fingerprint([row.table, row.data.id, row.data.payload]);
-    this.db.prepare('INSERT OR IGNORE INTO review_versions VALUES (?,?,?,?,?,?)').run(this.identity.source, this.identity.accountId, id, row.table, String(row.data.id), JSON.stringify(row.data.payload));
+    this.db
+      .prepare('INSERT OR IGNORE INTO review_versions VALUES (?,?,?,?,?,?)')
+      .run(
+        this.identity.source,
+        this.identity.accountId,
+        id,
+        row.table,
+        String(row.data.id),
+        JSON.stringify(row.data.payload),
+      );
   }
 
   restoreBackup(value: unknown, token: string, overwrite: string[]): RestorePreview {
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      const checked = validateBackup(value, this.identity), current = this.backupRecords();
+      const checked = validateBackup(value, this.identity),
+        current = this.backupRecords();
       const preview = this.restorePreview(checked, current);
-      if (preview.rejected.length) throw new BackupError('备份校验失败：' + preview.rejected.join('；'));
+      if (preview.rejected.length)
+        throw new BackupError('备份校验失败：' + preview.rejected.join('；'));
       if (preview.token !== token) throw new BackupError('账本或备份已变化，请重新预览。', 409);
-      if (!Array.isArray(overwrite) || new Set(overwrite).size !== overwrite.length || overwrite.some((key) => !preview.conflicts.some((row) => row.key === key && row.overwritable))) throw new BackupError('仅可选择预览中的笔记或标签冲突进行覆盖。');
+      if (
+        !Array.isArray(overwrite) ||
+        new Set(overwrite).size !== overwrite.length ||
+        overwrite.some(
+          (key) => !preview.conflicts.some((row) => row.key === key && row.overwritable),
+        )
+      )
+        throw new BackupError('仅可选择预览中的笔记或标签冲突进行覆盖。');
       const existing = new Map(current.map((row) => [recordKey(row), row]));
       const conflicts = new Map(preview.conflicts.map((row) => [row.key, row]));
       for (const row of checked.backup!.records) {
@@ -589,48 +1174,162 @@ export class ReviewLedger {
           const previous = existing.get(key)!;
           this.keepRestoreVersion(previous);
           const payload = row.data.payload as ReviewNote | StyleTag;
-          row.data.payload = { ...payload, version: Math.max(payload.version, (previous.data.payload as ReviewNote | StyleTag).version) + 1, updatedAt: new Date().toISOString() };
+          row.data.payload = {
+            ...payload,
+            version:
+              Math.max(payload.version, (previous.data.payload as ReviewNote | StyleTag).version) +
+              1,
+            updatedAt: new Date().toISOString(),
+          };
         } else if (existing.has(key) || this.retainedRestoreVersion(row, existing)) continue;
         const schema = backupTables[row.table];
         const columns: readonly string[] = schema.columns;
         const compressed = row.table === 'review_market' || row.table === 'review_analysis';
         const payload = JSON.stringify(row.data.payload);
-        const values = columns.map((column) => column === 'payload' ? (compressed ? gzipSync(payload) : payload) : String(row.data[column]));
+        const values = columns.map((column) =>
+          column === 'payload'
+            ? compressed
+              ? gzipSync(payload)
+              : payload
+            : String(row.data[column]),
+        );
         if (existing.has(key)) {
-          this.db.prepare('DELETE FROM ' + row.table + ' WHERE source=? AND account=? AND id=?').run(this.identity.source, this.identity.accountId, String(row.data.id));
+          this.db
+            .prepare('DELETE FROM ' + row.table + ' WHERE source=? AND account=? AND id=?')
+            .run(this.identity.source, this.identity.accountId, String(row.data.id));
         }
-        this.db.prepare('INSERT INTO ' + row.table + '(source,account,' + columns.join(',') + ') VALUES (' + Array(columns.length + 2).fill('?').join(',') + ')').run(this.identity.source, this.identity.accountId, ...values);
+        this.db
+          .prepare(
+            'INSERT INTO ' +
+              row.table +
+              '(source,account,' +
+              columns.join(',') +
+              ') VALUES (' +
+              Array(columns.length + 2)
+                .fill('?')
+                .join(',') +
+              ')',
+          )
+          .run(this.identity.source, this.identity.accountId, ...values);
       }
       const tags = this.tags();
-      if (tags.length > 100 || new Set(tags.map((tag) => tag.name)).size !== tags.length) throw new BackupError('标签冲突选择产生同名标签或超过 100 个；现有账本保留。');
+      if (tags.length > 100 || new Set(tags.map((tag) => tag.name)).size !== tags.length)
+        throw new BackupError('标签冲突选择产生同名标签或超过 100 个；现有账本保留。');
       // Exercise the public readers before commit: malformed merged associations must roll back too.
-      this.list(); this.journal(); this.analyses();
+      this.list();
+      this.journal();
+      this.analyses();
       this.db.exec('COMMIT');
       return preview;
-    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
-  close() { this.db.close(); }
+  close() {
+    this.db.close();
+  }
 }
 
 export function demoTrade(): TradeEvidence {
   const symbol = 'BTCUSDT';
   return {
-    symbol, baseAsset: 'BTC', startPosition: '0', endPosition: '0', fillsComplete: true, fundingComplete: true,
+    symbol,
+    baseAsset: 'BTC',
+    startPosition: '0',
+    endPosition: '0',
+    fillsComplete: true,
+    fundingComplete: true,
     orders: [
-      { id: 'demo-order-1', symbol, side: 'BUY', type: 'LIMIT', quantity: '0.01', time: '2026-10-10T00:00:00Z' },
-      { id: 'demo-order-2', symbol, side: 'SELL', type: 'MARKET', quantity: '0.004', time: '2026-10-10T10:00:00Z' },
-      { id: 'demo-order-3', symbol, side: 'SELL', type: null, quantity: '0.006', time: '2026-10-10T12:00:00Z' },
+      {
+        id: 'demo-order-1',
+        symbol,
+        side: 'BUY',
+        type: 'LIMIT',
+        quantity: '0.01',
+        time: '2026-10-10T00:00:00Z',
+      },
+      {
+        id: 'demo-order-2',
+        symbol,
+        side: 'SELL',
+        type: 'MARKET',
+        quantity: '0.004',
+        time: '2026-10-10T10:00:00Z',
+      },
+      {
+        id: 'demo-order-3',
+        symbol,
+        side: 'SELL',
+        type: null,
+        quantity: '0.006',
+        time: '2026-10-10T12:00:00Z',
+      },
     ],
     fills: [
-      { id: 'demo-fill-1', orderId: 'demo-order-1', symbol, side: 'BUY', positionSide: 'BOTH', quantity: '0.004', price: '60000', time: '2026-10-10T00:00:01Z', realizedPnl: '0', commission: '0.12', commissionAsset: 'USDT' },
-      { id: 'demo-fill-2', orderId: 'demo-order-1', symbol, side: 'BUY', positionSide: 'BOTH', quantity: '0.006', price: '60000', time: '2026-10-10T00:00:02Z', realizedPnl: '0', commission: '0.18', commissionAsset: 'USDT' },
-      { id: 'demo-fill-3', orderId: 'demo-order-2', symbol, side: 'SELL', positionSide: 'BOTH', quantity: '0.004', price: '61000', time: '2026-10-10T10:00:01Z', realizedPnl: '4', commission: '0.122', commissionAsset: 'USDT' },
-      { id: 'demo-fill-4', orderId: 'demo-order-3', symbol, side: 'SELL', positionSide: 'BOTH', quantity: '0.006', price: '61500', time: '2026-10-10T12:00:01Z', realizedPnl: '9', commission: '0.1845', commissionAsset: 'USDT' },
+      {
+        id: 'demo-fill-1',
+        orderId: 'demo-order-1',
+        symbol,
+        side: 'BUY',
+        positionSide: 'BOTH',
+        quantity: '0.004',
+        price: '60000',
+        time: '2026-10-10T00:00:01Z',
+        realizedPnl: '0',
+        commission: '0.12',
+        commissionAsset: 'USDT',
+      },
+      {
+        id: 'demo-fill-2',
+        orderId: 'demo-order-1',
+        symbol,
+        side: 'BUY',
+        positionSide: 'BOTH',
+        quantity: '0.006',
+        price: '60000',
+        time: '2026-10-10T00:00:02Z',
+        realizedPnl: '0',
+        commission: '0.18',
+        commissionAsset: 'USDT',
+      },
+      {
+        id: 'demo-fill-3',
+        orderId: 'demo-order-2',
+        symbol,
+        side: 'SELL',
+        positionSide: 'BOTH',
+        quantity: '0.004',
+        price: '61000',
+        time: '2026-10-10T10:00:01Z',
+        realizedPnl: '4',
+        commission: '0.122',
+        commissionAsset: 'USDT',
+      },
+      {
+        id: 'demo-fill-4',
+        orderId: 'demo-order-3',
+        symbol,
+        side: 'SELL',
+        positionSide: 'BOTH',
+        quantity: '0.006',
+        price: '61500',
+        time: '2026-10-10T12:00:01Z',
+        realizedPnl: '9',
+        commission: '0.1845',
+        commissionAsset: 'USDT',
+      },
     ],
     funding: [
       { id: 'demo-funding-1', symbol, time: '2026-10-10T04:00:00Z', amount: '0.12', asset: 'USDT' },
-      { id: 'demo-funding-2', symbol, time: '2026-10-10T08:00:00Z', amount: '-0.04', asset: 'USDT' },
+      {
+        id: 'demo-funding-2',
+        symbol,
+        time: '2026-10-10T08:00:00Z',
+        amount: '-0.04',
+        asset: 'USDT',
+      },
     ],
   };
 }
