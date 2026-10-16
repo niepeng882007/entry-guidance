@@ -200,6 +200,37 @@ pnpm exec playwright test -c playwright.auth.config.ts test/auth/browser/assets.
 
 浏览器测试使用固定 4180–4182 端口；完整 `pnpm check` 还使用旧入口 4179，避免多个 worktree 同时占用这些端口。测试需先构建；模拟浏览器不等于实体手机和真实 Binance 验收。
 
+## 单层核验与本单恢复（票据 07）
+
+`/entry` 复用 `verifyPosition`，通过受保护 Node `POST /entry/plans/:id/verify` 查询原方案的实际持仓、成交成本、余单与止损覆盖。请求只接受空对象，预算、止损与空仓起点均来自服务端。核验结果与证据在 PostgreSQL `entry_verification` 保存成功后才返回；保存前重新检查会话和绑定版本，失败不能显示通过。
+
+本浏览器以产品用户、绑定实例、UID、来源隔离保存方案 ID、未提交输入与上次查询时间，不保存通过状态、方案副本或凭据。刷新、重登、返回页面先确认身份并取回原方案；输入一致才自动重新核验，之后每轮完成 10 秒重查。联网恢复同样重新查询；编辑中的输入需显式“恢复原方案输入并核验”。账户变化、输入变化、离线、隐藏、过期或查询失败撤销当前结果。空仓只能为待成交，原卡最新检查适用时可复制；实际持仓只有完整核验通过才能显示查询时点通过。
+
+同 UID 换 Key 保留可信方案，查询使用当前代次；归属、UID、来源不一致拒绝恢复。`trustedCurrent` 默认 false，历史备份不得授予此资格；迁移仅将票据 06 已由严格生成入口写入的既有记录标为可信。旧个人入口的签名凭证转换留给受控迁移票，不接收客户端上传计划。清除本浏览器记录不会删除服务端历史或改变交易所持仓。旧核验的不足 7 天、每类最多 1000 条等完整性限制继续适用。
+
+### 票据 07 人工验证
+
+1. 使用 Node 24.22.0、pnpm 11.7.0 并启动 Docker。运行 `pnpm build`，再运行 `pnpm demo:auth`。打开 <http://127.0.0.1:3100/login>，以 `alice@example.test` / `synthetic-login-only-01` 登录，在连接设置提交合成值 `synthetic-key-alice` / `synthetic-secret-alice`。
+2. 进入 `/entry`，选择 BTCUSDT、做多，固定预算 `20` USDT、绝对止损 `98`、杠杆 `10`、滑点 `1`%、资金费 `1` USDT、最低缓冲 `1`%、资金上限 `5` USDT。生成后应为 `0.4 BTC`。刷新后恢复原卡并重新查询，显示“尚未成交”，不能显示成交核验通过。
+3. 另开终端注入合成成交与有效止损；这个入口仅属于本机测试运行器，生产没有此路由：
+
+   ```sh
+   curl --fail http://127.0.0.1:3102/entry-scenario \
+     -H 'Content-Type: application/json' \
+     -d '{"user":"alice","scenario":"protected"}'
+   ```
+
+   回页面点击“重新查询原方案”，应显示“模拟核验”“查询时点核验通过”、数量 `0.4`、已付手续费 `0.04` USDT、已付资金费 `0.3` USDT，固定预算仍为 `20`、止损仍为 `98`。
+
+4. 将上述命令的 `protected` 分别改成 `missing-stop`、`wrong-stop`、`missing-cost`、`failed`，每次点击重新查询：分别应提示缺少/错误止损、手续费缺失、查询失败，均不能保留通过。改回 `protected` 再查恢复通过。不要输入真实凭据；这些场景均由合成 transport 返回。
+5. 将页面预算改为 `999`：通过立即消失，固定预算仍为 `20`。刷新后编辑值保留，不能自动核验；点击“恢复原方案输入并核验”后输入恢复为 `20`，重新查询才通过。已有持仓时尝试生成新方案应失败。
+6. 断网、切换标签或离开页面，旧通过状态应撤销；回到页面/联网后确认身份并重查。退出后重登同用户可继续本单；另一标签退出应清除可见私有内容。无痕用 `bob@example.test`（同口令）及对应 `synthetic-key-bob` / `synthetic-secret-bob` 登录绑定，不应出现甲的本单。
+7. 浏览器 Application 的本地存储只应包含按归属隔离的本单标识、输入与上次时间。清除本浏览器记录后卡片消失；服务端与模拟持仓不受影响。320px、390px、1280px 检查横向溢出、Tab 焦点和按钮禁用状态。
+
+`pnpm demo:auth` 停止时删除临时数据库；重启演示会新建环境，不可用来证明同库重启恢复。业务服务保留数据库重启、查询途中会话撤销/换 Key、数据库写入失败和损坏浏览器存储由自动测试覆盖。真实 Binance/Neon、实体手机和生产迁移未在本票验收。
+
+定向检查：先 `pnpm build`，再运行 `node --test test/auth/entry.test.ts test/verification.test.ts` 与 `pnpm exec playwright test -c playwright.auth.config.ts test/auth/browser/entry.spec.ts`。完整交付运行 `pnpm check`。
+
 ## 完整交易账本（票据 11）
 
 新 `/review` 与 `/review/trades/:id` 从 PostgreSQL 读取当前用户活跃绑定的周期及证据。`src/review-reader.ts` 提供可等待的读取边界，原 SQLite 同步调用继续保留；摘要和交易校验沿用旧实现。`review_cycle` 按归属实例、来源和稳定周期 ID 隔离，金额为字符串；列表不携带完整证据，详情通过受保护 Node 直连返回，包含原始订单、成交、资金费与缺口，不经过 Next 代理大 JSON。

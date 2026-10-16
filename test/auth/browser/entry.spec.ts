@@ -1,5 +1,16 @@
 import { test, expect, type Page } from '@playwright/test';
 import { login } from './login.ts';
+import { users } from '../runtime.ts';
+test.beforeEach(async ({ request }) => {
+  for (const user of ['alice', 'bob'])
+    expect(
+      (
+        await request.post('http://127.0.0.1:4182/entry-scenario', {
+          data: { user, scenario: 'flat' },
+        })
+      ).ok(),
+    ).toBe(true);
+});
 async function connect(page: Page, name = 'alice') {
   await page.goto('/dashboard/connections');
   await expect(page.getByRole('button', { name: '验证并保存' })).toBeEnabled();
@@ -65,7 +76,14 @@ test('single market entry previews, saves and copies a fixed card, then conserva
   await page.getByLabel('亏损预算', { exact: true }).fill('21');
   await expect(card.getByRole('button', { name: '复制数量' })).toBeDisabled();
   await expect(card.getByText('固定预算：20 USDT')).toBeVisible();
-  expect(await page.evaluate(() => ({ ...localStorage, ...sessionStorage }))).toEqual({});
+  await page.reload();
+  await expect(page.getByLabel('亏损预算', { exact: true })).toHaveValue('21');
+  await expect(card.getByText('固定预算：20 USDT')).toBeVisible();
+  await expect(card.getByRole('button', { name: '复制数量' })).toBeDisabled();
+  await page.getByRole('button', { name: '恢复原方案输入并核验' }).click();
+  await expect(page.getByLabel('亏损预算', { exact: true })).toHaveValue('20');
+  await expect(page.getByRole('region', { name: '成交与止损核验' })).toContainText('尚未成交');
+  await expect(card.getByRole('button', { name: '复制数量' })).toBeEnabled();
 });
 
 test('failed generation, offline state and a late response cannot enable a card', async ({
@@ -97,6 +115,7 @@ test('failed generation, offline state and a late response cannot enable a card'
   await page.evaluate(() => window.dispatchEvent(new Event('offline')));
   await expect(copy).toBeDisabled();
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await page.getByLabel('亏损预算', { exact: true }).fill('21');
   await expect(generate).toBeEnabled();
   let release!: () => void;
   let entered!: () => void;
@@ -173,4 +192,132 @@ test('account changes withdraw old estimates and an older summary cannot revoke 
   await expect(copy).toBeEnabled();
   await page.unroute('**/account/summary');
   await expect(copy).toBeDisabled();
+});
+
+test('filled plans recover only after a fresh check and revoke approval on edits, offline, query failure and hiding', async ({
+  page,
+  request,
+}) => {
+  await login(page);
+  await connect(page);
+  await page.goto('/entry');
+  await fillPlan(page);
+  await page.getByRole('button', { name: '刷新并生成开仓卡' }).click();
+  await expect(page.getByRole('region', { name: '本次开仓卡' })).toBeVisible();
+  await request.post('http://127.0.0.1:4182/entry-scenario', {
+    data: { user: 'alice', scenario: 'protected' },
+  });
+  await page.getByRole('button', { name: '重新查询原方案', exact: true }).click();
+  const approved = page.getByText('查询时点核验通过', { exact: true });
+  await expect(approved).toBeVisible();
+  await expect(
+    page.getByRole('region', { name: '开仓计划', exact: true }).getByRole('alert'),
+  ).toHaveCount(0);
+  await expect(page.getByRole('region', { name: '成交与止损核验' })).toContainText('0.04 USDT');
+  await expect(page.getByRole('button', { name: '复制数量' })).toBeDisabled();
+  await page.getByLabel('亏损预算', { exact: true }).fill('999');
+  await expect(approved).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByLabel('亏损预算', { exact: true })).toHaveValue('999');
+  await expect(page.getByText('固定预算：20 USDT')).toBeVisible();
+  await expect(approved).toHaveCount(0);
+  await page.getByRole('button', { name: '恢复原方案输入并核验' }).click();
+  await expect(approved).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new Event('offline')));
+  await expect(approved).toHaveCount(0);
+  await page.route('**/entry/plans/*/verify', (route) =>
+    route.fulfill({
+      status: 503,
+      json: { error: '合成查询失败' },
+      headers: { 'Access-Control-Allow-Origin': 'http://127.0.0.1:4180' },
+    }),
+  );
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect(page.getByText('合成查询失败', { exact: true })).toBeVisible();
+  await expect(approved).toHaveCount(0);
+  await page.unroute('**/entry/plans/*/verify');
+  await page.getByRole('button', { name: '重新查询原方案', exact: true }).click();
+  await expect(approved).toBeVisible();
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect(approved).toHaveCount(0);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect(approved).toBeVisible();
+  for (const width of [320, 390, 1280]) {
+    await page.setViewportSize({ width, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+  }
+  await page.screenshot({ path: test.info().outputPath('entry-verification.png'), fullPage: true });
+  const records = await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }));
+  expect(records).not.toMatch(
+    /verified|synthetic-key|synthetic-secret|reviewEvidence|sealedCredential/,
+  );
+});
+
+test('corrupt or unwritable browser storage is explicit and cannot silently replace the current trade', async ({
+  page,
+}) => {
+  await login(page);
+  await connect(page);
+  await page.goto('/entry');
+  await fillPlan(page);
+  await page.getByRole('button', { name: '刷新并生成开仓卡' }).click();
+  await expect(page.getByText('固定预算：20 USDT')).toBeVisible();
+  const key = await page.evaluate(() =>
+    Object.keys(localStorage).find((key) => key.startsWith('entry-current:'))!,
+  );
+  await page.evaluate((key) => localStorage.setItem(key, '{broken'), key);
+  await page.reload();
+  await expect(
+    page.getByText('本浏览器记录损坏，未覆盖原记录。可明确清除本单记录后重新开始。'),
+  ).toBeVisible();
+  await fillPlan(page);
+  expect(await page.evaluate((key) => localStorage.getItem(key), key)).toBe('{broken');
+  await page.getByRole('button', { name: '开始新一单 / 清除本浏览器记录' }).click();
+  await page.evaluate(() => {
+    Storage.prototype.setItem = () => {
+      throw new Error('synthetic quota');
+    };
+  });
+  await fillPlan(page);
+  await expect(
+    page.getByText('本浏览器保存失败；刷新或离开可能无法继续本单。原方案仍保留在服务端。'),
+  ).toBeVisible();
+});
+
+test('logout clears all visible trade state and another user cannot restore this browser record', async ({
+  page,
+  context,
+}) => {
+  await login(page);
+  await connect(page);
+  await page.goto('/entry');
+  await fillPlan(page);
+  await page.getByRole('button', { name: '刷新并生成开仓卡' }).click();
+  await expect(page.getByText('固定预算：20 USDT')).toBeVisible();
+  const other = await context.newPage();
+  await other.goto('/dashboard');
+  await other.getByRole('button', { name: '退出登录' }).click();
+  await expect(other).toHaveURL('/login');
+  await other.close();
+  await expect(page).toHaveURL('/login');
+  await expect(page.getByText('固定预算：20 USDT')).toHaveCount(0);
+  await login(page, users[1]!);
+  await connect(page, 'bob');
+  await page.goto('/entry');
+  await expect(page.getByLabel('亏损预算', { exact: true })).toHaveValue('');
+  await expect(page.getByRole('region', { name: '本次开仓卡' })).toHaveCount(0);
+  await page.getByRole('button', { name: '退出登录' }).click();
+  await expect(page).toHaveURL('/login');
+  await login(page);
+  await page.goto('/entry');
+  await expect(page.getByText('固定预算：20 USDT')).toBeVisible();
+  await expect(page.getByRole('region', { name: '成交与止损核验' })).toContainText('尚未成交');
 });

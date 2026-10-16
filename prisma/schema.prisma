@@ -179,7 +179,20 @@ model EntryPlan {
   input Json
   plan Json
   owner Json
+  trustedCurrent Boolean @default(false)
+  verifications EntryVerification[]
   createdAt DateTime @default(now())
   @@index([userId, bindingId])
   @@map("entry_plan")
+}
+
+model EntryVerification {
+  id String @id
+  planId String
+  plan EntryPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  owner Json
+  result Json
+  createdAt DateTime @default(now())
+  @@index([planId, createdAt])
+  @@map("entry_verification")
 }

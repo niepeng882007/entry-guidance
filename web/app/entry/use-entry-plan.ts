@@ -6,7 +6,8 @@ import {
   type EntryInput,
   type Snapshot,
 } from '../../../public/draft.js';
-import type { SavedEntryPlan } from '../../../src/bindings/entry.ts';
+import type { SavedEntryPlan, CheckedEntryPlan } from '../../../src/bindings/entry.ts';
+import type { Verification } from '../../../src/verification.ts';
 import type { BindingMetadata } from '../dashboard/connections-form.tsx';
 import {
   businessRequest,
@@ -54,6 +55,25 @@ export function useEntryPlan({
   const [current, setCurrent] = useState(false);
   const [reason, setReason] = useState('');
   const [copied, setCopied] = useState('');
+  const [verification, setVerification] = useState<Verification | null>(null);
+  const [lastQuery, setLastQuery] = useState('');
+  const [storageError, setStorageError] = useState('');
+  const [restoring, setRestoring] = useState(true);
+  const [checking, setChecking] = useState(false);
+  const [automatic, setAutomatic] = useState(0);
+  const checkedTime = verification?.entryCheck?.queriedAt ?? verification?.queriedAt;
+  const currentAt = checkedTime
+    ? Date.parse(checkedTime)
+    : saved
+      ? Math.min(
+          Date.parse(saved.plan.accountTime),
+          Date.parse(saved.plan.bookTime),
+          Date.parse(saved.plan.markTime),
+        )
+      : 0;
+  const storageBlocked = useRef(false);
+  const check = useRef<() => Promise<void>>(async () => {});
+  const storageKey = `entry-current:${JSON.stringify([userId, binding.id, binding.uid, binding.source, simulation])}`;
   const sequence = useRef(0);
   const generating = useRef<AbortController | null>(null);
   const card = useRef<HTMLElement | null>(null);
@@ -70,9 +90,27 @@ export function useEntryPlan({
       : JSON.stringify(amounts.map((key) => account.snapshot![key]));
   const invalidate = (message: string) => {
     setCurrent(false);
+    setVerification(null);
     setReason(message);
     setCopied('');
   };
+  function remember(nextInput: EntryInput, plan: SavedEntryPlan | null, queriedAt = lastQuery) {
+    if (storageBlocked.current) return;
+    try {
+      localStorage.setItem(
+        storageKey,
+        JSON.stringify({ input: nextInput, planId: plan?.plan.id ?? null, queriedAt }),
+      );
+      setStorageError('');
+    } catch {
+      setStorageError('本浏览器保存失败；刷新或离开可能无法继续本单。原方案仍保留在服务端。');
+    }
+  }
+  const matches = (left: EntryInput, right: EntryInput) =>
+    Object.keys(initial).every(
+      (key) => (left[key as keyof EntryInput] ?? '') === (right[key as keyof EntryInput] ?? ''),
+    );
+  const continuing = Boolean(saved && matches(input, saved.input));
   const checkOwner = (value: Pick<SavedEntryPlan, 'userId' | 'binding'>) => {
     if (
       value.userId !== userId ||
@@ -84,6 +122,76 @@ export function useEntryPlan({
     )
       throw new BusinessRequestError(401, '账户连接已变化，请重新登录。');
   };
+  useEffect(() => {
+    const controller = new AbortController();
+    const version = ++sequence.current;
+    async function restore() {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) return;
+        let local: { input: EntryInput; planId: string | null; queriedAt: string };
+        try {
+          local = JSON.parse(raw) as typeof local;
+          if (
+            !local ||
+            !local.input ||
+            typeof local.input !== 'object' ||
+            Object.keys(local.input).some(
+              (key) =>
+                !(key in initial) || typeof local.input[key as keyof EntryInput] !== 'string',
+            ) ||
+            Object.keys(initial).some(
+              (key) => typeof local.input[key as keyof EntryInput] !== 'string',
+            ) ||
+            (local.planId !== null &&
+              (typeof local.planId !== 'string' || !/^[a-f0-9-]{36}$/.test(local.planId))) ||
+            typeof local.queriedAt !== 'string' ||
+            (local.queriedAt !== '' && !Number.isFinite(Date.parse(local.queriedAt)))
+          )
+            throw new Error('invalid record');
+        } catch {
+          storageBlocked.current = true;
+          setStorageError('本浏览器记录损坏，未覆盖原记录。可明确清除本单记录后重新开始。');
+          return;
+        }
+        setInput(local.input);
+        setLastQuery(local.queriedAt);
+        if (!local.planId) return;
+        const response = await businessRequest(
+          `entry/plans/${local.planId}`,
+          controller.signal,
+          userId,
+        );
+        const data: SavedEntryPlan = await response.json();
+        await requestBusinessGrant('entry:read', controller.signal, userId);
+        if (controller.signal.aborted || version !== sequence.current) return;
+        if (
+          data.userId !== userId ||
+          data.binding.id !== binding.id ||
+          data.binding.uid !== binding.uid ||
+          data.binding.source !== binding.source ||
+          data.binding.credentialVersion !== binding.credentialVersion ||
+          data.binding.authorizationVersion !== binding.authorizationVersion ||
+          data.plan.source !== (simulation ? 'demo' : 'binance')
+        )
+          throw new BusinessRequestError(401, '恢复账户已变化。');
+        setSaved(data);
+        setReason('已取回原方案；必须重新查询，旧通过状态不会恢复。');
+        setAutomatic((value) => value + 1);
+      } catch (cause) {
+        if (controller.signal.aborted) return;
+        if (cause instanceof BusinessRequestError && cause.status === 401) onIdentityInvalid();
+        else
+          setStorageError(
+            cause instanceof Error ? `本单恢复失败：${cause.message}` : '本单恢复失败。',
+          );
+      } finally {
+        if (!controller.signal.aborted) setRestoring(false);
+      }
+    }
+    void restore();
+    return () => controller.abort();
+  }, [storageKey, userId, binding, simulation, onIdentityInvalid]);
   useEffect(() => {
     const controller = new AbortController();
     void businessRequest(
@@ -111,7 +219,8 @@ export function useEntryPlan({
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const load = async () => {
-      if (!input.symbol || !accountState || document.hidden || !navigator.onLine) return;
+      if (continuing || !input.symbol || !accountState || document.hidden || !navigator.onLine)
+        return;
       setLoading(true);
       setMarket(null);
       try {
@@ -136,7 +245,8 @@ export function useEntryPlan({
       } catch (cause) {
         if (!active) return;
         setCurrent(false);
-        setReason('行情读取失败，请显式重新生成。');
+        setVerification(null);
+        setReason('行情读取失败，请重新查询原方案。');
         if (cause instanceof BusinessRequestError && cause.status === 401) onIdentityInvalid();
         else setError(cause instanceof Error ? cause.message : '行情读取失败。');
       } finally {
@@ -154,34 +264,28 @@ export function useEntryPlan({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [input, userId, binding, simulation, onIdentityInvalid, reload, accountState]);
+  }, [input, userId, binding, simulation, onIdentityInvalid, reload, accountState, continuing]);
   useEffect(() => {
     if (!saved) return;
-    const generatedAt = Date.parse(saved.plan.accountTime);
+    const baseline = verification?.account ?? saved.plan.account;
+    const generatedAt = Date.parse(verification?.account?.queriedAt ?? saved.plan.accountTime);
     const failedAfterGeneration = account.stale && Date.parse(account.attempted) >= generatedAt;
     const changedAfterGeneration =
       account.snapshot &&
       Date.parse(account.snapshot.queriedAt) > generatedAt &&
-      amounts.some((key) => account.snapshot![key] !== saved.plan.account[key]);
+      amounts.some((key) => account.snapshot![key] !== baseline[key]);
     if (failedAfterGeneration || changedAfterGeneration) {
       setCurrent(false);
-      setReason('账户数据已变化或待更新，请显式重新生成。');
+      setVerification(null);
+      setReason('账户数据已变化或待更新，请重新查询原方案。');
     }
-  }, [account.snapshot, account.stale, account.attempted, saved]);
+  }, [account.snapshot, account.stale, account.attempted, saved, verification]);
   useEffect(() => {
     const expire = () => {
-      if (
-        saved &&
-        Date.now() -
-          Math.min(
-            Date.parse(saved.plan.accountTime),
-            Date.parse(saved.plan.bookTime),
-            Date.parse(saved.plan.markTime),
-          ) >=
-          30000
-      ) {
+      if (currentAt && Date.now() - currentAt >= 30000) {
         setCurrent(false);
-        setReason('原卡查询数据已过期，请显式重新生成。');
+        setVerification(null);
+        setReason('查询数据已过期，请重新查询原方案。');
       }
       if (
         market &&
@@ -192,12 +296,18 @@ export function useEntryPlan({
     const offline = () => {
       sequence.current++;
       generating.current?.abort();
+      generating.current = null;
       setBusy(false);
+      setChecking(false);
       setMarket(null);
       setCurrent(false);
-      setReason('网络已断开，请联网后显式重新生成。');
+      setVerification(null);
+      setReason('网络已断开，请联网后重新查询原方案。');
     };
-    const online = () => setReload((value) => value + 1);
+    const online = () => {
+      setReload((value) => value + 1);
+      setAutomatic((value) => value + 1);
+    };
     const timer = setInterval(expire, 1000);
     window.addEventListener('offline', offline);
     window.addEventListener('online', online);
@@ -206,7 +316,7 @@ export function useEntryPlan({
       window.removeEventListener('offline', offline);
       window.removeEventListener('online', online);
     };
-  }, [saved, market]);
+  }, [currentAt, market]);
   useEffect(
     () => () => {
       sequence.current++;
@@ -217,18 +327,24 @@ export function useEntryPlan({
   function change(key: keyof EntryInput, value: string) {
     sequence.current++;
     generating.current?.abort();
+    generating.current = null;
     setBusy(false);
+    setChecking(false);
     setMarket(null);
-    invalidate('输入已修改，原方案保持不变，请显式重新生成。');
-    setInput((previous) => ({
-      ...previous,
+    invalidate('输入已修改，原方案保持不变；请恢复原方案输入后核验。');
+    const next = {
+      ...input,
       [key]: value,
-      ...(key === 'symbol' && previous.stopMode === 'price' ? { stop: '' } : {}),
-    }));
+      ...(key === 'symbol' && input.stopMode === 'price' ? { stop: '' } : {}),
+    };
+    setInput(next);
+    remember(next, saved);
   }
   let draft: ReturnType<typeof generateDraft> | null = null;
   let preview: ReturnType<typeof generateEntryPreview> | null = null;
-  let draftError = '选择合约并填写本次计划。';
+  let draftError = continuing
+    ? '原方案已固定，请查看本次开仓卡并重新查询。'
+    : '选择合约并填写本次计划。';
   if (
     market &&
     accountState &&
@@ -244,7 +360,7 @@ export function useEntryPlan({
     }
   }
   async function generate() {
-    if (generating.current || !navigator.onLine || document.hidden) return;
+    if (restoring || generating.current || !navigator.onLine || document.hidden) return;
     const id = ++sequence.current;
     const controller = new AbortController();
     generating.current = controller;
@@ -265,6 +381,8 @@ export function useEntryPlan({
       if (data.plan.source !== (simulation ? 'demo' : 'binance'))
         throw new Error('方案来源不一致。');
       setSaved(data);
+      setLastQuery('');
+      remember(input, data, '');
       setCurrent(true);
       setReason('已保存固定方案；仅代表生成时点，不代表成交或止损已核验。');
       requestAnimationFrame(() => card.current?.focus());
@@ -278,18 +396,88 @@ export function useEntryPlan({
       if (id === sequence.current) setBusy(false);
     }
   }
+  async function verify(restoreInput = false) {
+    if (!saved || restoring || generating.current || !navigator.onLine || document.hidden) return;
+    if (!restoreInput && !matches(input, saved.input)) return;
+    const nextInput = restoreInput ? saved.input : input;
+    if (restoreInput) setInput(nextInput);
+    const id = ++sequence.current;
+    const controller = new AbortController();
+    generating.current = controller;
+    setChecking(true);
+    setError('');
+    invalidate('正在重新查询实际持仓、成本与止损。');
+    remember(nextInput, saved);
+    try {
+      const response = await businessRequest(
+        `entry/plans/${saved.plan.id}/verify`,
+        AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
+        userId,
+        {},
+      );
+      const data: CheckedEntryPlan = await response.json();
+      await requestBusinessGrant('entry:read', controller.signal, userId);
+      if (id !== sequence.current || controller.signal.aborted) return;
+      checkOwner(data);
+      if (
+        data.plan.id !== saved.plan.id ||
+        data.verification.source !== (simulation ? 'demo' : 'binance') ||
+        !Number.isFinite(Date.parse(data.verification.queriedAt)) ||
+        Math.abs(Date.now() - Date.parse(data.verification.queriedAt)) >= 30000
+      )
+        throw new Error('核验归属、来源或查询时间不一致，请重新查询。');
+      setVerification(data.verification);
+      setLastQuery(data.verification.queriedAt);
+      setCurrent(
+        data.verification.status === 'waiting' && data.verification.entryCheck?.status === 'ready',
+      );
+      setReason('原预算与绝对止损保持不变；下方结果仅代表本次查询时点。');
+      remember(nextInput, saved, data.verification.queriedAt);
+    } catch (cause) {
+      if (id !== sequence.current || controller.signal.aborted) return;
+      invalidate('核验失败，旧结果已失效；保留原方案，请重试。');
+      if (cause instanceof BusinessRequestError && cause.status === 401) onIdentityInvalid();
+      else setError(cause instanceof Error ? cause.message : '本单核验失败。');
+    } finally {
+      if (generating.current === controller) generating.current = null;
+      if (id === sequence.current) setChecking(false);
+    }
+  }
+  useEffect(() => {
+    check.current = () => verify();
+  });
+  useEffect(() => {
+    if (!automatic || restoring) return;
+    void check.current();
+  }, [automatic, restoring]);
+  useEffect(() => {
+    if (!saved || restoring || checking || busy) return;
+    const timer = setTimeout(() => void check.current(), 10000);
+    return () => clearTimeout(timer);
+  }, [saved, input, restoring, checking, busy, automatic]);
+  function clearLocal() {
+    try {
+      localStorage.removeItem(storageKey);
+    } catch {
+      setStorageError('本浏览器清除失败，原记录仍保留。');
+      return;
+    }
+    sequence.current++;
+    generating.current?.abort();
+    generating.current = null;
+    storageBlocked.current = false;
+    setStorageError('');
+    setSaved(null);
+    setInput(initial);
+    setLastQuery('');
+    setBusy(false);
+    setChecking(false);
+    invalidate('已清除本浏览器记录，不会改变 Binance 持仓或服务端历史。');
+  }
   async function copy(value: string) {
     if (!current || !saved || document.hidden || !navigator.onLine) return;
-    if (
-      Date.now() -
-        Math.min(
-          Date.parse(saved.plan.accountTime),
-          Date.parse(saved.plan.bookTime),
-          Date.parse(saved.plan.markTime),
-        ) >=
-      30000
-    ) {
-      invalidate('原卡查询数据已过期，请显式重新生成。');
+    if (Date.now() - currentAt >= 30000) {
+      invalidate('原卡查询数据已过期，请重新查询原方案。');
       return;
     }
     try {
@@ -300,7 +488,7 @@ export function useEntryPlan({
     }
   }
   function refresh() {
-    invalidate('已请求刷新，请显式重新生成。');
+    invalidate('已请求刷新，原方案需重新核验。');
     setMarket(null);
     setReload((value) => value + 1);
     account.refresh.current();
@@ -325,5 +513,13 @@ export function useEntryPlan({
     generate,
     copy,
     refresh,
+    verification,
+    lastQuery,
+    storageError,
+    restoring,
+    checking,
+    verify,
+    clearLocal,
+    inputMatches: saved ? matches(input, saved.input) : false,
   };
 }

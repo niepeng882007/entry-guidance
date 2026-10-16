@@ -45,7 +45,7 @@ export function businessRequest(
   resource: `entry/${string}`,
   signal: AbortSignal,
   expectedUserId: string,
-  input?: EntryInput,
+  input?: EntryInput | Record<string, never>,
 ): Promise<Response>;
 export function businessRequest(
   resource: `account/${'summary' | 'assets'}`,
@@ -81,7 +81,8 @@ export async function businessRequest(
     | `review/${string}/trades${string}`,
   signal: AbortSignal,
   expectedUserId?: string,
-  submission?: CredentialSubmission | ModelKeySubmission | EntryInput | boolean,
+  submission?:
+    CredentialSubmission | EntryInput | ModelKeySubmission | Record<string, never> | boolean,
 ): Promise<Response> {
   const scope =
     resource === 'profile'

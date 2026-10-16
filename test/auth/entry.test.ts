@@ -3,7 +3,7 @@ import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { startAuthRuntime, users } from './runtime.ts';
-import { entryTransport } from './entry-fixture.ts';
+import { entryTransport, entryScenarios } from './entry-fixture.ts';
 type Runtime = Awaited<ReturnType<typeof startAuthRuntime>>;
 const input = {
   symbol: 'BTCUSDT',
@@ -73,6 +73,29 @@ async function request(runtime: Runtime, cookie: string, path: string, body?: un
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 }
+void test('restoring a saved plan never restores approval and checking a flat account keeps the original budget', async (t) => {
+  const runtime = await startAuthRuntime({ transport: entryTransport });
+  t.after(() => runtime.close());
+  const cookie = await login(runtime);
+  await bind(runtime, cookie);
+  const saved = await (await request(runtime, cookie, 'plans', input)).json();
+  const relogged = await login(runtime);
+  await runtime.restartBusiness();
+  const restored = await (await request(runtime, relogged, `plans/${saved.plan.id}`)).json();
+  assert.equal(restored.plan.budget, '20');
+  assert.equal(restored.plan.stopPrice, '98');
+  assert.equal(restored.verification, undefined);
+  const checked = await request(runtime, relogged, `plans/${saved.plan.id}/verify`, {});
+  assert.equal(checked.status, 200, await checked.clone().text());
+  const result = await checked.json();
+  assert.equal(result.verification.status, 'waiting');
+  assert.equal(result.verification.entryCheck.status, 'ready');
+  assert.equal(result.verification.reviewRetention, 'saved');
+  assert.equal(
+    (await request(runtime, relogged, `plans/${saved.plan.id}/verify`, { budget: '999' })).status,
+    400,
+  );
+});
 void test('a strictly refreshed fixed plan is durably readable only by its owner', async (t) => {
   let accountReads = 0;
   const runtime = await startAuthRuntime({
@@ -101,6 +124,136 @@ void test('a strictly refreshed fixed plan is durably readable only by its owner
   assert.doesNotMatch(JSON.stringify(saved), /synthetic-key|synthetic-secret|sealedCredential/);
   assert.deepEqual(await (await request(runtime, alice, `plans/${saved.plan.id}`)).json(), saved);
   assert.equal((await request(runtime, bob, `plans/${saved.plan.id}`, undefined, 1)).status, 404);
+});
+
+void test('actual fills and costs are checked against the original stop, and missing evidence or failed storage cannot pass', async (t) => {
+  const scenarios = entryScenarios();
+  const runtime = await startAuthRuntime({ transport: scenarios.transport });
+  t.after(() => runtime.close());
+  const alice = await login(runtime),
+    bob = await login(runtime, 1);
+  await bind(runtime, alice);
+  await bind(runtime, bob, 1);
+  const saved = await (await request(runtime, alice, 'plans', input)).json();
+  const path = `plans/${saved.plan.id}/verify`;
+  for (const [scenario, status] of [
+    ['protected', 'verified'],
+    ['missing-stop', 'needs-action'],
+    ['wrong-stop', 'needs-action'],
+    ['missing-cost', 'error'],
+  ]) {
+    scenarios.select({ user: 'alice', scenario });
+    const response = await request(runtime, alice, path, {});
+    if (status === 'error') {
+      assert.equal(response.status, 502);
+      assert.equal((await response.json()).verification, undefined);
+      continue;
+    }
+    assert.equal(response.status, 200, await response.clone().text());
+    const result = await response.json();
+    assert.equal(result.verification.status, status, JSON.stringify(result.verification));
+    assert.equal(result.plan.budget, '20');
+    assert.equal(result.plan.stopPrice, '98');
+    if (scenario === 'protected') {
+      assert.equal(result.verification.paidCommission, '0.04');
+      assert.equal(result.verification.paidFunding, '0.3');
+      assert.equal(result.verification.quantity, '0.4');
+    }
+  }
+  assert.equal((await request(runtime, bob, path, {}, 1)).status, 404);
+  scenarios.select({ user: 'alice', scenario: 'protected' });
+  assert.ok((await request(runtime, alice, 'plans', { ...input, budget: '999' })).status >= 400);
+  await runtime.database.$executeRawUnsafe(
+    'ALTER TABLE entry_verification ADD CONSTRAINT synthetic_write_failure CHECK (false) NOT VALID',
+  );
+  const failed = await request(runtime, alice, path, {});
+  assert.equal(failed.status, 503);
+  assert.equal((await failed.json()).verification, undefined);
+  await runtime.database.$executeRawUnsafe(
+    'ALTER TABLE entry_verification DROP CONSTRAINT synthetic_write_failure',
+  );
+  assert.equal(
+    (await (await request(runtime, alice, path, {})).json()).verification.status,
+    'verified',
+  );
+  await runtime.restartBusiness();
+  assert.equal(
+    (await (await request(runtime, alice, path, {})).json()).verification.status,
+    'verified',
+  );
+  await bind(runtime, alice, 0, true);
+  const restored = await (await request(runtime, alice, `plans/${saved.plan.id}`)).json();
+  assert.equal(restored.binding.credentialVersion, 2);
+  assert.equal(restored.plan.budget, '20');
+  assert.equal(
+    (await (await request(runtime, alice, path, {})).json()).verification.status,
+    'verified',
+  );
+  await runtime.database.entryPlan.update({
+    where: { id: saved.plan.id },
+    data: { trustedCurrent: false },
+  });
+  assert.equal((await request(runtime, alice, path, {})).status, 404);
+  assert.equal((await request(runtime, alice, `plans/${saved.plan.id}`)).status, 404);
+});
+
+void test('wrong UID, stale market, session revocation and changed binding reject a pending verification', async (t) => {
+  const scenarios = entryScenarios();
+  let mode = '';
+  let revoke: (() => Promise<void>) | undefined;
+  const runtime = await startAuthRuntime({
+    transport: async (url, headers, signal) => {
+      if (mode === 'wrong-uid' && url.pathname === '/api/v3/account')
+        return { status: 200, body: { uid: 99999 } };
+      const response = await scenarios.transport(url, headers, signal);
+      if (mode === 'stale' && url.pathname === '/fapi/v1/premiumIndex')
+        return { ...response, body: { ...(response.body as object), time: Date.now() - 60000 } };
+      if (revoke && url.pathname === '/fapi/v1/userTrades') {
+        const action = revoke;
+        revoke = undefined;
+        await action();
+      }
+      return response;
+    },
+  });
+  t.after(() => runtime.close());
+  const cookie = await login(runtime);
+  await bind(runtime, cookie);
+  const saved = await (await request(runtime, cookie, 'plans', input)).json();
+  scenarios.select({ user: 'alice', scenario: 'protected' });
+  const path = `plans/${saved.plan.id}/verify`;
+  mode = 'wrong-uid';
+  const wrong = await request(runtime, cookie, path, {});
+  assert.equal(wrong.status, 409);
+  assert.equal((await wrong.json()).verification, undefined);
+  mode = 'stale';
+  const stale = await request(runtime, cookie, path, {});
+  const staleBody = await stale.json();
+  assert.ok(stale.status >= 400 || staleBody.verification.status !== 'verified');
+  mode = '';
+  revoke = async () => {
+    await runtime.database.binanceBinding.update({
+      where: { id: saved.binding.id },
+      data: { credentialVersion: { increment: 1 } },
+    });
+  };
+  const changedBinding = await request(runtime, cookie, path, {});
+  assert.ok(changedBinding.status >= 400);
+  assert.equal((await changedBinding.json()).verification, undefined);
+  await runtime.database.binanceBinding.update({
+    where: { id: saved.binding.id },
+    data: { credentialVersion: 1 },
+  });
+  revoke = async () => {
+    await runtime.database.session.deleteMany({ where: { userId: users[0]!.id } });
+  };
+  assert.equal((await request(runtime, cookie, path, {})).status, 401);
+  const relogged = await login(runtime);
+  await runtime.database.entryPlan.update({
+    where: { id: saved.plan.id },
+    data: { owner: { ...saved.binding, uid: 'wrong' } },
+  });
+  assert.equal((await request(runtime, relogged, `plans/${saved.plan.id}`)).status, 409);
 });
 
 void test('invalid market, occupied account, unsupported inputs and failed storage never return a usable plan', async (t) => {

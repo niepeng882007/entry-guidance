@@ -11,7 +11,7 @@ export function entryFixture() {
     leverage: '10',
     marginType: 'isolated',
     isolatedWallet: '0',
-    updateTime: now,
+    updateTime: 0,
   };
   const data: Record<string, unknown> = {
     '/api/v3/account': { uid: 10001 },
@@ -129,3 +129,142 @@ export const entryTransport: Transport = async (url, headers, signal) => {
   if (!(url.pathname in data)) throw new Error(`Unexpected fixture endpoint: ${url.pathname}`);
   return { status: 200, body: data[url.pathname] };
 };
+
+export function entryScenarios() {
+  const scenarios = new Map<string, { scenario: string; time: number }>();
+  function select(value: unknown) {
+    if (
+      !value ||
+      typeof value !== 'object' ||
+      !('user' in value) ||
+      !('scenario' in value) ||
+      !['alice', 'bob'].includes(String(value.user)) ||
+      !['flat', 'protected', 'missing-stop', 'wrong-stop', 'missing-cost', 'failed'].includes(
+        String(value.scenario),
+      )
+    )
+      throw new Error('Invalid synthetic entry scenario');
+    scenarios.set(String(value.user), { scenario: String(value.scenario), time: Date.now() - 100 });
+  }
+  const transport: Transport = async (url, headers, signal) => {
+    const result = await entryTransport(url, headers, signal);
+    const selected = scenarios.get(headers['X-MBX-APIKEY']?.includes('bob') ? 'bob' : 'alice');
+    if (!selected || selected.scenario === 'flat') return result;
+    const { scenario, time } = selected;
+    if (scenario === 'failed' && url.pathname === '/fapi/v1/premiumIndex')
+      return { status: 503, body: { msg: 'Synthetic market unavailable' } };
+    if (url.pathname === '/fapi/v1/time') return { status: 200, body: { serverTime: Date.now() } };
+    if (url.pathname === '/fapi/v2/account')
+      return {
+        ...result,
+        body: {
+          ...(result.body as object),
+          positions: [
+            { symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0.4', isolated: true },
+          ],
+        },
+      };
+    if (url.pathname === '/fapi/v2/positionRisk')
+      return {
+        status: 200,
+        body: [
+          {
+            ...entryFixture().position,
+            positionAmt: '0.4',
+            entryPrice: '100',
+            liquidationPrice: '90',
+            isolatedWallet: '4',
+            updateTime: time,
+          },
+        ],
+      };
+    if (url.pathname === '/fapi/v1/userTrades')
+      return {
+        status: 200,
+        body: [
+          {
+            symbol: 'BTCUSDT',
+            id: 1,
+            orderId: 10,
+            side: 'BUY',
+            positionSide: 'BOTH',
+            time,
+            price: '100',
+            qty: '0.4',
+            quoteQty: '40',
+            commission: scenario === 'missing-cost' ? undefined : '0.04',
+            commissionAsset: 'USDT',
+            realizedPnl: '0',
+          },
+        ],
+      };
+    if (url.pathname === '/fapi/v1/allOrders')
+      return {
+        status: 200,
+        body: [
+          {
+            symbol: 'BTCUSDT',
+            orderId: 10,
+            side: 'BUY',
+            positionSide: 'BOTH',
+            type: 'MARKET',
+            origType: 'MARKET',
+            status: 'FILLED',
+            time,
+            updateTime: time,
+            origQty: '0.4',
+            executedQty: '0.4',
+            avgPrice: '100',
+            reduceOnly: false,
+            closePosition: false,
+          },
+        ],
+      };
+    if (url.pathname === '/fapi/v1/income')
+      return {
+        status: 200,
+        body: [
+          {
+            symbol: 'BTCUSDT',
+            incomeType: 'FUNDING_FEE',
+            income: '-0.3',
+            asset: 'USDT',
+            time,
+            tranId: 123,
+          },
+        ],
+      };
+    if (url.pathname === '/fapi/v1/openAlgoOrders')
+      return {
+        status: 200,
+        body:
+          scenario === 'missing-stop'
+            ? []
+            : [
+                {
+                  symbol: 'BTCUSDT',
+                  algoId: 20,
+                  algoType: 'CONDITIONAL',
+                  algoStatus: 'NEW',
+                  orderType: 'STOP_MARKET',
+                  side: 'SELL',
+                  positionSide: 'BOTH',
+                  quantity: '0',
+                  triggerPrice: scenario === 'wrong-stop' ? '97' : '98',
+                  workingType: 'MARK_PRICE',
+                  priceProtect: false,
+                  closePosition: true,
+                  reduceOnly: false,
+                  actualOrderId: '',
+                  triggerTime: 0,
+                  createTime: time,
+                  updateTime: time,
+                  timeInForce: 'GTC',
+                  goodTillDate: 0,
+                },
+              ],
+      };
+    return result;
+  };
+  return { select, transport };
+}

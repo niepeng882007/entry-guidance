@@ -74,16 +74,19 @@ export function createBusinessServer(options: {
         url.pathname,
       );
     const entryMatch =
-      /^\/v1\/users\/([^/]+)\/entry\/(symbols|market|plans(?:\/[a-f0-9-]{36})?)$/.exec(
+      /^\/v1\/users\/([^/]+)\/entry\/(symbols|market|plans(?:\/[a-f0-9-]{36}(?:\/verify)?)?)$/.exec(
         url.pathname,
       );
     const writing =
       request.method === 'POST' &&
-      (match?.[2] === 'binding' || match?.[2] === 'model' || entryMatch?.[2] === 'plans');
+      (match?.[2] === 'binding' ||
+        match?.[2] === 'model' ||
+        entryMatch?.[2] === 'plans' ||
+        Boolean(entryMatch?.[2]?.endsWith('/verify')));
     if (entryMatch) {
       if (
         (request.method !== 'GET' && !writing) ||
-        (!writing && entryMatch[2] === 'plans') ||
+        (!writing && (entryMatch[2] === 'plans' || entryMatch[2]?.endsWith('/verify'))) ||
         (url.search &&
           (entryMatch[2] !== 'market' ||
             [...url.searchParams.keys()].some((key) => key !== 'symbol') ||
@@ -199,6 +202,10 @@ export function createBusinessServer(options: {
       } catch {
         return reply(422, { error: '请求格式无效。' });
       }
+      if (entryMatch)
+        return entryMatch[2]!.endsWith('/verify')
+          ? reply(200, await entry.verify(claims, entryMatch[2]!.split('/')[1]!, body, entrySignal))
+          : reply(201, await entry.generate(claims, body, entrySignal));
       if (match?.[2] === 'model') {
         const result = await changeModelKey({
           database: options.database,
@@ -210,7 +217,6 @@ export function createBusinessServer(options: {
         });
         return reply(200, result);
       }
-      if (entryMatch) return reply(201, await entry.generate(claims, body, entrySignal));
       const submission = bindingSubmission(body);
       const result = await saveBinding({
         database: options.database,

@@ -54,6 +54,7 @@ export async function startAuthRuntime(
     modelTransport?: typeof fetch;
     simulation?: boolean;
     reviewFixtures?: boolean;
+    entryScenario?: (value: unknown) => void;
   } = {},
 ) {
   let database: ReturnType<typeof createIdentityDatabase> | undefined;
@@ -80,6 +81,11 @@ export async function startAuthRuntime(
       }
       let text = '';
       for await (const chunk of request) text += String(chunk);
+      if (ports.entryScenario && request.method === 'POST' && request.url === '/entry-scenario') {
+        ports.entryScenario(JSON.parse(text));
+        response.end('{}');
+        return;
+      }
       if (request.method === 'POST' && request.url === '/mode') {
         const body = JSON.parse(text) as { mode: typeof mail.mode };
         mail.mode = body.mode;
@@ -297,6 +303,25 @@ export async function startAuthRuntime(
       keys,
       credentialMaster,
       close,
+      async restartBusiness() {
+        if (!businessServer || !database) throw new Error('Synthetic transport server required');
+        await new Promise<void>((resolve, reject) =>
+          businessServer!.close((error) => (error ? reject(error) : resolve())),
+        );
+        businessServer = createBusinessServer({
+          database,
+          authOrigin: webOrigin,
+          businessOrigin,
+          publicKey: keys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
+          credentialMaster,
+          transport: ports.transport,
+          modelTransport: ports.modelTransport,
+          simulation: ports.simulation,
+        });
+        await new Promise<void>((resolve) =>
+          businessServer!.listen(Number(new URL(businessOrigin).port), '127.0.0.1', resolve),
+        );
+      },
       container,
       mail,
       mailOrigin,

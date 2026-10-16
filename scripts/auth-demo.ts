@@ -1,11 +1,13 @@
 import { startAuthRuntime } from '../test/auth/runtime.ts';
-import { entryTransport } from '../test/auth/entry-fixture.ts';
 import { modelTransport } from '../test/auth/model-fixture.ts';
+import { entryScenarios } from '../test/auth/entry-fixture.ts';
+const entry = entryScenarios();
 const runtime = await startAuthRuntime({
   web: 3100,
   business: 3101,
   mail: 3102,
-  transport: entryTransport,
+  transport: entry.transport,
+  entryScenario: entry.select,
   modelTransport,
   simulation: true,
   reviewFixtures: true,
