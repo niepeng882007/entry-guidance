@@ -86,6 +86,10 @@ onMounted(() => {
     sync();
   };
   const finishLockedScroll = () => {
+    const target = lockedModuleId && document.getElementById(lockedModuleId);
+    // A previous animation can finish after a new destination has acquired the lock.
+    if (target instanceof HTMLElement && Math.abs(moduleScrollTop(target) - window.scrollY) > 1)
+      return;
     releaseLock();
     sync();
   };

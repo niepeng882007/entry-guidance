@@ -65,6 +65,7 @@ test('entry card retains execution parameters and risk warnings with optional am
 test('review navigation stays current when its section cannot reach the activation line', async ({
   page,
 }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   const link = (name: string) => page.locator('.module-nav__link', { hasText: name });
   for (const width of [390, 1280]) {
     await page.setViewportSize({ width, height: 960 });
@@ -76,10 +77,14 @@ test('review navigation stays current when its section cannot reach the activati
     await expect(link('开仓卡')).not.toHaveAttribute('aria-current', 'location');
     await link('开仓卡').click();
     await expect(link('开仓卡')).toHaveAttribute('aria-current', 'location');
-    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+    await page.evaluate(() => {
+      window.dispatchEvent(new WheelEvent('wheel', { deltaY: -80, bubbles: true }));
+      window.scrollTo({ top: 0, behavior: 'instant' });
+    });
     await expect(link('本次计划')).toHaveAttribute('aria-current', 'location');
     await page.evaluate(() => {
       history.replaceState(null, '', location.pathname + location.search);
+      window.dispatchEvent(new WheelEvent('wheel', { deltaY: 80, bubbles: true }));
       window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' });
     });
     await expect(link('成交核验')).toHaveAttribute('aria-current', 'location');
@@ -89,6 +94,7 @@ test('review navigation stays current when its section cannot reach the activati
 test('a nav click keeps its module current until the user takes over scrolling', async ({
   page,
 }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   const link = (name: string) => page.locator('.module-nav__link', { hasText: name });
   await page.setViewportSize({ width: 1280, height: 800 });
   const traveling = await page.evaluate(() => {
@@ -96,6 +102,8 @@ test('a nav click keeps its module current until the user takes over scrolling',
       document.querySelector('.module-nav__link[aria-current="location"]')?.getAttribute('href');
     window.scrollTo({ top: 0, behavior: 'instant' });
     document.querySelector<HTMLAnchorElement>('.module-nav__link[href="#review-module"]')?.click();
+    // A completion event from the previous scroll must not release this new destination.
+    window.dispatchEvent(new Event('scrollend'));
     const during = {
       current: currentHref(),
       top: document.getElementById('review-module')?.getBoundingClientRect().top ?? 0,
@@ -168,6 +176,7 @@ test('navigation animates scrolling and selection, respecting reduced motion', a
 test('responsive layout, navigation, keyboard select and initial hidden states', async ({
   page,
 }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   for (const width of [320, 375, 390, 414, 768, 1280]) {
     await page.setViewportSize({ width, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
@@ -186,6 +195,8 @@ test('responsive layout, navigation, keyboard select and initial hidden states',
   await links.filter({ hasText: '止损模板' }).click();
   await expect(page.locator('#templates-module')).toHaveAttribute('open', '');
   await page.locator('#side-trigger').focus();
+  await expect(page.locator('#side-trigger')).toBeFocused();
+  await expect(page.locator('#side-trigger')).toBeInViewport();
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
