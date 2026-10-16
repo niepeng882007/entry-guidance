@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
 import { login } from './login.ts';
 import { users } from '../runtime.ts';
 test.beforeEach(async ({ request }) => {
@@ -97,10 +97,7 @@ test('single market entry previews, saves and copies a fixed card, then conserva
 });
 
 for (const entryType of ['MARKET', 'LIMIT']) {
-  test(`two-level ${entryType} keeps its fixed card through near exits, recovery and edits`, async ({
-    page,
-    request,
-  }) => {
+  async function prepare(page: Page, request: APIRequestContext) {
     await login(page);
     await connect(page);
     await page.goto('/entry');
@@ -121,6 +118,26 @@ for (const entryType of ['MARKET', 'LIMIT']) {
     await expect(card).toContainText('近端部分退出');
     await expect(card).toContainText('最终整仓退出');
     await expect(card.getByText('99 USDT', { exact: true })).toBeVisible();
+    async function scenario(value: string) {
+      expect(
+        (
+          await request.post('http://127.0.0.1:4182/entry-scenario', {
+            data: {
+              user: 'alice',
+              scenario: `two-${entryType === 'LIMIT' ? 'limit-' : ''}${value}`,
+            },
+          })
+        ).ok(),
+      ).toBe(true);
+      await card.getByRole('button', { name: '重新查询原方案' }).click();
+    }
+    return { card, checked, scenario };
+  }
+  test(`two-level ${entryType} keeps its fixed card through near exits, recovery and edits`, async ({
+    page,
+    request,
+  }) => {
+    const { card, checked, scenario } = await prepare(page, request);
     await page.evaluate(() => {
       Object.defineProperty(navigator, 'clipboard', {
         configurable: true,
@@ -142,19 +159,6 @@ for (const entryType of ['MARKET', 'LIMIT']) {
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
         true,
       );
-    }
-    async function scenario(value: string) {
-      expect(
-        (
-          await request.post('http://127.0.0.1:4182/entry-scenario', {
-            data: {
-              user: 'alice',
-              scenario: `two-${entryType === 'LIMIT' ? 'limit-' : ''}${value}`,
-            },
-          })
-        ).ok(),
-      ).toBe(true);
-      await card.getByRole('button', { name: '重新查询原方案' }).click();
     }
     await scenario('protected');
     await expect(checked).toContainText('查询时点核验通过');
@@ -185,6 +189,12 @@ for (const entryType of ['MARKET', 'LIMIT']) {
     await expect(checked).toHaveCount(0);
     await card.getByRole('button', { name: '恢复原方案输入并核验' }).click();
     await expect(checked).toContainText('查询时点核验通过');
+  });
+  test(`two-level ${entryType} requires remaining near protection and complete exit evidence`, async ({
+    page,
+    request,
+  }) => {
+    const { checked, scenario } = await prepare(page, request);
     await scenario('partial-canceled');
     await expect(checked).toContainText('需要处理');
     await expect(checked).toContainText('近端计划仍待补齐');

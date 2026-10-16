@@ -21,7 +21,7 @@
    `two-protected` 应通过，持仓 `0.4 BTC`、近端待退出量 `0.2 BTC`，最终覆盖为整仓。将场景改为 `two-final-only` 或 `two-near-canceled`，应显示“需要处理”和近端待补齐，不能仅凭最终单通过。
 
 4. 切换 `two-near-filled`：余仓 `0.2 BTC`、近端“已执行”、待退出量 `0`、已实现损益 `-0.2 USDT`、全部已付手续费 `0.0598 USDT`、已付资金费 `0.3 USDT`、剩余预留 `0.7 USDT`、含成本计划亏损 `1.875204 USDT`，应通过。刷新页面会恢复原方案并重新查询，原卡仍保留数量 `0.4`、预算 `20`、两止损 `99` / `98`。
-5. 切换 `two-partial-canceled`：余仓 `0.3 BTC`、近端尚需退出 `0.1 BTC`、含成本计划亏损 `2.073006 USDT`，应显示需要处理。切换 `two-partial-covered` 模拟补齐剩余近端单，应显示“部分执行，剩余近端有效待触发”并通过。`two-final-canceled` 应要求补齐最终保护；`two-missing-pnl`、`two-missing-attribution`、`two-missing-cost` 应无法完整核验，不能保留旧通过。
+5. 切换 `two-partial-canceled`：余仓 `0.3 BTC`、近端尚需退出 `0.1 BTC`、含成本计划亏损 `2.073006 USDT`，应显示需要处理。切换 `two-partial-covered` 模拟补齐剩余近端单，应显示“部分执行，剩余近端有效待触发”并通过。`two-final-canceled` 应要求补齐最终保护；`two-missing-pnl`、`two-missing-attribution` 应无法完整核验，`two-missing-cost` 应显示读取错误，均不能保留旧通过。
 6. 回到 `two-near-filled` 后分别编辑近端价格、方式或比例：当前通过立即消失，原卡复制禁用；刷新保留编辑输入，不能自动恢复通过。点击“恢复原方案输入并核验”才恢复原输入并重新查询。断网、切换到别的 App 后返回，也应重新查询。用 320px、390px、1280px 检查无横向溢出，Tab / Enter 可操作复制。
 7. 切回 `flat`，清除本浏览器记录，按相同参数选择 GTC 限价 `100`：原卡数量 `0.495 BTC`、近端 `0.3 BTC`、最终计划余量 `0.195 BTC`。将以上场景前缀 `two-` 换成 `two-limit-`；它们模拟入场仅成交 `0.4 BTC` 且余单已撤，因此近端应按原比例重算为 `0.2 BTC`，原卡不变。改单层后近端输入隐藏，原单层恢复继续有效。
 8. 无痕窗口用 `bob@example.test`（同口令）登录并绑定 `synthetic-key-bob` / `synthetic-secret-bob`，不应看到甲的本单。结束演示按 Ctrl-C，脚本会关闭服务并删除本次临时数据库。
